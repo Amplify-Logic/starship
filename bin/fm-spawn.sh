@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--backend <name>] [--account <name>|<entry>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--backend <name>] [--account <name>|<entry>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--backend <name>] [--account <name>|<entry>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--gh-account <login>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--backend <name>] [--account <name>|<entry>] [--outcome <text>] [--task-type <slug>] [--outward '<permission>'] [--gh-account <login>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--account <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -190,6 +190,14 @@
 #   the recorded value, including any bin/fm-outward-grant.sh added, and
 #   refuses the flag. Every Claude ship or scout spawn installs the outward
 #   check hooks (bin/fm-outward-check.py) whatever the flag says.
+#   --gh-account <login> is the GitHub account this ship or scout job works
+#   through, for a repository the global gh account cannot reach. The spawn
+#   refuses before any endpoint exists unless `gh auth token -u <login>`
+#   succeeds, records it in meta gh_account= (a relaunch reuses it and refuses
+#   the flag), starts the worker with GH_TOKEN read from that login in the
+#   worker's own shell (the token is never typed into the launch), and passes it
+#   to the Claude PR text hook, which reads repository visibility through it.
+#   The global gh account is never switched.
 #   A herdr crewmate or scout is placed in the exact workspace of the firstmate
 #   or secondmate process launching it, resolved from that process's own herdr
 #   pane rather than from a workspace label (herdr enforces no label uniqueness,
@@ -1113,6 +1121,8 @@ UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 OUTWARD=
 OUTWARD_SET=0
+GH_ACCOUNT=
+GH_ACCOUNT_SET=0
 TRACEPARENT_SET=0
 # ACCOUNT_ARG is --account's raw value as the Claude account list reads it;
 # ACCOUNT is the same value as the named-account registry reads it, and may
@@ -1190,6 +1200,10 @@ for a in "$@"; do
     outward)
       OUTWARD=$a
       OUTWARD_SET=1
+      ;;
+    gh-account)
+      GH_ACCOUNT=$a
+      GH_ACCOUNT_SET=1
       ;;
     traceparent)
       TRACEPARENT_ARG=$a
@@ -1283,6 +1297,11 @@ for a in "$@"; do
   --outward=*)
     OUTWARD=${a#--outward=}
     OUTWARD_SET=1
+    ;;
+  --gh-account) want_value=gh-account ;;
+  --gh-account=*)
+    GH_ACCOUNT=${a#--gh-account=}
+    GH_ACCOUNT_SET=1
     ;;
   --traceparent) want_value=traceparent ;;
   --traceparent=*)
@@ -1429,6 +1448,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded outward permission; add to it with bin/fm-outward-grant.sh instead of --outward" >&2
     exit 1
   }
+  [ "$GH_ACCOUNT_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded GitHub account; --gh-account cannot override it" >&2
+    exit 1
+  }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -1508,6 +1531,22 @@ else
     }
     OUTWARD=$(python3 "$SCRIPT_DIR/fm-outward-check.py" parse "$OUTWARD") || exit 1
     [ "$OUTWARD" != none ] || OUTWARD=
+  fi
+  # The job's own GitHub account (header): proven logged in before any
+  # endpoint exists, never switched to globally.
+  if [ "$GH_ACCOUNT_SET" -eq 1 ]; then
+    [ "$KIND" != secondmate ] || {
+      echo "error: --gh-account applies only to ship and scout spawns" >&2
+      exit 1
+    }
+    if ! [[ "$GH_ACCOUNT" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+      echo "error: --gh-account must be a GitHub login (letters, digits and hyphens; got '$GH_ACCOUNT')" >&2
+      exit 1
+    fi
+    if ! command -v gh >/dev/null 2>&1 || [ -z "$(gh auth token -u "$GH_ACCOUNT" 2>/dev/null)" ]; then
+      echo "error: gh has no login for GitHub account $GH_ACCOUNT; run gh auth login for it, then spawn again" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -2766,6 +2805,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
   UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
   OUTWARD=$(fm_meta_get "$RELAUNCH_META" outward)
+  GH_ACCOUNT=$(fm_meta_get "$RELAUNCH_META" gh_account)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
     [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -7529,7 +7569,7 @@ BUSY_GEN=
       # needs no relaunch. Without python3 it is left out rather than
       # refusing every shell command.
       if command -v python3 >/dev/null 2>&1; then
-        j_prtext=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-pr-text-guard.py") hook --home $(shell_quote "$(cd "$FM_HOME" && pwd -P)")")
+        j_prtext=$(json_escape "python3 $(shell_quote "$FM_ROOT/bin/fm-pr-text-guard.py") hook --home $(shell_quote "$(cd "$FM_HOME" && pwd -P)")${GH_ACCOUNT:+ --gh-account $(shell_quote "$GH_ACCOUNT")}")
         pretool_entries="${pretool_entries:+$pretool_entries,}{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_prtext\",\"timeout\":45}]}"
       else
         echo "warning: python3 is not installed; $ID runs without the PR text check" >&2
@@ -8368,6 +8408,7 @@ preserve_relaunch_meta() {
   [ -z "$BASE_BRANCH" ] || echo "base_branch=$BASE_BRANCH"
   [ -z "$UPSTREAM_CONSENT" ] || echo "upstream_consent=$UPSTREAM_CONSENT"
   [ -z "$OUTWARD" ] || echo "outward=$OUTWARD"
+  [ -z "$GH_ACCOUNT" ] || echo "gh_account=$GH_ACCOUNT"
   # Read by bin/fm-dod-lib.sh's ready-report gate; absent on every other forge.
   [ "$EXTERNAL_REVIEW" = 0 ] || echo "forge=external"
   [ -z "$EXTERNAL_BACKUP_REMOTE" ] || echo "backup_remote=$EXTERNAL_BACKUP_REMOTE"
@@ -8783,6 +8824,12 @@ esac
 # prefix below so the account's own store is what the CLI resolves.
 if [ -n "$ACCOUNT_HOME" ]; then
   LAUNCH="$ACCOUNT_ENV=$(shell_quote "$ACCOUNT_HOME") $LAUNCH"
+fi
+# The job's GitHub account (header): GH_TOKEN is read in the worker's own
+# shell, so the token never appears in the typed launch.
+if [ -n "$GH_ACCOUNT" ]; then
+  # shellcheck disable=SC2016 # The substitution runs in the worker's shell.
+  LAUNCH='GH_TOKEN="$(gh auth token -u '"$(shell_quote "$GH_ACCOUNT")"')" '"$LAUNCH"
 fi
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls

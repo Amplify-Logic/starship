@@ -30,7 +30,29 @@ mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+# `gh auth token -u <login>` prints the token FAKE_GH_TOKENS lists for that
+# login ("login=token ..."), else fails as gh does for an account with no login.
+if [ "${1:-} ${2:-}" = "auth token" ]; then
+  login=
+  [ "${3:-}" = -u ] || [ "${3:-}" = --user ] && login=${4:-}
+  for pair in ${FAKE_GH_TOKENS:-}; do
+    [ "${pair%%=*}" = "$login" ] && { printf '%s\n' "${pair#*=}"; exit 0; }
+  done
+  echo "no oauth token found for github.com account $login" >&2
+  exit 1
+fi
 [ "${1:-} ${2:-}" = "repo view" ] || exit 0
+# A repository in FAKE_GH_ACCOUNT_REPOS is private and readable only with the
+# token FAKE_GH_ACCOUNT_TOKEN; the global login sees a 404, as a second
+# account's private repository does.
+case " ${FAKE_GH_ACCOUNT_REPOS:-} " in
+  *" ${3:-} "*)
+    if [ -n "${GH_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "${FAKE_GH_ACCOUNT_TOKEN:-}" ]; then
+      printf 'true\n%s\n' "$3"; exit 0
+    fi
+    echo "GraphQL: Could not resolve to a Repository with the name '$3'." >&2
+    exit 1 ;;
+esac
 # The second answer line is the repository's owner/repo: the one named, else
 # FAKE_GH_DEFAULT_REPO for gh's default in the working directory.
 name=${3:-}
@@ -62,12 +84,14 @@ leak_text() {
 }
 
 # hook <home> <command> [cwd]: the PreToolUse hook on that Bash command; its
-# stdout in OUT. FAKE_GH_PRIVATE is inherited.
+# stdout in OUT. FAKE_GH_PRIVATE is inherited, and HOOK_ARGS, when set, is
+# added to the hook's own arguments.
 hook() {
   local home=$1 command=$2 cwd=${3:-$WORK}
+  # shellcheck disable=SC2086 # HOOK_ARGS is a word list by design.
   OUT=$(jq -cn --arg c "$command" --arg cwd "$cwd" \
       '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {command: $c}, cwd: $cwd}' \
-    | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" python3 "$HOOK" hook --home "$home") \
+    | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" python3 "$HOOK" hook --home "$home" ${HOOK_ARGS:-}) \
     || fail "the hook exited nonzero for: $command"
 }
 
@@ -623,6 +647,47 @@ $run" "a quoted heredoc written to a file the command then runs must be checked:
   pass "read-only gh api calls and commands that publish nothing pass, whatever local files they name"
 }
 
+# Two jobs whose repositories belong to different GitHub accounts run at once.
+# The hook runs in Claude's own environment, so a GH_TOKEN the worker exports in
+# its shell never reaches the visibility read; the job's own account, given to
+# the hook by bin/fm-spawn.sh --gh-account, does, and the global login is never
+# switched.
+test_hook_reads_visibility_through_the_job_account() {
+  export FAKE_GH_ACCOUNT_REPOS=o/second-account FAKE_GH_ACCOUNT_TOKEN=tok-second
+  export FAKE_GH_TOKENS="second=tok-second"
+  : > "$GH_LOG"
+  expect_refuse "$HOME_WORDS" 'export GH_TOKEN=tok-second; gh pr create --repo o/second-account --title "for Robin" --body x' \
+    "without the job's account the global login cannot read the private repository"
+  assert_contains "$REASON" "could not confirm the repository is private" "the refusal must say the visibility was unreadable"
+  HOOK_ARGS="--gh-account second" expect_allow "$HOME_WORDS" \
+    'gh pr create --repo o/second-account --title "for Robin" --body x' \
+    "the job's account must read its own private repository"
+  HOOK_ARGS="--gh-account second" expect_allow "$HOME_WORDS" \
+    'no-mistakes axi run --intent "for Robin"' \
+    "the pipeline intent must be checked through the job's account" "$(account_checkout)"
+  HOOK_ARGS="--gh-account nobody" expect_refuse "$HOME_WORDS" \
+    'gh pr create --repo o/second-account --title "for Robin" --body x' \
+    "an account with no gh login must refuse"
+  assert_contains "$REASON" "nobody" "the refusal must name the account with no login"
+  HOOK_ARGS="--gh-account second" expect_refuse "$HOME_WORDS" \
+    'gh pr create --repo o/public-elsewhere --title "for Robin" --body x' \
+    "a public repository stays refused under the job's account"
+  if grep -q '^auth switch' "$GH_LOG"; then
+    fail "the hook must never switch the global gh account: $(cat "$GH_LOG")"
+  fi
+  unset FAKE_GH_ACCOUNT_REPOS FAKE_GH_ACCOUNT_TOKEN FAKE_GH_TOKENS
+  pass "the hook reads repository visibility through the job's GitHub account, never the global one"
+}
+
+account_checkout() {
+  local dir="$TMP_ROOT/account-checkout"
+  if [ ! -d "$dir/.git" ]; then
+    git init -q "$dir"
+    git -C "$dir" remote add origin https://github.com/o/second-account.git
+  fi
+  printf '%s\n' "$dir"
+}
+
 test_spawn_installs_the_hook() {
   local case_dir="$TMP_ROOT/spawn" home proj wt fakebin settings cmd
   home="$case_dir/home"
@@ -646,6 +711,51 @@ test_spawn_installs_the_hook() {
     | PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" FAKE_GH_PRIVATE=false bash -c "$cmd")
   assert_equals "" "$OUT" "the installed hook must read the home's list live"
   pass "every claude worker gets the PR text hook, reading its home's list on every command"
+}
+
+# A job whose repository belongs to another GitHub account records that account:
+# bin/fm-spawn.sh --gh-account checks the login exists, keeps it in meta, hands
+# it to the PR text hook, and starts the worker with GH_TOKEN read from it, so
+# two jobs on different accounts run at once without touching the global login.
+test_spawn_carries_the_job_account() {
+  local case_dir="$TMP_ROOT/spawn-account" home proj wt fakebin settings cmd launchlog
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  launchlog="$case_dir/launch.log"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  cp "$FAKEBIN/gh" "$fakebin/gh"
+  fm_test_spawn_home "$home" claude
+  printf 'Robin\n' > "$home/config/leak-words"
+  fm_git_worktree "$proj" "$wt" "wt-prtext-account"
+  fm_test_spawn_brief "$home" prtext-nologin
+  FAKE_GH_LOG="$GH_LOG" FAKE_GH_TOKENS="second=tok-second" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" prtext-nologin "$proj" --mode no-mistakes --yolo off \
+    --gh-account nobody >"$case_dir/refused.out" 2>&1 \
+    && fail "a spawn naming an account with no gh login must refuse: $(cat "$case_dir/refused.out")"
+  assert_contains "$(cat "$case_dir/refused.out")" "gh auth login" "the refusal must name the login to run"
+  [ ! -e "$home/state/prtext-nologin.meta" ] || fail "a refused spawn must leave no task record"
+  fm_test_spawn_brief "$home" prtext-account
+  FAKE_GH_LOG="$GH_LOG" FAKE_GH_TOKENS="second=tok-second" FM_FAKE_LAUNCH_LOG="$launchlog" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" prtext-account "$proj" --mode no-mistakes --yolo off \
+    --gh-account second >"$case_dir/spawn.out" 2>&1 \
+    || fail "a claude spawn with --gh-account failed: $(cat "$case_dir/spawn.out")"
+  assert_equals "second" "$(sed -n 's/^gh_account=//p' "$home/state/prtext-account.meta")" "meta must record the job's account"
+  settings="$wt/.claude/settings.local.json"
+  cmd=$(jq -r '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command | select(test("fm-pr-text-guard[.]py"))] | .[0]' "$settings")
+  assert_contains "$cmd" "--gh-account 'second'" "the PR text hook must read visibility through the job's account"
+  assert_contains "$(cat "$launchlog")" "GH_TOKEN=" "the worker must start with GH_TOKEN from the job's account"
+  assert_contains "$(cat "$launchlog")" "auth token -u 'second'" "the token must be read from the job's account at launch"
+  assert_not_contains "$(cat "$launchlog")" "tok-second" "the token itself must never be typed into the launch"
+  export FAKE_GH_ACCOUNT_REPOS=o/second-account FAKE_GH_ACCOUNT_TOKEN=tok-second FAKE_GH_TOKENS="second=tok-second"
+  OUT=$(jq -cn --arg cwd "$WORK" '{tool_name: "Bash", tool_input: {command: "gh pr create --repo o/second-account --title \"for Robin\" --body x"}, cwd: $cwd}' \
+    | env -u GH_TOKEN PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" bash -c "$cmd")
+  assert_equals "" "$OUT" "the installed hook must confirm the job account's private repository"
+  unset FAKE_GH_ACCOUNT_REPOS FAKE_GH_ACCOUNT_TOKEN FAKE_GH_TOKENS
+  if grep -q '^auth switch' "$GH_LOG"; then
+    fail "a spawn must never switch the global gh account: $(cat "$GH_LOG")"
+  fi
+  pass "a spawn with --gh-account records the job's GitHub account and hands it to the worker and its PR text hook"
 }
 
 # A first mate or second mate session is not spawned, so the tracked
@@ -961,7 +1071,9 @@ test_hook_refuses_the_pipeline_intent_on_a_public_github_repo
 test_hook_passes_clean_private_and_unrelated_commands
 test_hook_honours_the_named_target_and_its_name
 test_hook_passes_reads_and_local_files
+test_hook_reads_visibility_through_the_job_account
 test_spawn_installs_the_hook
+test_spawn_carries_the_job_account
 test_first_and_second_mate_sessions_get_the_hook
 test_ship_brief_tells_the_worker_to_check
 test_draft_check_names_new_words_and_shapes

@@ -1025,6 +1025,7 @@ The refusal counts the words and tokens and names the command or file and the li
 Key and token shapes count only in the command and the files it sends as content: a `--body-file`, `--input` or `-F field=@file` value, a `$(cat file)`, `$(<file)` or backtick `cat file` outside single quotes and quoted heredoc bodies, and a file redirected or piped from `cat` into `--body-file -` or `--input -`; a file it merely names, such as a test fixture with synthetic keys, is checked for everything else.
 It refuses a new word or data shape the same way when the command could reach this repository while it is public, and tells the worker to ask for the owner's approval of each new word; other public repositories may hold words new to this one.
 A private repository's PRs may hold the words, a pipeline whose origin is not on GitHub is not checked, and a repository whose visibility cannot be read counts as possibly public and is refused; the script's header owns which commands count and which repositories a command could reach.
+A job whose repository only another GitHub account can read is spawned with `bin/fm-spawn.sh --gh-account <login>`, so the check reads visibility through that account rather than the global gh login, which it never switches; the spawn script's header owns the flag.
 Without any list or approvals file, only a key or token shape is refused.
 The check reads the list on every command, so a list added later needs no relaunch.
 Sessions on other harnesses, first mate, second mate or worker, are not checked by it.
