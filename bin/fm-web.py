@@ -33,9 +33,19 @@ this way. Its fields are schema, home, generated_at, session, state (busy,
 idle or offline), note, older, version and items, each item exactly as the
 page receives it, so its html is already escaped and safe to insert.
 
-The fleet panel reuses bin/fm-bridge-view.py's read-only snapshot and
-projection. This process never takes the session lock, never drains wakes,
-and never writes backlog or fleet state.
+Beside the conversation the page mirrors the terminal workspace: the bridge
+strip's band and the Factory pane's overview and factory pages, as tabs. It
+reads both from the code on disk, `bin/fm-factory.py --screen` and
+`bin/fm-bridge-strip.sh fields`, so it selects, counts and words nothing of
+its own; mirror_model only lays them out and swaps the few terms docs/web.md
+lists. A button on the page is one of the pane's writing keys: POST /api/act
+hands the action to `bin/fm-factory.py act`, which sends the note that key
+sends. The page decides and merges nothing. This process never takes the
+session lock, never drains wakes, and never writes backlog or fleet state.
+
+The page's settings (text size, style, light or dark, reduced motion) live in
+the browser's own storage; SETTINGS_JS owns them and is served as
+/settings.js.
 """
 
 from __future__ import annotations
@@ -47,7 +57,6 @@ import datetime
 import hashlib
 import hmac
 import html
-import importlib.util
 import json
 import os
 import re
@@ -74,6 +83,15 @@ SEND_BODY_MAX = 24 * 1024 * 1024
 SEND_IMAGES_MAX = 8
 SEND_TEXT_MAX = 20000
 SEND_TIMEOUT_SECONDS = 90
+SCREEN_SCHEMA = "fm-factory-screen.v1"
+MIRROR_TTL_SECONDS = 2.0
+MIRROR_TIMEOUT_SECONDS = 150
+STRIP_TIMEOUT_SECONDS = 20
+ACT_BODY_MAX = 32 * 1024
+ACT_TEXT_MAX = 4000
+ACT_TIMEOUT_SECONDS = 120
+ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "look")
+ACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,199}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{7,80}$")
 IMAGE_MAGIC = (
     (b"\x89PNG\r\n\x1a\n", "png"),
@@ -768,22 +786,277 @@ class TranscriptCache:
         return value
 
 
-# --- fleet panel (reuses the bridge view's snapshot) -----------------------
+# --- the mirror: the Factory pane's screen and the bridge strip's fields ------
+
+# The page's own words for the pane's and the strip's jargon. Every other word
+# on the page is theirs; docs/web.md lists these.
+PLAIN_WORDS = {"ready to merge": "ready for your OK", "PR ready": "ready for your OK", "landed": "went live"}
+PLAIN_PHRASES = (
+    ("nothing queued", "nothing waiting to start"),
+    ("queued", "waiting to start"),
+    ("ready to merge", "ready for your OK"),
+    ("deferred to a date", "put off to a date"),
+    ("deferred", "put off"),
+)
+# The pane's sentences that end in jargon after a title: only the ending is swapped.
+PLAIN_ENDINGS = (
+    (" is ready to merge", " is ready for your OK"),
+    (" has its PR ready.", " is ready for your OK."),
+    (" and land it", " and make it live"),
+)
+# What the pane says after a key, in the page's case.
+PLAIN_SAID = (("\u2713 SENT to Starship: ", "Sent to Starship: "), ("\u2717 NOT SENT: ", "Not sent: "))
+# The pane says what a colour means; the page gives each meaning one mark.
+MARKS = {"amber": "work", "ember": "work", "red": "you", "green": "done", "cyan": "here"}
 
 
-def load_bridge_module(root: Path) -> Any:
-    path = root / "bin" / "fm-bridge-view.py"
-    spec = importlib.util.spec_from_file_location("fm_bridge_view", str(path))
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def plain_word(word: Any) -> str:
+    word = str(word or "")
+    return PLAIN_WORDS.get(word, word)
+
+
+def plain_phrase(text: Any) -> str:
+    text = str(text or "")
+    for jargon, plain in PLAIN_PHRASES:
+        text = text.replace(jargon, plain)
+    return text
+
+
+def plain_ending(text: Any) -> str:
+    text = str(text or "")
+    for jargon, plain in PLAIN_ENDINGS:
+        if text.endswith(jargon):
+            return text[: -len(jargon)] + plain
+    return text
+
+
+def plain_said(text: Any) -> str:
+    text = str(text or "")
+    for shout, plain in PLAIN_SAID:
+        if text.startswith(shout):
+            return plain + plain_ending(text[len(shout) :])
+    return text
+
+
+def parse_fields(text: str) -> Dict[str, str]:
+    """bin/fm-bridge-strip.sh fields: one key=value per line."""
+    fields: Dict[str, str] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and re.fullmatch(r"[a-z_]+", key):
+            fields[key] = value.strip()
+    return fields
+
+
+def _job_model(job: Dict[str, Any]) -> Dict[str, Any]:
+    busy = job.get("state") == "busy"
+    return {
+        "id": job.get("id"),
+        "title": job.get("title") or "",
+        "busy": busy,
+        # What a busy worker says it is doing is its own words; a state is the pane's.
+        "words": (job.get("words") or "") if busy else plain_phrase(job.get("words")).replace(" · ", ", "),
+        "elapsed": job.get("elapsed") or "",
+        "quiet": bool(job.get("quiet")),
+        "step": job.get("step") if isinstance(job.get("step"), int) else 1,
+        "mark": MARKS.get(job.get("colour") or "", ""),
+        "queue": plain_phrase(job.get("queue")),
+        "read": bool(job.get("read")),
+    }
+
+
+def _feed_model(feed: Dict[str, Any]) -> Dict[str, Any]:
+    title = str(feed.get("title") or "")
+    return {
+        "title": title[:1] + title[1:].lower(),
+        "events": [
+            {
+                "when": event.get("when") or "",
+                "actor": event.get("actor") or "",
+                "word": plain_word(event.get("word")),
+                "mark": MARKS.get(event.get("colour") or "", ""),
+                "text": plain_ending(event.get("text")),
+            }
+            for event in feed.get("events") or []
+        ],
+    }
+
+
+def _need_model(need: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": need.get("id"),
+        "asking": need.get("asking"),
+        "project": need.get("factory"),
+        "project_name": need.get("factory_name") or "",
+        "question": need.get("kind") == "question",
+        "ask": plain_ending(need.get("ask") or need.get("title")),
+        "why": need.get("why") or "",
+        "options": [
+            {"key": option.get("key"), "label": option.get("label") or "", "suggested": bool(option.get("suggested"))}
+            for option in need.get("options") or []
+        ],
+        "suggested_by": need.get("suggested_by") or "Starship",
+        "recommendation": need.get("recommendation") or "",
+        "holds_up": list(need.get("holds_up") or []),
+        "waited": need.get("waited") or "",
+        "answered": need.get("answered"),
+        "checking": bool(need.get("checking")),
+        "mate": need.get("mate") or "",
+        "pr": need.get("pr") or "",
+        "read": bool(need.get("read")),
+    }
+
+
+def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
+    page = factory.get("page") or {}
+    nxt = factory.get("next")
+    return {
+        "id": factory.get("id"),
+        "name": factory.get("name") or "",
+        "about": ". ".join(str(words) for words in factory.get("about") or []),
+        "idle": factory.get("state") == "idle",
+        "you_steer": factory.get("steered_by") == "you",
+        "queue": [plain_phrase(part) for part in str(factory.get("queue") or "").split(" · ") if part],
+        "jobs": [_job_model(job) for job in factory.get("jobs") or []],
+        "routine": [
+            {"kind": line.get("kind") or "", "words": list(line.get("words") or []), "now": line.get("now") or ""}
+            for line in factory.get("routine") or []
+        ],
+        "next": {
+            "title": nxt.get("title") or "",
+            "once_you_answer": bool(nxt.get("once_you_answer")),
+            "then": nxt.get("then") or 0,
+        }
+        if isinstance(nxt, dict)
+        else None,
+        "page": {
+            "needs": list(page.get("needs") or []),
+            "queue": [plain_phrase(part) for part in page.get("queue") or []],
+            "jobs": [_job_model(job) for job in page.get("jobs") or []],
+            "workers": [_job_model(job) for job in page.get("workers") or []],
+            "folded": [
+                {
+                    "words": plain_phrase(group.get("words")),
+                    "jobs": [
+                        {"title": job.get("title") or "", "queue": plain_phrase(job.get("queue"))}
+                        for job in group.get("jobs") or []
+                    ],
+                }
+                for group in page.get("folded") or []
+            ],
+            "rules": list(page.get("rules") or []),
+            "rules_size": str(page.get("rules_size") or "").replace(" · ", ". "),
+            "rules_mark": page.get("rules_mark") or "",
+            "learned": [
+                {"when": item.get("when") or "", "what": item.get("what") or ""} for item in page.get("learned") or []
+            ],
+            "feed": _feed_model(page.get("feed") or {}),
+            "talk": [
+                {"when": line.get("when") or "", "who": line.get("who") or "", "said": line.get("said") or ""}
+                for line in page.get("talk") or []
+            ],
+        },
+    }
+
+
+def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, Any]:
+    """What the page shows: the Factory pane's screen (bin/fm-factory.py
+    --screen) and the bridge strip's fields (bin/fm-bridge-strip.sh fields),
+    in the page's plain words. It selects and counts nothing itself."""
+    counts = screen.get("counts") or {}
+    known = counts.get("busy") is not None
+    lamps: List[Dict[str, Any]] = []
+    if known:
+        decisions = counts.get("decisions") or 0
+        lamps = [
+            {"mark": "work", "count": counts.get("busy") or 0, "words": "busy"},
+            {"mark": "you", "count": decisions, "words": "decision for you" if decisions == 1 else "decisions for you"},
+            {"mark": "done", "count": counts.get("ready_to_merge") or 0, "words": "ready for your OK"},
+        ]
+    needs = [_need_model(need) for need in screen.get("needs") or []]
+    listed = {need["id"]: need for need in needs}
+    call = None
+    if fields.get("call_id") and fields.get("call_title"):
+        # The strip names the call; the pane's card for it has its whole title.
+        card = listed.get(fields["call_id"])
+        call = {
+            "id": fields["call_id"],
+            "title": card["ask"] if card else fields["call_title"],
+            "question": fields.get("call_kind") != "merge",
+            "listed": card is not None,
+        }
+    elif needs:
+        call = {"id": needs[0]["id"], "title": needs[0]["ask"], "question": needs[0]["question"], "listed": True}
+    return {
+        "clock": screen.get("clock") or "",
+        "band": {
+            "lamps": lamps,
+            "note": "" if known and counts.get("reading") != "past" else (fields.get("age") or "") if known else "reading the crew",
+            "call": call,
+            "alert": re.sub(r"\bfailed\b", "hit a problem", fields.get("alert") or ""),
+            "night": fields.get("night") or "",
+            "night_done": fields.get("night_mark") == "done",
+            "battery": fields.get("battery") or "",
+            "battery_mark": fields.get("battery_mark") or "",
+        },
+        "summary": [
+            {"words": plain_phrase(piece.get("words")), "mark": MARKS.get(piece.get("colour") or "", "")}
+            for piece in screen.get("count_words") or []
+        ],
+        "queue": [plain_phrase(words) for words in screen.get("queue") or []],
+        "needs": needs,
+        "projects": [_project_model(factory) for factory in screen.get("factories") or []],
+        "feed": _feed_model(screen.get("feed") or {}),
+        "steps": [plain_word(step) for step in screen.get("steps") or []],
+    }
+
+
+def child_env(home: Path, root: Path) -> Dict[str, str]:
+    env = dict(os.environ)
+    env["FM_HOME"] = str(home)
+    env["FM_ROOT_OVERRIDE"] = str(root)
+    return env
+
+
+def read_screen(home: Path, root: Path) -> Dict[str, Any]:
+    """The Factory pane's screen as data, from the code on disk."""
+    proc = subprocess.run(
+        [sys.executable, str(root / "bin" / "fm-factory.py"), "--screen"],
+        env=child_env(home, root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=MIRROR_TIMEOUT_SECONDS,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["the projects could not be read"]
+        raise RuntimeError(detail[0].removeprefix("fm-factory: "))
+    screen = json.loads(proc.stdout)
+    if not isinstance(screen, dict) or screen.get("schema") != SCREEN_SCHEMA:
+        raise RuntimeError("the projects came back in a form this page does not know")
+    return screen
+
+
+def read_fields(home: Path, root: Path) -> Dict[str, str]:
+    """The bridge strip's fields; a strip that cannot be read leaves the band
+    with its lamps only, since those come from the screen."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-bridge-strip.sh"), "fields"],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=STRIP_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return parse_fields(proc.stdout) if proc.returncode == 0 else {}
 
 
 class FleetCache:
-    """The bridge view's glance (needs you, under way, just finished), read
-    with its bounded, read-only snapshot child and cached for its TTL."""
+    """One reading of the projects for every open page, at most every
+    MIRROR_TTL_SECONDS, and at once after an action."""
 
     def __init__(self, home: Path, root: Path) -> None:
         self.home = home
@@ -792,31 +1065,79 @@ class FleetCache:
         self.refresh = threading.Lock()
         self.payload: Optional[Dict[str, Any]] = None
         self.fetched_at = 0.0
-        self.bridge: Any = None
 
-    def _load(self) -> Dict[str, Any]:
-        if self.bridge is None:
-            self.bridge = load_bridge_module(self.root)
-        model = self.bridge.run_snapshot(self.home, self.root)
-        observation = self.bridge.project_observation(model)
-        return {
-            "needs_you": observation.get("needs_you", {}),
-            "under_way": observation.get("under_way", {}),
-            "just_finished": observation.get("just_finished", {}),
-            "generated": observation.get("generated"),
-        }
+    def drop(self) -> None:
+        with self.lock:
+            self.fetched_at = 0.0
 
     def get(self) -> Dict[str, Any]:
-        ttl = getattr(self.bridge, "CACHE_TTL_SECONDS", 30)
         with self.refresh:
             with self.lock:
-                if self.payload is not None and time.monotonic() - self.fetched_at < ttl:
-                    return dict(self.payload)
-            payload = self._load()
+                if self.payload is not None and time.monotonic() - self.fetched_at < MIRROR_TTL_SECONDS:
+                    return self.payload
+            model = mirror_model(read_screen(self.home, self.root), read_fields(self.home, self.root))
+            # The clock moves every minute; it is left out of the version so a
+            # page redraws only when something it shows changed.
+            digest = hashlib.sha256(
+                json.dumps({k: v for k, v in model.items() if k != "clock"}, sort_keys=True).encode()
+            ).hexdigest()[:20]
+            payload = {"version": digest, "model": model}
             with self.lock:
                 self.payload = payload
                 self.fetched_at = time.monotonic()
-            return dict(payload)
+            return payload
+
+
+def decode_act_body(body: bytes) -> Dict[str, Any]:
+    """One action for bin/fm-factory.py act, with nothing in it the page may not send."""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("the request was not JSON") from exc
+    if not isinstance(payload, dict) or payload.get("action") not in ACT_ACTIONS:
+        raise ValueError("the page asked for something this page cannot do")
+    ask: Dict[str, Any] = {"action": payload["action"]}
+    for key in ("item", "asking", "option", "factory", "job"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not ACT_NAME_RE.match(value):
+            raise ValueError(f"{key} is not a name this page knows")
+        ask[key] = value
+    who = payload.get("who")
+    if who is not None:
+        if who not in ("you", "Starship"):
+            raise ValueError("who steers is you or Starship")
+        ask["who"] = who
+    text = payload.get("text")
+    if text is not None:
+        if not isinstance(text, str) or len(text) > ACT_TEXT_MAX:
+            raise ValueError("the words are too long")
+        ask["text"] = text
+    return ask
+
+
+def factory_act(home: Path, root: Path, ask: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    """Hand one action to bin/fm-factory.py act, the only path in: it sends the
+    note the Factory pane's own key sends. Returns the HTTP status and answer."""
+    proc = subprocess.run(
+        [sys.executable, str(root / "bin" / "fm-factory.py"), "act"],
+        env=child_env(home, root),
+        input=json.dumps(ask),
+        capture_output=True,
+        text=True,
+        timeout=ACT_TIMEOUT_SECONDS,
+    )
+    if proc.returncode == 2:
+        return 400, {"ok": False, "said": "Not sent: the page asked for something that cannot be done."}
+    try:
+        answer = json.loads(proc.stdout) if proc.returncode == 0 else None
+    except json.JSONDecodeError:
+        answer = None
+    if not isinstance(answer, dict):
+        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["nothing came back"]
+        return 502, {"ok": False, "said": "Not sent: " + detail[0].removeprefix("fm-factory: ")}
+    return 200, {"ok": bool(answer.get("ok")), "said": plain_said(answer.get("said"))}
 
 
 # --- sending ---------------------------------------------------------------
@@ -936,8 +1257,9 @@ class WebState:
         self.cookie_value = derive(token, "cookie")
         self.csrf = derive(token, "csrf")
         self.transcript = TranscriptCache(home)
-        self.fleet = FleetCache(home, root)
+        self.mirror = FleetCache(home, root)
         self.send_lock = threading.Lock()
+        self.act_lock = threading.Lock()
 
 
 STATE: Optional[WebState] = None
@@ -1051,11 +1373,19 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(200, {"version": since, "unchanged": True, "state": payload.get("state")})
             else:
                 self._json(200, payload)
-        elif parsed.path == "/api/fleet":
+        elif parsed.path == "/api/mirror":
             try:
-                self._json(200, STATE.fleet.get())
-            except Exception as exc:  # the panel says why instead of breaking the page
-                self._json(503, {"error": str(exc) or "fleet snapshot failed"})
+                payload = STATE.mirror.get()
+            except Exception as exc:  # the page says why instead of breaking
+                self._json(503, {"error": str(exc) or "the projects could not be read"})
+                return
+            since = query.get("since", [""])[0]
+            if since and since == payload["version"]:
+                self._json(200, {"version": since, "unchanged": True, "clock": payload["model"]["clock"]})
+            else:
+                self._json(200, payload)
+        elif parsed.path == "/settings.js":
+            self._send(200, SETTINGS_JS.encode("utf-8"), "text/javascript; charset=utf-8")
         else:
             self._text(404, "not found")
 
@@ -1071,13 +1401,17 @@ class WebHandler(BaseHTTPRequestHandler):
         if not self._post_ok():
             self._text(403, "forbidden", close=True)
             return
-        if urlparse(self.path).path != "/api/send":
+        path = urlparse(self.path).path
+        if path not in ("/api/send", "/api/act"):
             self._text(404, "not found", close=True)
             return
-        if length < 0 or length > SEND_BODY_MAX:
+        if length < 0 or length > (SEND_BODY_MAX if path == "/api/send" else ACT_BODY_MAX):
             self._text(413, "too large", close=True)
             return
         body = self.rfile.read(length)
+        if path == "/api/act":
+            self._act(body)
+            return
         try:
             text, blobs = decode_send_body(body)
             images = [save_image(STATE.home, blob) for blob in blobs]
@@ -1091,135 +1425,488 @@ class WebHandler(BaseHTTPRequestHandler):
                 result = {"outcome": "failed", "detail": str(exc)}
         self._json(200 if result["outcome"] != "failed" else 502, result)
 
+    def _act(self, body: bytes) -> None:
+        try:
+            ask = decode_act_body(body)
+        except ValueError as exc:
+            self._json(400, {"ok": False, "said": f"Not sent: {exc}."})
+            return
+        with STATE.act_lock:
+            try:
+                status, answer = factory_act(STATE.home, STATE.root, ask)
+            except (OSError, subprocess.SubprocessError) as exc:
+                status, answer = 502, {"ok": False, "said": f"Not sent: {exc}."}
+        STATE.mirror.drop()
+        self._json(status, answer)
+
 
 # --- page --------------------------------------------------------------------
 
-PAGE_CSS = """
-:root{--bg:#f7f7f5;--panel:#ffffff;--ink:#1d1d1f;--muted:#6e6e73;--line:#e3e3e0;
---me:#2f6fde;--me-ink:#ffffff;--them:#ffffff;--code:#f0f0ed;--accent:#2f6fde;--warn:#b25000;
---ok:#1f8a4c;--shadow:0 1px 2px rgba(0,0,0,.06);}
-@media (prefers-color-scheme: dark){:root{--bg:#141416;--panel:#1c1c1f;--ink:#ececee;--muted:#9a9aa0;
---line:#2c2c30;--me:#3b74d9;--me-ink:#ffffff;--them:#202024;--code:#26262b;--accent:#7aa7ff;--warn:#ffb168;
---ok:#5fcf8a;--shadow:none;}}
+PAGE_CSS = r"""
+:root{
+--font:system-ui,-apple-system,"Segoe UI",sans-serif;
+--bg:#F1EBDF;--surface:#FBF8F1;--surface-2:#F4EFE5;--ink:#262624;--ink-2:#63605A;--line:#E2DACB;--edge:#C2B8A5;
+--hull:#FBF8F1;--hull-ink:#262624;--hull-2:#63605A;--hull-line:#E2DACB;--hull-soft:#F4EFE5;
+--plate:#34373A;--plate-ink:#EDEBE6;--mic:#5B8496;
+--here:#3E6577;--here-bg:#E4EAE8;--on-here:#FFFFFF;
+--work:#7A6233;--work-bg:#F3EAD3;--work-lamp:#CDA963;
+--done:#44705A;--done-bg:#E4EDE3;--done-lamp:#7FB497;
+--you:#9C5548;--you-bg:#F5E6E0;--you-lamp:#D08A7A;
+--code:#EFE9DD;--shadow:0 1px 2px rgba(38,38,36,.04),0 6px 18px rgba(38,38,36,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--bg:#14181A;--surface:#1B2023;--surface-2:#22282B;--ink:#E4E8EA;--ink-2:#9AA4A9;--line:#2E3538;--edge:#4A5458;
+--hull:#1B2023;--hull-ink:#E4E8EA;--hull-2:#9AA4A9;--hull-line:#2E3538;--hull-soft:#22282B;
+--plate:#2A3236;--plate-ink:#E9EDEF;--mic:#5B8496;
+--here:#8DB4C4;--here-bg:#223038;--on-here:#10191D;
+--work:#D3BC8A;--work-bg:#2C281E;--work-lamp:#BFA36A;
+--done:#9CC4AD;--done-bg:#1F2B25;--done-lamp:#7FAE94;
+--you:#DDA596;--you-bg:#33231F;--you-lamp:#C98778;
+--code:#262C2F;--shadow:0 1px 2px rgba(0,0,0,.2),0 6px 18px rgba(0,0,0,.2);
+}}
+:root[data-theme="dark"]{
+--bg:#14181A;--surface:#1B2023;--surface-2:#22282B;--ink:#E4E8EA;--ink-2:#9AA4A9;--line:#2E3538;--edge:#4A5458;
+--hull:#1B2023;--hull-ink:#E4E8EA;--hull-2:#9AA4A9;--hull-line:#2E3538;--hull-soft:#22282B;
+--plate:#2A3236;--plate-ink:#E9EDEF;--mic:#5B8496;
+--here:#8DB4C4;--here-bg:#223038;--on-here:#10191D;
+--work:#D3BC8A;--work-bg:#2C281E;--work-lamp:#BFA36A;
+--done:#9CC4AD;--done-bg:#1F2B25;--done-lamp:#7FAE94;
+--you:#DDA596;--you-bg:#33231F;--you-lamp:#C98778;
+--code:#262C2F;--shadow:0 1px 2px rgba(0,0,0,.2),0 6px 18px rgba(0,0,0,.2);
+}
+/* Lively: the same page with stronger colours. Calm is the default. */
+:root[data-style="lively"]{
+--bg:#F1EBDF;--surface:#FDFAF4;--surface-2:#F6F1E7;--ink:#14232D;--ink-2:#4C5F6B;--line:#DDD5C5;--edge:#B9AE9B;
+--hull:#143242;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#2C4C5D;--hull-soft:rgba(255,255,255,.07);
+--plate:#143242;--plate-ink:#EAF2F5;--mic:#2F7FE0;
+--here:#0B6B88;--here-bg:#DDEEF2;--on-here:#FFFFFF;
+--work:#8F5C0B;--work-bg:#FBF0D9;--work-lamp:#E6A93A;
+--done:#1F6F45;--done-bg:#E1F1E7;--done-lamp:#49B678;
+--you:#B5371F;--you-bg:#FBE8E3;--you-lamp:#EE6447;
+--code:#EFE9DD;--shadow:0 1px 2px rgba(20,35,45,.06),0 8px 24px rgba(20,35,45,.07);
+}
+@media (prefers-color-scheme:dark){:root[data-style="lively"]:not([data-theme="light"]){
+--bg:#0E181E;--surface:#15232B;--surface-2:#1A2B35;--ink:#E7EEF2;--ink-2:#9FB2BE;--line:#2A3D49;--edge:#3D5564;
+--hull:#1B3442;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#345566;--hull-soft:rgba(255,255,255,.07);
+--plate:#1B3442;--plate-ink:#EAF2F5;--mic:#2F7FE0;
+--here:#62C6E2;--here-bg:#12333F;--on-here:#06222B;
+--work:#E7B95F;--work-bg:#33290F;--work-lamp:#E6A93A;
+--done:#74CB95;--done-bg:#143021;--done-lamp:#49B678;
+--you:#F39078;--you-bg:#3A1B14;--you-lamp:#EE6447;
+--code:#1F313B;--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+}}
+:root[data-style="lively"][data-theme="dark"]{
+--bg:#0E181E;--surface:#15232B;--surface-2:#1A2B35;--ink:#E7EEF2;--ink-2:#9FB2BE;--line:#2A3D49;--edge:#3D5564;
+--hull:#1B3442;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#345566;--hull-soft:rgba(255,255,255,.07);
+--plate:#1B3442;--plate-ink:#EAF2F5;--mic:#2F7FE0;
+--here:#62C6E2;--here-bg:#12333F;--on-here:#06222B;
+--work:#E7B95F;--work-bg:#33290F;--work-lamp:#E6A93A;
+--done:#74CB95;--done-bg:#143021;--done-lamp:#49B678;
+--you:#F39078;--you-bg:#3A1B14;--you-lamp:#EE6447;
+--code:#1F313B;--shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+}
+:root{color-scheme:light dark}
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,
-Roboto,"Helvetica Neue",Arial,sans-serif;display:flex;flex-direction:column}
-header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);
-background:var(--panel)}
-header h1{font-size:15px;font-weight:600;margin:0;flex:1}
-.state{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.state.busy .dot{background:var(--accent);animation:pulse 1.2s ease-in-out infinite}
-.state.idle .dot{background:var(--ok)}
-.state.offline .dot{background:var(--warn)}
-@keyframes pulse{50%{opacity:.3}}
-button.ghost{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:4px 10px;
-font:inherit;font-size:13px;cursor:pointer}
-main{flex:1;display:flex;min-height:0}
-#chat{flex:1;display:flex;flex-direction:column;min-width:0}
-#log{flex:1;overflow-y:auto;padding:20px 16px 8px}
-.wrap{max-width:780px;margin:0 auto}
-.msg{display:flex;margin:10px 0}
+html{height:100%}
+body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:1rem/1.5 var(--font);-webkit-font-smoothing:antialiased}
+button,textarea,input{font:inherit;color:inherit}
+button{cursor:pointer}
+h1,h2,h3,h4,p,ul,ol{margin:0;padding:0}
+ul,ol{list-style:none}
+svg{width:1em;height:1em;flex:none}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--here);outline-offset:2px;border-radius:.375rem}
+.app{display:flex;flex-direction:column;height:100dvh;min-height:0}
+
+.toprow{display:flex;align-items:flex-end;gap:.75rem;padding:.625rem 1rem 0}
+.tabs{flex:1;min-width:0;display:flex;gap:.125rem;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;border:0;background:none;padding:.5rem .875rem .625rem;font-size:.94rem;color:var(--ink-2);border-bottom:3px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab .dot{display:inline-block;margin-left:.4rem;vertical-align:.06rem}
+.tab[aria-selected="true"]{color:var(--ink);font-weight:600;border-bottom-color:var(--here)}
+.gear{flex:none;display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--line);background:var(--surface);border-radius:.5rem;padding:.25rem .7rem;font-size:.84rem;color:var(--ink-2);margin-bottom:.5rem}
+.gear:hover,.gear[aria-expanded="true"]{color:var(--ink);border-color:var(--edge)}
+.gear svg{font-size:1rem}
+
+.bridge{margin:0 1rem;background:var(--hull);color:var(--hull-ink);border-radius:.875rem;padding:.75rem 1.125rem;display:flex;align-items:center;gap:.625rem 1.125rem;flex-wrap:wrap;border:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:.5rem;font-weight:600;font-size:1.125rem;letter-spacing:.04em}
+.brand svg{color:var(--here);font-size:1rem}
+.lamps{display:flex;gap:.5rem 1.125rem;flex-wrap:wrap;padding-left:1.125rem;border-left:1px solid var(--hull-line)}
+.lamp{display:flex;align-items:center;gap:.56rem;font-size:.94rem;white-space:nowrap}
+.lamp i{width:.69rem;height:.69rem;border-radius:50%;border:1.5px solid var(--hull-2);opacity:.6}
+.lamp b{font-weight:600;font-variant-numeric:tabular-nums}
+.lamp:not(.lit){color:var(--hull-2)}
+.lamp.lit i{border:0;opacity:1}
+.lamp.work.lit i{background:var(--work-lamp)}
+.lamp.you.lit i{background:var(--you-lamp)}
+.lamp.done.lit i{background:var(--done-lamp)}
+.band-note{font-size:.875rem;color:var(--hull-2)}
+.sides{display:flex;align-items:center;gap:.5rem 1.125rem;flex-wrap:wrap}
+.urgent{flex:1 1 21rem;min-width:0;display:flex;align-items:center;gap:.625rem;text-align:left;background:var(--hull-soft);border:1px solid var(--hull-line);color:inherit;border-radius:.625rem;padding:.44rem .5rem .44rem .75rem}
+button.urgent:hover{border-color:var(--edge)}
+.urgent .k{font-size:.81rem;color:var(--hull-2);white-space:nowrap}
+.urgent .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:.94rem}
+.urgent .go{font-size:.81rem;background:var(--surface);color:var(--ink);border:1px solid var(--edge);border-radius:.44rem;padding:.06rem .625rem;font-weight:600}
+.urgent.none{color:var(--hull-2);font-size:.94rem}
+@media (max-width:110rem){.urgent{order:5;flex-basis:100%}.sides{margin-left:auto}}
+.alert{display:flex;align-items:center;gap:.5rem;font-size:.875rem;font-weight:600;background:var(--you-bg);color:var(--you);border-radius:999px;padding:.25rem .75rem}
+.alert i{width:.5rem;height:.5rem;border-radius:50%;background:var(--you-lamp);flex:none}
+.aside{font-size:.84rem;color:var(--hull-2);white-space:nowrap;display:flex;align-items:center;gap:.375rem}
+.aside svg{font-size:1.25rem}
+.aside.good{color:var(--done)}.aside.low{color:var(--work)}.aside.critical{color:var(--you);font-weight:600}
+
+.main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:.875rem;padding:.875rem 1rem 1rem}
+.pane{min-height:0;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:1rem;display:flex;flex-direction:column;overflow:hidden}
+.pane-head{display:flex;align-items:baseline;gap:.625rem;padding:.875rem 1.25rem .625rem;flex-wrap:wrap}
+.pane-head h2{font-size:1.125rem;font-weight:600}
+.pane-head .when{margin-left:auto;font-size:.875rem;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.state{display:inline-flex;align-items:center;gap:.375rem;font-size:.81rem;font-weight:600;border-radius:999px;padding:.125rem .625rem;background:var(--surface-2);color:var(--ink-2)}
+.state.busy{background:var(--work-bg);color:var(--work)}
+.state.offline{background:var(--you-bg);color:var(--you)}
+.side-switch{display:none}
+.state:empty{display:none}
+
+#log{flex:1;min-height:0;overflow-y:auto;padding:.5rem 1.375rem 1rem}
+.wrap{max-width:48rem;margin:0 auto}
+.msg{display:flex;margin:.875rem 0}
 .msg.user{justify-content:flex-end}
-.bubble{max-width:85%;padding:9px 14px;border-radius:16px;background:var(--them);box-shadow:var(--shadow);
-border:1px solid var(--line);overflow-wrap:anywhere}
-.msg.user .bubble{background:var(--me);color:var(--me-ink);border-color:transparent}
-.msg.user .bubble a{color:inherit}
-.msg.assistant .bubble{max-width:100%;background:transparent;border:none;box-shadow:none;padding:2px 2px}
-.bubble p{margin:.35em 0}.bubble p:first-child{margin-top:0}.bubble p:last-child{margin-bottom:0}
+.bubble{max-width:85%;padding:.625rem .875rem;border-radius:1rem 1rem .25rem 1rem;background:var(--here-bg);overflow-wrap:anywhere}
+.msg.assistant{gap:.75rem;align-items:flex-start}
+.av{width:1.875rem;height:1.875rem;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);color:var(--here);display:grid;place-items:center;font-size:.875rem;flex:none;margin-top:.125rem}
+.msg.assistant .bubble{max-width:100%;min-width:0;background:transparent;padding:.125rem 0;border-radius:0}
+.bubble p{margin:.5em 0}.bubble p:first-child{margin-top:0}.bubble p:last-child{margin-bottom:0}
 .bubble h3,.bubble h4,.bubble h5,.bubble h6{margin:.8em 0 .3em;font-size:1em}
 .bubble h3{font-size:1.08em}
-.bubble ul,.bubble ol{margin:.35em 0;padding-left:1.4em}
-.bubble code{background:var(--code);padding:1px 5px;border-radius:5px;font:13px/1.4 ui-monospace,SFMono-Regular,
-Menlo,monospace}
-.msg.user .bubble code{background:rgba(255,255,255,.18)}
-.bubble pre{background:var(--code);padding:10px 12px;border-radius:10px;overflow-x:auto}
+.bubble ul,.bubble ol{margin:.5em 0;padding-left:1.4em}
+.bubble ul{list-style:disc}.bubble ol{list-style:decimal}
+.bubble li+li{margin-top:.3em}
+.bubble a{color:var(--here)}
+.bubble code{background:var(--code);padding:.06em .3em;border-radius:.3em;font:.84em/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+.bubble pre{background:var(--code);padding:.625rem .75rem;border-radius:.625rem;overflow-x:auto}
 .bubble pre code{background:none;padding:0}
-.bubble blockquote{margin:.4em 0;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}
+.bubble blockquote{margin:.4em 0;padding-left:.75rem;border-left:3px solid var(--line);color:var(--ink-2)}
 .bubble hr{border:none;border-top:1px solid var(--line);margin:.8em 0}
 .table{overflow-x:auto}
-.bubble table{border-collapse:collapse;margin:.4em 0;font-size:14px}
-.bubble th,.bubble td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
-.chip{display:inline-block;font-size:12px;opacity:.85;margin-top:4px}
-details.quiet{margin:2px 0;font-size:13px;color:var(--muted)}
-details.quiet summary{cursor:pointer;list-style:none;padding:2px 0;white-space:nowrap;overflow:hidden;
-text-overflow:ellipsis}
+.bubble table{border-collapse:collapse;margin:.4em 0;font-size:.9em}
+.bubble th,.bubble td{border:1px solid var(--line);padding:.25rem .5rem;text-align:left;vertical-align:top}
+.chip{display:inline-block;font-size:.78rem;color:var(--ink-2);margin-top:.25rem}
+details.quiet{margin:.125rem 0 .125rem 2.625rem;font-size:.84rem;color:var(--ink-2)}
+details.quiet summary{cursor:pointer;list-style:none;padding:.125rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 details.quiet summary::-webkit-details-marker{display:none}
-details.quiet summary::before{content:"\\25B8";display:inline-block;width:1em;transition:transform .15s}
+details.quiet summary::before{content:"\25B8";display:inline-block;width:1em;transition:transform .15s}
 details.quiet[open] summary::before{transform:rotate(90deg)}
 details.quiet .name{color:var(--ink);font-weight:500}
-details.quiet.err .name{color:var(--warn)}
-details.quiet pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);color:var(--ink);
-padding:8px 10px;border-radius:8px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:320px;
-overflow:auto;margin:4px 0 8px}
-.compact{display:flex;align-items:center;gap:10px;margin:16px 0}
+details.quiet.err .name{color:var(--you)}
+details.quiet pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);color:var(--ink);padding:.5rem .625rem;border-radius:.5rem;font:.78rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:20rem;overflow:auto;margin:.25rem 0 .5rem}
+.compact{display:flex;align-items:center;gap:.625rem;margin:1rem 0}
 .compact::before,.compact::after{content:"";flex:1;border-top:1px dashed var(--line)}
-.compact details{font-size:12px;color:var(--muted);text-align:center}
-.compact details pre{text-align:left;white-space:pre-wrap;max-height:320px;overflow:auto;background:var(--code);
-padding:8px;border-radius:8px}
-.note{color:var(--muted);text-align:center;font-size:13px;margin:12px 0}
-#compose{border-top:1px solid var(--line);background:var(--panel);padding:10px 16px 12px}
-#compose .wrap{display:flex;flex-direction:column;gap:6px}
-#row{display:flex;gap:8px;align-items:flex-end}
-#input{flex:1;resize:none;min-height:42px;max-height:200px;padding:10px 12px;border-radius:12px;
-border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;outline:none}
-#input:focus{border-color:var(--accent)}
-#send{border:none;background:var(--accent);color:#fff;border-radius:12px;padding:0 16px;height:42px;font:inherit;
-font-weight:600;cursor:pointer}
-#send:disabled{opacity:.5;cursor:default}
-#thumbs{display:flex;gap:6px;flex-wrap:wrap}
+.compact details{font-size:.78rem;color:var(--ink-2);text-align:center}
+.compact details pre{text-align:left;white-space:pre-wrap;max-height:20rem;overflow:auto;background:var(--code);padding:.5rem;border-radius:.5rem}
+.note{color:var(--ink-2);text-align:center;font-size:.84rem;margin:.75rem 0}
+.note:empty{display:none}
+#compose{border-top:1px solid var(--line);padding:.75rem 1rem .625rem;background:var(--surface)}
+#compose .wrap{display:flex;flex-direction:column;gap:.375rem}
+#row{display:flex;gap:.5rem;align-items:flex-end}
+#input{flex:1;min-width:0;resize:none;min-height:2.875rem;max-height:12.5rem;padding:.69rem .875rem;border-radius:.75rem;border:1px solid var(--line);background:var(--bg);outline:none}
+#input:focus{border-color:var(--here)}
+#thumbs{display:flex;gap:.375rem;flex-wrap:wrap}
 #thumbs:empty{display:none}
 .thumb{position:relative}
-.thumb img{height:56px;border-radius:8px;border:1px solid var(--line)}
-.thumb button{position:absolute;top:-6px;right:-6px;border:none;border-radius:50%;width:20px;height:20px;
-background:var(--ink);color:var(--bg);cursor:pointer;font-size:12px;line-height:20px;padding:0}
-#result{font-size:12px;color:var(--muted);min-height:1em}
-#result.failed{color:var(--warn)}
-body.drag #log{outline:2px dashed var(--accent);outline-offset:-8px}
-aside{width:300px;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:14px 16px}
-aside h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:16px 0 6px}
-aside h2:first-child{margin-top:0}
-aside ul{list-style:none;margin:0;padding:0}
-aside li{padding:5px 0;border-bottom:1px solid var(--line);font-size:14px}
-aside li:last-child{border-bottom:none}
-aside li a{color:var(--accent);text-decoration:none}
-aside .empty,aside .more{color:var(--muted);font-size:13px}
-body.nofleet aside{display:none}
-@media (max-width:860px){aside{position:fixed;top:49px;right:0;bottom:0;width:min(320px,90vw);
-box-shadow:-4px 0 16px rgba(0,0,0,.15);display:none}body.fleet-open aside{display:block}
-body.nofleet aside{display:none}}
-@media (min-width:861px){#fleet-toggle{display:none}}
+.thumb img{height:3.5rem;border-radius:.5rem;border:1px solid var(--line)}
+.thumb button{position:absolute;top:-.375rem;right:-.375rem;border:none;border-radius:50%;width:1.25rem;height:1.25rem;background:var(--ink);color:var(--bg);font-size:.75rem;line-height:1.25rem;padding:0}
+#result{font-size:.78rem;color:var(--ink-2);min-height:1em}
+#result.failed{color:var(--you)}
+body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
+
+.btn{display:inline-flex;align-items:center;gap:.44rem;border:1px solid var(--line);background:var(--surface);border-radius:.625rem;padding:.5rem .81rem;font-size:.94rem;font-weight:500;white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--edge)}
+.btn.primary{background:var(--here);border-color:var(--here);color:var(--on-here);font-weight:600}
+.btn.small{padding:.31rem .625rem;font-size:.875rem}
+.btn.plain{border-color:transparent;background:none;color:var(--here);padding-inline:.375rem}
+.btn:disabled{opacity:.6;cursor:default}
+.btn svg{font-size:1.06rem}
+#send{height:2.875rem}
+
+.p-top{padding:0 1.25rem .75rem;border-bottom:1px solid var(--line)}
+.sum{font-size:.94rem}
+.sum b{font-weight:600}
+.queue{font-size:.875rem;color:var(--ink-2);margin-top:.19rem}
+.notice{margin-top:.625rem;font-size:.9rem;border-radius:.625rem;padding:.5rem .75rem;font-weight:500}
+.notice.ok{background:var(--done-bg);color:var(--done)}
+.notice.info{background:var(--here-bg);color:var(--here)}
+.notice.bad{background:var(--you-bg);color:var(--you)}
+.p-body{flex:1;min-height:0;overflow-y:auto;padding:1rem 1.25rem 2rem}
+.sec+.sec{margin-top:1.625rem}
+.sec>h3{font-size:1rem;font-weight:600;display:flex;align-items:baseline;gap:.5rem;margin-bottom:.625rem}
+.sec>h3 .n{font-size:.81rem;font-weight:600;border-radius:999px;padding:0 .5rem;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line)}
+.sec>h3 small{font-size:.875rem;font-weight:400;color:var(--ink-2)}
+.empty{font-size:.94rem;color:var(--ink-2)}
+
+.call{border:1px solid var(--line);border-radius:.75rem;background:var(--surface)}
+.call+.call{margin-top:.5rem}
+.call.open{border-color:var(--edge);box-shadow:var(--shadow)}
+.call.flash{animation:flash 1.2s ease-out}
+@keyframes flash{0%{background:var(--here-bg)}100%{background:var(--surface)}}
+.call-row{width:100%;border:0;background:none;text-align:left;display:flex;align-items:center;gap:.625rem;padding:.625rem .875rem;border-radius:.75rem}
+.dot{width:.56rem;height:.56rem;border-radius:50%;flex:none;background:var(--edge)}
+.dot.you{background:var(--you-lamp)}.dot.done{background:var(--done-lamp)}.dot.work{background:var(--work-lamp)}.dot.here{background:var(--here)}
+.call-title{flex:1;min-width:0;font-weight:600;font-size:.94rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.call.open .call-title{white-space:normal;font-size:1rem}
+.call-meta{flex:none;max-width:45%;font-size:.84rem;color:var(--ink-2);text-align:right;display:flex;flex-direction:column;line-height:1.3}
+.call-body{padding:0 .875rem .875rem 2.06rem}
+.call-body>*+*{margin-top:.625rem}
+.why{font-size:.94rem}
+.opts{display:grid;gap:.375rem}
+.opt{display:flex;align-items:center;gap:.625rem;width:100%;text-align:left;border:1px solid var(--line);border-radius:.625rem;background:var(--surface);padding:.56rem .75rem;font-size:.94rem}
+.opt:hover:not(:disabled){border-color:var(--here)}
+.opt:disabled{cursor:default}
+.opt .ring{width:1rem;height:1rem;border-radius:50%;border:1.5px solid var(--ink-2);flex:none;display:grid;place-items:center}
+.opt.picked{border-color:var(--here);background:var(--here-bg)}
+.opt.picked .ring{border-color:var(--here)}
+.opt.picked .ring::after{content:"";width:.5rem;height:.5rem;border-radius:50%;background:var(--here)}
+.opt .l{flex:1;min-width:0}
+.tag{font-size:.78rem;font-weight:600;color:var(--here);background:var(--here-bg);border-radius:999px;padding:.06rem .56rem;white-space:nowrap}
+.opt.picked .tag{background:var(--surface)}
+.confirm,.talk{border:1px solid var(--edge);border-radius:.75rem;padding:.75rem .875rem;background:var(--surface)}
+.confirm p{font-size:.94rem}
+.unsent{font-size:.81rem;color:var(--ink-2)}
+.talk .unsent{margin-top:.5rem}
+.rowb{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.625rem}
+.call-body>.rowb{margin-top:.625rem}
+.holds{font-size:.875rem;color:var(--ink-2)}
+.holds a{color:var(--here);overflow-wrap:anywhere}
+.said{font-size:.9rem;border-radius:.625rem;padding:.5rem .75rem;background:var(--here-bg);color:var(--here);font-weight:500}
+.talk-head{font-size:.875rem;font-weight:600}
+.talk textarea{display:block;width:100%;margin-top:.5rem;border:1px solid var(--line);border-radius:.625rem;padding:.56rem .75rem;background:var(--bg);resize:vertical;outline:none}
+.talk textarea:focus{border-color:var(--here)}
+
+.proj{border-top:1px solid var(--line);padding:.75rem 0}
+.proj:first-of-type{border-top:0;padding-top:0}
+.proj-head{display:flex;align-items:center;gap:.375rem .75rem;flex-wrap:wrap}
+.proj-name{border:0;background:none;padding:0;font-weight:600;font-size:1rem;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:.25rem}
+.proj-name:hover{text-decoration-color:var(--here);color:var(--here)}
+.proj-q{font-size:.875rem;color:var(--ink-2)}
+.steer{margin-left:auto;display:flex;align-items:center;gap:.5rem;font-size:.84rem;color:var(--ink-2)}
+.seg{display:flex;border:1px solid var(--line);border-radius:.5rem;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;padding:.125rem .625rem;font-size:.84rem;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
+.job{margin-top:.625rem;border-radius:.75rem;background:var(--surface-2);padding:.69rem .875rem}
+.job-top{display:flex;gap:.625rem;align-items:baseline}
+.job-top .dot{align-self:center}
+.job-title{flex:1;min-width:0;font-weight:600;font-size:.94rem}
+.mins{font-size:.84rem;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.31rem;margin-top:.625rem}
+.steps li{font-size:.81rem;color:var(--ink-2);padding-top:.44rem;border-top:.25rem solid var(--line);border-radius:.125rem;line-height:1.25;display:flex;gap:.25rem;align-items:flex-start}
+.steps li svg{font-size:.875rem;margin-top:.06rem}
+.steps li.done{border-top-color:var(--done-lamp);color:var(--done)}
+.steps li.now{border-top-color:var(--work-lamp);color:var(--work);font-weight:600}
+.job-foot{display:flex;justify-content:space-between;align-items:baseline;gap:.25rem .75rem;flex-wrap:wrap;margin-top:.56rem}
+.doing{font-size:.9rem;flex:1 1 13rem}
+.doing.quiet{color:var(--work);font-weight:500}
+.job-foot .btn{margin-left:auto}
+.jobline{display:flex;gap:.625rem;align-items:baseline;margin-top:.5rem;font-size:.94rem}
+.jobline .dot{align-self:center}
+.jobline .t{flex:1;min-width:0}
+.jobline .w{font-size:.84rem;color:var(--ink-2);white-space:nowrap}
+.jobline .w.you{color:var(--you)}.jobline .w.done{color:var(--done)}.jobline .w.work{color:var(--work)}
+.line{font-size:.875rem;color:var(--ink-2);margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap}
+.line b{font-weight:600;color:var(--ink)}
+.line .r{margin-left:auto}
+.feed li{display:grid;grid-template-columns:4.25rem minmax(0,1fr);gap:.125rem .625rem;padding:.5rem 0;border-top:1px solid var(--line);font-size:.9rem}
+.feed li:first-child{border-top:0}
+.feed time{color:var(--ink-2);font-variant-numeric:tabular-nums;font-size:.84rem;padding-top:.06rem}
+.feed .who{font-weight:600}
+.word{font-size:.78rem;font-weight:600;border-radius:999px;padding:.06rem .56rem;margin:0 .25rem;white-space:nowrap;background:var(--surface-2);color:var(--ink-2)}
+.word.you{background:var(--you-bg);color:var(--you)}.word.done{background:var(--done-bg);color:var(--done)}
+.word.here{background:var(--here-bg);color:var(--here)}.word.work{background:var(--work-bg);color:var(--work)}
+
+.pp-head{padding:1rem 1.375rem .75rem;border-bottom:1px solid var(--line)}
+.pp-head h2{font-size:1.375rem;font-weight:600}
+.pp-head>p{color:var(--ink-2);font-size:.94rem}
+.pp-head .steer{margin-left:0}
+.all{font-size:.875rem;color:var(--ink-2);margin-top:.625rem}
+.list li{padding:.5rem 0;border-top:1px solid var(--line);font-size:.94rem;display:flex;gap:.625rem;align-items:baseline}
+.list li:first-child{border-top:0}
+.list .w{margin-left:auto;font-size:.84rem;color:var(--ink-2);white-space:nowrap}
+.bul li{font-size:.94rem;padding-left:1rem;position:relative}
+.bul li+li{margin-top:.375rem}
+.bul li::before{content:"";position:absolute;left:.125rem;top:.62em;width:.31rem;height:.31rem;border-radius:50%;background:var(--ink-2)}
+.bul time{color:var(--ink-2);font-size:.84rem;margin-right:.5rem}
+.warn{color:var(--you)}.near{color:var(--work)}
+.worker{border:1px solid var(--line);border-radius:.75rem;padding:.75rem .875rem;background:var(--surface)}
+.worker+.worker{margin-top:.625rem}
+.worker.sel{border-color:var(--edge);box-shadow:var(--shadow)}
+.worker h4{font-size:.94rem;font-weight:600;display:flex;gap:.625rem;align-items:baseline}
+.worker h4 span{margin-left:auto;font-size:.84rem;color:var(--ink-2);font-weight:400;white-space:nowrap}
+.worker .doing{margin-top:.5rem;font-size:.9rem}
+.worker .doing.quiet{color:var(--work);font-weight:500}
+
+.settings{position:fixed;top:3.25rem;right:1rem;z-index:30;width:21rem;max-width:calc(100vw - 1.5rem);max-height:calc(100dvh - 4rem);overflow-y:auto;background:var(--surface);border:1px solid var(--edge);border-radius:1rem;box-shadow:var(--shadow),0 12px 36px rgba(0,0,0,.14);padding:1rem 1.125rem 1.125rem}
+.settings h2{font-size:1.06rem;font-weight:600;display:flex;align-items:center}
+.settings h2 button{margin-left:auto}
+.set{margin-top:1rem}
+.set>label,.set>.lbl{display:flex;align-items:baseline;gap:.5rem;font-size:.9rem;font-weight:600}
+.set .now{margin-left:auto;font-weight:400;color:var(--ink-2);font-size:.84rem}
+.hint{font-size:.81rem;color:var(--ink-2);margin-top:.25rem}
+.settings>.hint{margin-top:1rem}
+.size-row{display:flex;align-items:center;gap:.625rem;margin-top:.5rem}
+.size-row .a{color:var(--ink-2);line-height:1}
+.size-row .a.s{font-size:.8rem}.size-row .a.l{font-size:1.45rem}
+.size-row input{flex:1;min-width:0;accent-color:var(--here)}
+.set .seg{margin-top:.5rem}
+.set .seg button{flex:1;padding:.375rem .5rem;font-size:.9rem}
+.switch{display:flex;align-items:center;gap:.625rem;margin-top:.5rem;font-size:.9rem;font-weight:400}
+.switch input{width:1.125rem;height:1.125rem;accent-color:var(--here)}
+
+/* Lively's stronger marks */
+[data-style="lively"] .bridge{border-color:transparent;box-shadow:var(--shadow)}
+[data-style="lively"] .brand svg{color:#8FD6EA}
+[data-style="lively"] .lamp.work.lit i{box-shadow:0 0 0 .25rem rgba(230,169,58,.22)}
+[data-style="lively"] .lamp.you.lit i{box-shadow:0 0 0 .25rem rgba(238,100,71,.24)}
+[data-style="lively"] .lamp.done.lit i{box-shadow:0 0 0 .25rem rgba(73,182,120,.24)}
+[data-style="lively"] button.urgent:hover{background:rgba(255,255,255,.12)}
+[data-style="lively"] .urgent .go{background:var(--hull-ink);color:var(--hull);border-color:transparent}
+[data-style="lively"] .alert{background:#5A2118;color:#FFD9CF}
+[data-style="lively"] .aside.good{color:#8EDCAF}
+[data-style="lively"] .aside.low{color:#F0C36C}
+[data-style="lively"] .aside.critical{color:#FFB3A3}
+[data-style="lively"] .av{background:var(--hull);color:#8FD6EA;border-color:transparent}
+[data-style="lively"] .sum .c-work{color:var(--work)}
+[data-style="lively"] .sum .c-you{color:var(--you)}
+[data-style="lively"] .sum .c-done{color:var(--done)}
+[data-style="lively"] .sec>h3 .n{background:var(--you-bg);color:var(--you);border-color:transparent}
+[data-style="lively"] .call.open{border-color:var(--you);box-shadow:0 0 0 3px var(--you-bg)}
+[data-style="lively"] .call.fin.open{border-color:var(--done);box-shadow:0 0 0 3px var(--done-bg)}
+[data-style="lively"] .confirm,[data-style="lively"] .talk{border:1.5px solid var(--here)}
+[data-style="lively"] .seg button[aria-pressed="true"],[data-style="lively"] .side-switch button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+[data-style="lively"] .job .job-top .dot.work{animation:glow 2s infinite ease-in-out}
+@keyframes glow{50%{box-shadow:0 0 0 .31rem rgba(230,169,58,.25)}}
+[data-style="lively"] .worker.sel{border-color:var(--here);box-shadow:0 0 0 3px var(--here-bg)}
+
+@media (max-width:61rem){
+.app{height:auto;min-height:100dvh}
+.main{display:block;padding:.75rem}
+.pane{overflow:visible}
+.pane+.pane{margin-top:.75rem}
+#log,.p-body{overflow:visible}
+.side-switch{display:flex;margin:.75rem .75rem 0;border:1px solid var(--line);border-radius:.75rem;overflow:hidden;background:var(--surface)}
+.side-switch button{flex:1;border:0;background:none;padding:.56rem;font-size:.94rem;color:var(--ink-2)}
+.side-switch button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
+.main[data-side="chat"] #panelPane,.main[data-side="projects"] #chatPane{display:none}
+.bridge{margin:0 .75rem;padding:.75rem .875rem;gap:.625rem 1rem}
+.lamps{padding-left:0;border-left:0;width:100%}
+.sides{margin-left:0}
+.urgent{flex-wrap:wrap}
+.urgent .t{white-space:normal;flex-basis:60%}
+.toprow{padding-inline:.75rem}
+.gear span{display:none}
+#compose{position:sticky;bottom:0;border-radius:0 0 1rem 1rem}
+.settings{right:.75rem}
+}
+@media (max-width:32rem){
+.call-body{padding-left:.875rem}
+.steps li{font-size:.75rem}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+[data-motion="less"] *,[data-motion="less"] *::before,[data-motion="less"] *::after{animation:none!important;transition:none!important}
 """
 
-PAGE_JS = """
+# The settings are a script of their own so they can be run without a browser.
+SETTINGS_JS = r"""
+/* The page's settings: how they are kept in this browser and put on the page.
+   Kept apart from the page's own script so they can be run on their own. */
+(function (root) {
+  'use strict';
+  var KEY = 'fm-web-settings';
+  /* Text size steps, as a percentage of the browser's own size. */
+  var TEXT_STEPS = [87.5, 100, 112.5, 125, 150];
+  var TEXT_NAMES = ['Small', 'Normal', 'Large', 'Larger', 'Largest'];
+  var DEFAULTS = { text: 1, style: 'calm', theme: 'auto', motion: 'auto' };
+  var CHOICES = { style: ['calm', 'lively'], theme: ['auto', 'light', 'dark'], motion: ['auto', 'less'] };
+
+  /* Whatever comes in, a whole and valid set of settings comes out. */
+  function clean(given) {
+    var out = { text: DEFAULTS.text, style: DEFAULTS.style, theme: DEFAULTS.theme, motion: DEFAULTS.motion };
+    if (!given || typeof given !== 'object') return out;
+    if (typeof given.text === 'number' && given.text === Math.floor(given.text) &&
+        given.text >= 0 && given.text < TEXT_STEPS.length) out.text = given.text;
+    Object.keys(CHOICES).forEach(function (name) {
+      if (CHOICES[name].indexOf(given[name]) >= 0) out[name] = given[name];
+    });
+    return out;
+  }
+
+  /* A browser that blocks storage, or holds something unreadable, gets the defaults. */
+  function load(storage) {
+    try {
+      return clean(JSON.parse(storage.getItem(KEY)));
+    } catch (error) {
+      return clean(null);
+    }
+  }
+
+  function save(storage, settings) {
+    var kept = clean(settings);
+    try {
+      storage.setItem(KEY, JSON.stringify(kept));
+    } catch (error) { /* shown for this visit only */ }
+    return kept;
+  }
+
+  /* Put the settings on the page's root element; the stylesheet does the rest. */
+  function apply(element, settings) {
+    var kept = clean(settings);
+    element.style.fontSize = TEXT_STEPS[kept.text] + '%';
+    element.setAttribute('data-style', kept.style);
+    element.setAttribute('data-theme', kept.theme);
+    element.setAttribute('data-motion', kept.motion);
+    return kept;
+  }
+
+  var api = { KEY: KEY, TEXT_STEPS: TEXT_STEPS, TEXT_NAMES: TEXT_NAMES, DEFAULTS: DEFAULTS,
+              clean: clean, load: load, save: save, apply: apply };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.FMSettings = api;
+})(typeof window !== 'undefined' ? window : this);
+"""
+
+PAGE_JS = r"""
 (function(){
 'use strict';
-const CSRF = document.body.dataset.csrf;
-const log = document.getElementById('log');
-const wrap = document.getElementById('items');
-const input = document.getElementById('input');
-const sendBtn = document.getElementById('send');
-const thumbs = document.getElementById('thumbs');
-const result = document.getElementById('result');
-const stateEl = document.getElementById('state');
-let version = '';
-let images = [];
-let sending = false;
+const CSRF=document.body.dataset.csrf;
+const $=id=>document.getElementById(id);
+const log=$('log'),wrap=$('items'),input=$('input'),sendBtn=$('send'),thumbs=$('thumbs'),result=$('result'),stateEl=$('state');
+let version='',images=[],sending=false;
 
-function el(tag, cls, text){const e=document.createElement(tag);if(cls)e.className=cls;
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;
   if(text!==undefined)e.textContent=text;return e;}
+function add(parent){for(let i=1;i<arguments.length;i++){if(arguments[i])parent.appendChild(arguments[i]);}return parent;}
+function btn(cls,text,act,data){const b=el('button',cls,text);b.type='button';b.dataset.act=act;
+  for(const k in (data||{})){if(data[k]!=null)b.dataset[k]=data[k];}return b;}
+const NS='http://www.w3.org/2000/svg';
+const ICONS={
+  star:'M8 1.8l1.7 4.1 4.4.4-3.3 2.9 1 4.3L8 11.2l-3.8 2.3 1-4.3-3.3-2.9 4.4-.4z',
+  sliders:'M2 5h7M12 5h2M2 11h2M7 11h7M10.5 3.5v3M5.5 9.5v3',
+  check:'M3.5 8.5l3 3 6-7',
+  moon:'M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z',
+  battery:'M2 5.5h10v5H2zM13.5 7v2',
+  close:'M4 4l8 8M12 4l-8 8'};
+function icon(name){const s=document.createElementNS(NS,'svg');s.setAttribute('viewBox','0 0 16 16');
+  s.setAttribute('aria-hidden','true');const p=document.createElementNS(NS,'path');p.setAttribute('d',ICONS[name]);
+  p.setAttribute('fill','none');p.setAttribute('stroke','currentColor');p.setAttribute('stroke-width','1.6');
+  p.setAttribute('stroke-linecap','round');p.setAttribute('stroke-linejoin','round');s.appendChild(p);return s;}
+
+/* ---- the first mate's conversation ---- */
 function atBottom(){return log.scrollHeight-log.scrollTop-log.clientHeight<80;}
-
-function quiet(item, label, name){
+function quiet(item,label,name){
   const d=el('details','quiet'+(item.error?' err':''));d.dataset.id=item.id;
-  const s=el('summary');
-  const n=el('span','name',name);s.appendChild(n);
-  if(label){s.appendChild(document.createTextNode(' \\u00b7 '+label));}
-  d.appendChild(s);
-  return d;
+  const s=el('summary');s.appendChild(el('span','name',name));
+  if(label){s.appendChild(document.createTextNode(': '+label));}
+  d.appendChild(s);return d;
 }
-
 function render(items){
   const open=new Set(Array.from(wrap.querySelectorAll('details[open]')).map(d=>d.dataset.id));
   const stick=atBottom();
@@ -1227,11 +1914,12 @@ function render(items){
   for(const item of items){
     if(item.kind==='user'||item.kind==='assistant'){
       const row=el('div','msg '+item.kind);const b=el('div','bubble');
+      if(item.kind==='assistant'){const av=el('div','av');av.appendChild(icon('star'));row.appendChild(av);}
       b.innerHTML=item.html||'';
       if(item.images){b.appendChild(el('div','chip',item.images===1?'1 image':item.images+' images'));}
       row.appendChild(b);frag.appendChild(row);
     }else if(item.kind==='tool'){
-      const label=item.pending?(item.summary?item.summary+' \\u2026':'running\\u2026'):item.summary;
+      const label=item.pending?(item.summary?item.summary+' …':'running…'):item.summary;
       const d=quiet(item,label,item.name);
       if(item.input){d.appendChild(el('pre','',item.input));}
       if(item.result){d.appendChild(el('pre','',item.result));}
@@ -1250,13 +1938,10 @@ function render(items){
   wrap.replaceChildren(frag);
   if(stick)log.scrollTop=log.scrollHeight;
 }
-
 function setState(state){
   stateEl.className='state '+state;
-  stateEl.querySelector('.label').textContent=
-    state==='busy'?'Working':state==='idle'?'Ready':'Not running';
+  stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':'Not running';
 }
-
 async function poll(){
   try{
     const r=await fetch('/api/conversation?since='+encodeURIComponent(version),{credentials:'same-origin'});
@@ -1265,38 +1950,16 @@ async function poll(){
       setState(data.state||'offline');
       if(!data.unchanged){
         version=data.version||'';
-        const items=data.items||[];
-        render(items);
-        document.getElementById('note').textContent=data.note||'';
-        document.getElementById('older').hidden=!data.older;
+        render(data.items||[]);
+        $('note').textContent=data.note||'';
+        $('older').hidden=!data.older;
       }
     }
   }catch(e){setState('offline');}
-  setTimeout(poll, document.hidden?6000:1500);
+  setTimeout(poll,document.hidden?6000:1500);
 }
-
-function li(text, url){const l=el('li');if(url){const a=el('a','',text);a.href=url;a.target='_blank';
-  a.rel='noopener noreferrer';l.appendChild(a);}else{l.textContent=text;}return l;}
-function bucket(id, data){
-  const ul=document.getElementById(id);ul.replaceChildren();
-  const items=(data&&data.items)||[];
-  if(!items.length){ul.appendChild(el('li','empty','Nothing here'));}
-  for(const item of items){ul.appendChild(li(item.title,item.url));}
-  if(data&&data.more){ul.appendChild(el('li','more','and '+data.more+' more'));}
-}
-async function fleet(){
-  try{
-    const r=await fetch('/api/fleet',{credentials:'same-origin'});
-    const data=await r.json();
-    if(r.ok){bucket('needs',data.needs_you);bucket('underway',data.under_way);bucket('done',data.just_finished);
-      document.getElementById('fleet-error').textContent='';}
-    else{document.getElementById('fleet-error').textContent=data.error||'Fleet unavailable';}
-  }catch(e){document.getElementById('fleet-error').textContent='Fleet unavailable';}
-  setTimeout(fleet, 30000);
-}
-
 function addImage(file){
-  if(!file||!/^image\\/(png|jpeg|gif|webp)$/.test(file.type))return;
+  if(!file||!/^image\/(png|jpeg|gif|webp)$/.test(file.type))return;
   const reader=new FileReader();
   reader.onload=()=>{images.push(reader.result);drawThumbs();};
   reader.readAsDataURL(file);
@@ -1304,26 +1967,23 @@ function addImage(file){
 function drawThumbs(){
   thumbs.replaceChildren();
   images.forEach((src,i)=>{const t=el('div','thumb');const img=el('img');img.src=src;img.alt='attached image';
-    const x=el('button','','\\u00d7');x.title='Remove';x.addEventListener('click',()=>{images.splice(i,1);drawThumbs();});
+    const x=el('button','','×');x.title='Remove';x.addEventListener('click',()=>{images.splice(i,1);drawThumbs();});
     t.appendChild(img);t.appendChild(x);thumbs.appendChild(t);});
 }
-
 async function send(){
   const text=input.value.trim();
   if(sending||(!text&&!images.length))return;
-  sending=true;sendBtn.disabled=true;result.className='';result.textContent='Sending\\u2026';
+  sending=true;sendBtn.disabled=true;result.className='';result.textContent='Sending…';
   try{
     const r=await fetch('/api/send',{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({text:text,images:images})});
     let data={};try{data=await r.json();}catch(e){}
-    if(r.ok){input.value='';images=[];drawThumbs();autosize();
-      result.textContent=data.detail||'Sent.';}
+    if(r.ok){input.value='';images=[];drawThumbs();autosize();result.textContent=data.detail||'Sent.';}
     else{result.className='failed';result.textContent=data.detail||('Not sent ('+r.status+')');}
   }catch(e){result.className='failed';result.textContent='Not sent: the page lost its connection.';}
   sending=false;sendBtn.disabled=false;input.focus();
 }
-
-function autosize(){input.style.height='auto';input.style.height=Math.min(200,input.scrollHeight)+'px';}
+function autosize(){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
 input.addEventListener('input',autosize);
 input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}});
 sendBtn.addEventListener('click',send);
@@ -1333,8 +1993,395 @@ document.addEventListener('dragover',e=>{e.preventDefault();document.body.classL
 document.addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('drag');});
 document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drag');
   for(const f of (e.dataTransfer||{}).files||[])addImage(f);});
-document.getElementById('fleet-toggle').addEventListener('click',()=>document.body.classList.toggle('fleet-open'));
-poll();fleet();input.focus();
+
+/* ---- the projects: what the Factory pane and the bridge strip show ---- */
+let M=null,mver='',mirrorError='';
+let tab=decodeURIComponent(location.hash.slice(1))||'home';
+let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selWorker=null;
+const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
+
+function project(id){return M.projects.find(p=>p.id===id)||null;}
+function need(id){return M.needs.find(n=>n.id===id)||null;}
+function say(ok,text){
+  notice=text?{kind:ok?'ok':'bad',text:text}:null;
+  clearTimeout(noticeTimer);
+  if(notice)noticeTimer=setTimeout(()=>{notice=null;draw();},20000);
+}
+function steps(job,cls){
+  const ol=el('ol',cls||'steps');
+  M.steps.forEach((name,i)=>{const li=el('li',i<job.step?'done':i===job.step?'now':'');
+    if(i<job.step)li.appendChild(icon('check'));li.appendChild(document.createTextNode(name));ol.appendChild(li);});
+  return ol;
+}
+function steerSwitch(p){
+  const box=el('div','steer');box.appendChild(el('span','','Who steers'));
+  const seg=el('div','seg');
+  const a=btn('','Starship','steer',{factory:p.id,who:'Starship'});a.setAttribute('aria-pressed',String(!p.you_steer));
+  const b=btn('','You','steer',{factory:p.id,who:'you'});b.setAttribute('aria-pressed',String(p.you_steer));
+  a.disabled=b.disabled=acting;
+  add(seg,a,b);box.appendChild(seg);return box;
+}
+function talkBox(head){
+  const box=el('div','talk');
+  box.appendChild(el('p','talk-head',head));
+  const area=el('textarea');area.id='talkText';area.rows=3;area.value=talk.text||'';
+  area.setAttribute('aria-label',head);area.placeholder='Type what you want to say';
+  box.appendChild(area);
+  box.appendChild(el('p','unsent','Not sent yet.'));
+  const row=el('div','rowb');
+  const go=btn('btn primary','Send to Starship','talksend');go.disabled=acting;
+  add(row,go,btn('btn','Cancel','cancel'));box.appendChild(row);return box;
+}
+function callCard(n){
+  const open=openCall===n.id;
+  const mine=sent[n.id];
+  const answered=n.answered||(mine&&mine.asking===n.asking?mine:null);
+  const card=el('div','call'+(open?' open':'')+(n.question?'':' fin'));card.dataset.call=n.id;
+  const row=btn('call-row','','open',{id:n.id});row.setAttribute('aria-expanded',String(open));
+  row.appendChild(el('span','dot '+(n.question?'you':'done')));
+  row.appendChild(el('span','call-title',n.ask));
+  const meta=el('span','call-meta');
+  meta.appendChild(el('span','',n.project_name+(n.mate?', from '+n.mate:'')));
+  const checking=n.checking||asked[n.id]===n.asking;
+  meta.appendChild(el('span','',checking?'checking':n.waited));
+  row.appendChild(meta);card.appendChild(row);
+  if(!open)return card;
+  const body=el('div','call-body');
+  if(n.why)body.appendChild(el('p','why',n.why));
+  if(checking)body.appendChild(el('p','said','Starship is re-reading what you said about this.'));
+  if(answered){
+    const option=n.options.find(o=>o.key===answered.key);
+    body.appendChild(el('p','said',(option?'You answered: '+option.label+'.':n.question?'You answered.':'You asked to keep it.')
+      +' Waiting for Starship to act on it.'));
+  }
+  const pending=confirming&&confirming.item===n.id?confirming:null;
+  if(n.question&&n.options.length){
+    const opts=el('div','opts');
+    n.options.forEach(o=>{
+      const picked=(pending&&pending.option===o.key)||(!pending&&answered&&answered.key===o.key);
+      const b=btn('opt'+(picked?' picked':''),'','pick',{id:n.id,option:o.key});
+      b.appendChild(el('span','ring'));b.appendChild(el('span','l',o.label));
+      if(o.suggested)b.appendChild(el('span','tag','Suggested by '+n.suggested_by));
+      b.disabled=acting;opts.appendChild(b);
+    });
+    body.appendChild(opts);
+  }
+  if(n.recommendation&&!n.options.some(o=>o.suggested)){
+    body.appendChild(el('p','holds','Suggested by '+n.suggested_by+': '+n.recommendation));
+  }
+  if(pending){
+    const box=el('div','confirm');
+    const option=n.options.find(o=>o.key===pending.option);
+    box.appendChild(el('p','',pending.keep?'Keep this and ask Starship to make it live?':'Send this answer: '+(option?option.label:'')+'?'));
+    box.appendChild(el('p','unsent','Not sent yet.'));
+    const rowb=el('div','rowb');
+    const go=btn('btn primary','Send to Starship','send');go.disabled=acting;
+    add(rowb,go,btn('btn','Cancel','cancel'));box.appendChild(rowb);body.appendChild(box);
+  }
+  if(n.holds_up.length)body.appendChild(el('p','holds','Holds up: '+n.holds_up.join(', ')));
+  if(n.pr){const p=el('p','holds');const a=el('a','','See what changed');a.href=n.pr;a.target='_blank';
+    a.rel='noopener noreferrer';p.appendChild(a);body.appendChild(p);}
+  const mineTalk=talk&&talk.item===n.id;
+  const acts=el('div','rowb');
+  if(!n.question){
+    const keep=btn('btn primary','Keep it','keep',{id:n.id});keep.disabled=acting||!!pending;acts.appendChild(keep);
+    acts.appendChild(btn('btn','Ask for changes','talk',{kind:'change',id:n.id}));
+  }else{
+    acts.appendChild(btn('btn','Talk it through','talk',{kind:'discuss',id:n.id}));
+    if(!checking){const x=btn('btn','This is already settled','settled',{id:n.id});x.disabled=acting;acts.appendChild(x);}
+  }
+  if(n.read)acts.appendChild(btn('btn plain','Read the report','read',{id:n.id}));
+  body.appendChild(acts);
+  if(mineTalk)body.appendChild(talkBox(talk.kind==='change'?'What should change?':'Talk it through'));
+  card.appendChild(body);return card;
+}
+function jobCard(job,p,watch){
+  const card=el('div','job');
+  const top=el('div','job-top');
+  add(top,el('span','dot work'),el('span','job-title',job.title),job.elapsed?el('span','mins',job.elapsed):null);
+  card.appendChild(top);card.appendChild(steps(job));
+  const foot=el('div','job-foot');
+  foot.appendChild(el('span','doing'+(job.quiet?' quiet':''),job.words));
+  if(job.read)foot.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));
+  if(watch)foot.appendChild(btn('btn small plain','Watch this worker','watch',{factory:p.id,job:job.id}));
+  card.appendChild(foot);return card;
+}
+function jobLine(job,p){
+  const line=el('div','jobline');
+  add(line,el('span','dot '+job.mark),el('span','t',job.title),el('span','w '+job.mark,job.words));
+  if(job.read)line.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));
+  return line;
+}
+function feedList(feed,named){
+  const ul=el('ul','feed');
+  feed.events.slice().reverse().forEach(e=>{
+    const li=el('li');li.appendChild(el('time','',e.when));
+    const d=el('div');
+    if(named)d.appendChild(el('span','who',e.actor));
+    d.appendChild(el('span','word '+e.mark,e.word));
+    d.appendChild(document.createTextNode(e.text));
+    li.appendChild(d);ul.appendChild(li);
+  });
+  return ul;
+}
+function section(title,count,small){
+  const sec=el('section','sec');const h=el('h3','',title);
+  if(count!=null)h.appendChild(el('span','n',String(count)));
+  if(small)h.appendChild(el('small','',small));
+  sec.appendChild(h);return sec;
+}
+function feedSection(feed,named){
+  const comma=feed.title.indexOf(', ');
+  const sec=section(comma<0?feed.title:feed.title.slice(0,comma),null,comma<0?'':feed.title.slice(comma+2));
+  sec.appendChild(feed.events.length?feedList(feed,named):el('p','empty','Nothing new.'));
+  return sec;
+}
+
+function drawTabs(){
+  const tabs=$('tabs');
+  const list=[{id:'home',name:'Control Centre'}].concat(M.projects.map(p=>({id:p.id,name:p.name,needs:p.page.needs.length})));
+  tabs.replaceChildren();
+  list.forEach(t=>{const b=btn('tab',t.name,'tab',{id:t.id});b.setAttribute('role','tab');
+    b.setAttribute('aria-selected',String(t.id===tab));
+    if(t.needs){b.title=t.needs===1?'1 thing needs you':t.needs+' things need you';
+      b.appendChild(el('span','dot you'));}
+    tabs.appendChild(b);});
+}
+function drawBand(){
+  const band=M.band,box=$('bridge');
+  const brand=el('div','brand');add(brand,icon('star'),el('span','','Starship'));
+  const lamps=el('div','lamps');
+  band.lamps.forEach(l=>{const d=el('div','lamp '+l.mark+(l.count?' lit':''));
+    add(d,el('i'),el('b','',String(l.count)),el('span','',l.words));lamps.appendChild(d);});
+  if(band.note)lamps.appendChild(el('span','band-note',band.note));
+  let urgent;
+  if(band.call){
+    urgent=btn('urgent','','call',{id:band.call.id});
+    add(urgent,el('span','k',band.call.question?'Most urgent, decide':'Most urgent, ready for your OK'),
+      el('span','t',band.call.title),el('span','go','Open'));
+  }else{urgent=el('div','urgent none',band.lamps.length?'Nothing needs you right now.':'');}
+  const sides=el('div','sides');
+  if(band.alert){const a=el('span','alert');add(a,el('i'),el('span','',band.alert));sides.appendChild(a);}
+  if(band.night){const n=el('span','aside'+(band.night_done?' good':''));add(n,icon('moon'),el('span','',band.night));sides.appendChild(n);}
+  if(band.battery){const b=el('span','aside'+(band.battery_mark?' '+band.battery_mark:''));
+    add(b,icon('battery'),el('span','',band.battery));sides.appendChild(b);}
+  box.replaceChildren(brand,lamps,urgent,sides);
+}
+function drawTop(){
+  const top=$('ptop');top.replaceChildren();
+  const sum=el('p','sum');
+  M.summary.forEach((s,i)=>{if(i)sum.appendChild(document.createTextNode(', '));
+    sum.appendChild(el(s.mark?'b':'span',s.mark?'c-'+s.mark:'',s.words));});
+  top.appendChild(sum);
+  if(M.queue.length)top.appendChild(el('p','queue',M.queue.join(', ')));
+  if(mirrorError)top.appendChild(el('p','notice bad',mirrorError));
+  if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');top.appendChild(n);}
+}
+function drawHome(){
+  $('clock').textContent=M.clock;
+  drawTop();
+  const body=$('pbody');
+  const needs=section('Needs you',M.needs.length);
+  if(M.needs.length)M.needs.forEach(n=>needs.appendChild(callCard(n)));
+  else needs.appendChild(el('p','empty','Nothing needs you right now.'));
+  const now=section('Right now');
+  M.projects.forEach(p=>{
+    const box=el('div','proj');
+    const head=el('div','proj-head');
+    add(head,btn('proj-name',p.name,'tab',{id:p.id}),el('span','proj-q',p.queue.join(', ')),steerSwitch(p));
+    box.appendChild(head);
+    p.jobs.forEach(job=>box.appendChild(job.busy?jobCard(job,p,true):jobLine(job,p)));
+    p.routine.forEach(r=>{const line=el('p','line');
+      add(line,el('b','',r.kind),el('span','',r.words.join(', ')),r.now?el('span','r',r.now):null);box.appendChild(line);});
+    if(p.next){const line=el('p','line');
+      add(line,el('span','',p.next.once_you_answer?'Next, once you answer:':'Next:'),el('b','',p.next.title),
+        p.next.then?el('span','','then '+p.next.then+' more'):null);box.appendChild(line);}
+    now.appendChild(box);
+  });
+  if(!M.projects.length)now.appendChild(el('p','empty','No projects yet. Ask your first mate to add one.'));
+  body.replaceChildren(needs,now,feedSection(M.feed,true));
+}
+function drawProject(p){
+  const head=$('ppHead');
+  const row=el('div','rowb');
+  add(row,steerSwitch(p),btn('btn','Talk to this crew','talk',{kind:'talk',factory:p.id}));
+  head.replaceChildren(el('h2','',p.name),el('p','',p.about),row);
+  if(talk&&talk.kind==='talk'&&talk.factory===p.id)head.appendChild(talkBox('Talk to the '+p.name+' crew'));
+  if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');head.appendChild(n);}
+  const parts=[];
+  const mine=M.needs.filter(n=>n.project===p.id);
+  if(mine.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n)));parts.push(s);}
+  const work=section('Work',null,p.page.queue.join(', '));
+  p.page.jobs.forEach(job=>work.appendChild(job.busy?jobCard(job,p,false):jobLine(job,p)));
+  p.page.folded.forEach(group=>{
+    const d=el('details','quiet');d.dataset.fold=group.words;d.appendChild(el('summary','',group.words));
+    const ul=el('ul','list');
+    group.jobs.forEach(j=>{const li=el('li');add(li,el('span','',j.title),el('span','w',j.queue));ul.appendChild(li);});
+    d.appendChild(ul);work.appendChild(d);
+  });
+  if(!p.page.jobs.length&&!p.page.folded.length)work.appendChild(el('p','empty','Nothing under way here.'));
+  parts.push(work);
+  if(p.page.rules.length){
+    const s=section('How this crew works');const ul=el('ul','bul');
+    p.page.rules.forEach(r=>ul.appendChild(el('li','',r)));s.appendChild(ul);
+    if(p.page.rules_size)s.appendChild(el('p','all'+(p.page.rules_mark==='over'?' warn':p.page.rules_mark==='near'?' near':''),p.page.rules_size));
+    parts.push(s);
+  }
+  if(p.page.learned.length){
+    const s=section('What it has learned');const ul=el('ul','bul');
+    p.page.learned.forEach(l=>{const li=el('li');if(l.when)li.appendChild(el('time','',l.when));
+      li.appendChild(document.createTextNode(l.what));ul.appendChild(li);});
+    s.appendChild(ul);parts.push(s);
+  }
+  if(p.page.talk.length){
+    const s=section('Talk');const ul=el('ul','feed');
+    p.page.talk.forEach(t=>{const li=el('li');li.appendChild(el('time','',t.when));
+      const d=el('div');d.appendChild(el('span','who',t.who+': '));d.appendChild(document.createTextNode(t.said));
+      li.appendChild(d);ul.appendChild(li);});
+    s.appendChild(ul);parts.push(s);
+  }
+  parts.push(feedSection(p.page.feed,false));
+  const open=new Set(Array.from($('ppBody').querySelectorAll('details[open]')).map(d=>d.dataset.fold));
+  $('ppBody').replaceChildren.apply($('ppBody'),parts);
+  $('ppBody').querySelectorAll('details').forEach(d=>{if(open.has(d.dataset.fold))d.open=true;});
+  const workers=$('workers');workers.replaceChildren();
+  $('workersCount').textContent=p.page.workers.length?String(p.page.workers.length):'';
+  p.page.workers.forEach(job=>{
+    const card=el('div','worker'+(selWorker===job.id?' sel':''));card.dataset.worker=job.id;
+    const h=el('h4','',job.title);if(job.elapsed)h.appendChild(el('span','',job.elapsed));
+    card.appendChild(h);
+    if(job.busy)card.appendChild(steps(job));
+    card.appendChild(el('p','doing'+(job.quiet?' quiet':''),job.words));
+    if(job.read){const r=el('div','rowb');r.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));card.appendChild(r);}
+    workers.appendChild(card);
+  });
+  if(!p.page.workers.length)workers.appendChild(el('p','empty','No one is working here right now.'));
+}
+function draw(){
+  if(!M)return;
+  if(tab!=='home'&&!project(tab))tab='home';
+  if(!chose&&(!openCall||!need(openCall)))openCall=M.needs.length?M.needs[0].id:null;
+  if(confirming&&!need(confirming.item))confirming=null;
+  if(talk&&talk.item&&!need(talk.item))talk=null;
+  const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
+  const caret=active?[active.selectionStart,active.selectionEnd]:null;
+  drawTabs();drawBand();
+  $('home').hidden=tab!=='home';$('project').hidden=tab==='home';$('sideSwitch').hidden=tab!=='home';
+  if(tab==='home')drawHome();else drawProject(project(tab));
+  if(caret){const area=$('talkText');if(area){area.focus();area.setSelectionRange(caret[0],caret[1]);}}
+}
+function show(id,flash){
+  tab='home';openCall=id;chose=true;setSide('projects');draw();
+  const card=document.querySelector('[data-call="'+CSS.escape(id)+'"]');
+  if(card){card.scrollIntoView({block:'nearest'});if(flash){card.classList.add('flash');}}
+}
+function setSide(side){
+  $('home').dataset.side=side;
+  $('sideSwitch').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.side===side)));
+}
+async function act(ask){
+  if(acting)return null;
+  acting=true;draw();
+  let answer={ok:false,said:'Not sent: the page lost its connection.'};
+  try{
+    const r=await fetch('/api/act',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify(ask)});
+    try{answer=await r.json();}catch(e){answer={ok:false,said:'Not sent ('+r.status+').'};}
+  }catch(e){}
+  acting=false;
+  say(answer.ok,answer.said);
+  return answer;
+}
+async function mirror(once){
+  try{
+    const r=await fetch('/api/mirror?since='+encodeURIComponent(mver),{credentials:'same-origin'});
+    const data=await r.json();
+    if(r.ok){
+      const was=mirrorError;mirrorError='';
+      if(data.unchanged){if(M&&M.clock!==data.clock){M.clock=data.clock;$('clock').textContent=data.clock;}if(was)draw();}
+      else{M=data.model;mver=data.version;draw();}
+    }else{mirrorError=data.error||'The projects could not be read.';if(M)draw();else $('ptop').replaceChildren(el('p','notice bad',mirrorError));}
+  }catch(e){mirrorError='The page lost its connection.';if(M)draw();}
+  if(!once)setTimeout(mirror,document.hidden?20000:3000);
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('[data-act]');if(!b||b.disabled)return;
+  const d=b.dataset;let answer=null;
+  switch(d.act){
+    case 'tab':tab=d.id;selWorker=null;if(talk&&talk.kind==='talk')talk=null;
+      history.replaceState(null,'',tab==='home'?location.pathname:'#'+encodeURIComponent(tab));draw();return;
+    case 'call':if(need(d.id))show(d.id,true);else{tab='home';setSide('projects');draw();}return;
+    case 'open':chose=true;openCall=openCall===d.id?null:d.id;confirming=null;if(talk&&talk.item)talk=null;draw();return;
+    case 'pick':confirming={item:d.id,option:d.option};draw();return;
+    case 'keep':confirming={item:d.id,keep:true};draw();return;
+    case 'cancel':confirming=null;talk=null;say(true,'');draw();return;
+    case 'talk':confirming=null;talk=d.kind==='talk'?{kind:'talk',factory:d.factory,text:''}:{kind:d.kind,item:d.id,text:''};
+      draw();{const area=$('talkText');if(area)area.focus();}return;
+    case 'watch':tab=d.factory;selWorker=d.job;draw();
+      {const card=document.querySelector('[data-worker="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'nearest'});}return;
+    case 'send':{
+      const c=confirming;const n=c&&need(c.item);if(!n)return;
+      answer=await act(c.keep?{action:'keep',item:n.id,asking:n.asking}:{action:'answer',item:n.id,asking:n.asking,option:c.option});
+      if(answer&&answer.ok){sent[n.id]={asking:n.asking,key:c.keep?null:c.option};confirming=null;}
+      break;}
+    case 'talksend':{
+      const t=talk;const text=((($('talkText')||{}).value)||'').trim();if(!t)return;
+      if(!text){say(false,'Nothing to send yet: type what you want to say first.');draw();return;}
+      const n=t.item&&need(t.item);
+      answer=await act(t.kind==='talk'?{action:'talk',factory:t.factory,text:text}
+        :{action:t.kind,item:t.item,asking:n?n.asking:undefined,text:text});
+      if(answer&&answer.ok)talk=null;
+      break;}
+    case 'settled':{const n=need(d.id);if(!n)return;answer=await act({action:'settled',item:n.id,asking:n.asking});
+      if(answer&&answer.ok)asked[n.id]=n.asking;break;}
+    case 'steer':answer=await act({action:'steer',factory:d.factory,who:d.who});break;
+    case 'read':answer=await act(d.id?{action:'read',item:d.id}:{action:'read',factory:d.factory,job:d.job});break;
+    default:return;
+  }
+  draw();
+  if(answer)mirror(true);
+});
+document.addEventListener('input',e=>{if(e.target.id==='talkText'&&talk)talk.text=e.target.value;});
+document.addEventListener('keydown',e=>{
+  if(e.target.id==='talkText'&&e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();
+    const go=document.querySelector('[data-act="talksend"]');if(go)go.click();}
+  if(e.key==='Escape'){if(!$('settings').hidden){closeSettings();}else if(confirming||talk){confirming=null;talk=null;draw();}}
+});
+$('sideSwitch').addEventListener('click',e=>{const b=e.target.closest('button');if(b)setSide(b.dataset.side);});
+
+/* ---- settings ---- */
+const FS=window.FMSettings;
+let storage=null;try{storage=window.localStorage;}catch(e){}
+let settings=FS.load(storage);
+function drawSettings(){
+  $('textSize').max=String(FS.TEXT_STEPS.length-1);$('textSize').value=String(settings.text);
+  $('textNow').textContent=FS.TEXT_NAMES[settings.text];
+  document.querySelectorAll('#settings [data-set]').forEach(b=>b.setAttribute('aria-pressed',String(settings[b.dataset.set]===b.dataset.value)));
+  $('lessMotion').checked=settings.motion==='less';
+}
+function change(name,value){
+  const next={text:settings.text,style:settings.style,theme:settings.theme,motion:settings.motion};
+  next[name]=value;settings=FS.apply(document.documentElement,FS.save(storage,next));drawSettings();autosize();
+}
+function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
+$('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
+  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();$('textSize').focus();}});
+$('settingsClose').addEventListener('click',closeSettings);
+$('textSize').addEventListener('input',e=>change('text',Number(e.target.value)));
+$('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
+$('settings').addEventListener('click',e=>{const b=e.target.closest('[data-set]');if(b)change(b.dataset.set,b.dataset.value);});
+document.addEventListener('click',e=>{if(!$('settings').hidden&&!e.target.closest('#settings')&&!e.target.closest('#gear'))closeSettings();});
+$('gear').prepend(icon('sliders'));$('settingsClose').appendChild(icon('close'));
+drawSettings();
+
+/* Opening the page, or coming back to it, is a look, as a key press in the pane is. */
+function looked(){
+  if(document.hidden)return;
+  fetch('/api/act',{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({action:'look'})}).catch(()=>{});
+}
+document.addEventListener('visibilitychange',looked);
+setSide('projects');poll();mirror();looked();
 })();
 """
 
@@ -1343,32 +2390,68 @@ def page_html(nonce: str, csrf: str) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>First mate</title>
-<style nonce="{nonce}">{PAGE_CSS}</style></head>
+<title>Starship</title>
+<link rel="icon" href="data:,">
+<style nonce="{nonce}">{PAGE_CSS}</style>
+<script nonce="{nonce}" src="/settings.js"></script>
+<script nonce="{nonce}">(function(){{var s=null;try{{s=window.localStorage;}}catch(e){{}}
+FMSettings.apply(document.documentElement,FMSettings.load(s));}})();</script>
+</head>
 <body data-csrf="{html.escape(csrf, quote=True)}">
-<header><h1>First mate</h1>
-<span id="state" class="state offline"><span class="dot"></span><span class="label">Connecting</span></span>
-<button id="fleet-toggle" class="ghost" type="button">Fleet</button></header>
-<main>
-<section id="chat">
+<div class="app">
+<div class="toprow"><nav class="tabs" id="tabs" role="tablist" aria-label="Projects"></nav>
+<button class="gear" id="gear" type="button" aria-expanded="false" aria-controls="settings"><span>Settings</span></button></div>
+<header class="bridge" id="bridge"><div class="brand"><span>Starship</span></div>
+<div class="lamps"><span class="band-note">reading the crew</span></div></header>
+<div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">First mate</button>
+<button type="button" data-side="projects">All projects</button></div>
+<main class="main" id="home" data-side="projects">
+<section class="pane" id="chatPane" aria-label="First mate">
+<div class="pane-head"><h2>First mate</h2>
+<span id="state" class="state offline"><span class="label">Connecting</span></span></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div><p id="note" class="note"></p></div></div>
 <div id="compose"><div class="wrap">
 <div id="thumbs"></div>
 <div id="row"><textarea id="input" rows="1" placeholder="Message the first mate" aria-label="Message"></textarea>
-<button id="send" type="button">Send</button></div>
+<button id="send" class="btn primary" type="button">Send</button></div>
 <div id="result" role="status"></div>
 </div></div>
 </section>
-<aside aria-label="Fleet">
-<h2>Needs you</h2><ul id="needs"><li class="empty">Loading</li></ul>
-<h2>Under way</h2><ul id="underway"><li class="empty">Loading</li></ul>
-<h2>Recently done</h2><ul id="done"><li class="empty">Loading</li></ul>
-<p id="fleet-error" class="more"></p>
-</aside>
+<section class="pane" id="panelPane" aria-label="All projects">
+<div class="pane-head"><h2>All projects</h2><span class="when" id="clock"></span></div>
+<div class="p-top" id="ptop"><p class="sum">reading the crew</p></div>
+<div class="p-body" id="pbody"></div>
+</section>
 </main>
+<main class="main" id="project" hidden>
+<section class="pane" aria-label="Project"><div class="pp-head" id="ppHead"></div><div class="p-body" id="ppBody"></div></section>
+<section class="pane" aria-label="Workers at work">
+<div class="pane-head"><h2>Workers at work</h2><span class="state" id="workersCount"></span></div>
+<div class="p-body" id="workers"></div></section>
+</main>
+</div>
+<section class="settings" id="settings" aria-label="Settings" hidden>
+<h2>Settings<button class="btn small plain" id="settingsClose" type="button" aria-label="Close settings"></button></h2>
+<div class="set"><label for="textSize">Text size<span class="now" id="textNow"></span></label>
+<div class="size-row"><span class="a s" aria-hidden="true">A</span>
+<input id="textSize" type="range" min="0" max="4" step="1">
+<span class="a l" aria-hidden="true">A</span></div>
+<p class="hint">Everything on the page grows or shrinks with it.</p></div>
+<div class="set"><div class="lbl">Style</div>
+<div class="seg"><button type="button" data-set="style" data-value="calm">Calm</button>
+<button type="button" data-set="style" data-value="lively">Lively</button></div>
+<p class="hint">Calm is quiet. Lively uses stronger colours.</p></div>
+<div class="set"><div class="lbl">Light or dark</div>
+<div class="seg"><button type="button" data-set="theme" data-value="auto">Auto</button>
+<button type="button" data-set="theme" data-value="light">Light</button>
+<button type="button" data-set="theme" data-value="dark">Dark</button></div>
+<p class="hint">Auto follows this computer.</p></div>
+<div class="set"><div class="lbl">Movement</div>
+<label class="switch"><input id="lessMotion" type="checkbox">Reduce motion</label></div>
+<p class="hint">Kept in this browser only.</p>
+</section>
 <script nonce="{nonce}">{PAGE_JS}</script>
 </body></html>
 """

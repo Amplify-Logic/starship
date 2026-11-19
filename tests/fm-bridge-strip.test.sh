@@ -144,6 +144,17 @@ frame() {  # <width> [height]
 
 plain() { sed $'s/\033\\[[0-9;]*m//g'; }
 
+fields() {  # the same reading as one frame, as key=value lines
+  TZ=UTC FM_HOME="$HOME_FIX" FM_FLEET_STATE_NO_CACHE="${FM_FLEET_STATE_NO_CACHE:-1}" \
+    FM_FLEET_STATE_READER="${READER:-$BINDIR/fake-crew-state}" \
+    FM_BRIDGE_STRIP_PMSET="$BINDIR/fake-pmset" FM_BRIDGE_TEST_BATTERY="$BATTERY_FIX" \
+    bash "$STRIP" fields
+}
+
+field() {  # <fields output> <key>
+  printf '%s\n' "$1" | sed -n "s/^$2=//p"
+}
+
 # The row a pane of <width> columns should get: one column of margin each side,
 # the left side flush left and the battery flush right.
 row_of() {  # <width> <left> [right]
@@ -170,6 +181,37 @@ a_busy_fleet() {
 }
 
 # --- the crew -----------------------------------------------------------------
+
+test_fields_say_what_a_frame_shows() {
+  local out
+  reset_case
+  a_busy_fleet
+  task broke 'state: failed · source: status-log · the tests would not build'
+  on_battery 9 discharging 0:20
+  out=$(fields) || fail "fields failed"
+  assert_equals "$(field "$out" reading)" current "the reading"
+  assert_equals "$(field "$out" busy) $(field "$out" for_you) $(field "$out" to_merge)" "2 1 1" "the lamps' counts"
+  assert_equals "$(field "$out" call_kind)|$(field "$out" call_id)|$(field "$out" call_title)" \
+    "decision|pick-design|Which of two designs" "the most urgent call"
+  assert_equals "$(field "$out" alert)" "1 failed" "the alert's long words"
+  assert_equals "$(field "$out" battery)|$(field "$out" battery_mark)" "battery 9%, plug in now|critical" "a flat battery"
+  assert_contains "$(frame 150 | plain)" '■ 2 busy   ■ 1 decision for you   ■ 1 ready to merge' \
+    "the frame of the same reading shows other counts"
+  # A machine with no battery and an unread fleet say nothing rather than zero.
+  reset_case
+  task typing 'state: working · source: pane · harness busy'
+  out=$(FM_FLEET_STATE_NO_CACHE=0 READER="$BINDIR/absent-reader" fields) || fail "fields failed on an unread fleet"
+  assert_equals "$(field "$out" reading)|$(field "$out" busy)|$(field "$out" battery)|$(field "$out" call_kind)" \
+    "none|||" "an unread fleet with no battery"
+  assert_equals "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" 13 "every field is printed, empty or not"
+  # A last good reading stands in, marked with its age, as on the strip.
+  printf '400\t1\t0\t2\t0\t0\t3\tstale-signature\t1\tcalls' > "$HOME_FIX/state/.status-fleet-state"
+  on_battery 20 discharging 0:50
+  out=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_NOW=1000 READER="$BINDIR/absent-reader" fields) || fail "fields failed on a past reading"
+  assert_equals "$(field "$out" reading)|$(field "$out" age)|$(field "$out" busy)|$(field "$out" battery_mark)" \
+    "past|10m ago|3|low" "a past reading and a low battery"
+  pass "bridge strip: fields prints one frame's reading as plain key=value lines"
+}
 
 test_a_fleet_lights_busy_decision_and_ready_lamps() {
   local out row
@@ -1157,6 +1199,7 @@ test_a_running_strip_repaints_when_the_theme_is_switched() {
 fm_test_run \
   test_terminal_theme_colours \
   test_a_running_strip_repaints_when_the_theme_is_switched \
+  test_fields_say_what_a_frame_shows \
   test_a_fleet_lights_busy_decision_and_ready_lamps \
   test_the_decision_lamp_counts_in_its_own_words \
   test_only_the_owners_live_held_decisions_light_the_red_lamp \

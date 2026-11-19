@@ -31,6 +31,16 @@
 #                                asks for mouse reports and reads the clicks.
 #   fm-bridge-strip.sh render [--width N] [--height N]
 #                                print one frame and exit
+#   fm-bridge-strip.sh fields    print what one frame shows as `key=value`
+#                                lines, for a second screen such as
+#                                bin/fm-web.py: reading (current, past or
+#                                none), age (a past reading's, in words), busy,
+#                                for_you, to_merge, call_kind (decision or
+#                                merge), call_id, call_title, alert (its long
+#                                words), night, night_mark (done for the
+#                                morning's count), battery (its full words) and
+#                                battery_mark (low or critical). A field with
+#                                nothing to show has an empty value
 #
 # Staying current: a running loop keeps the code it started with in memory, so
 # an update would otherwise leave it reading the crew with yesterday's code.
@@ -357,12 +367,9 @@ battery_colour() {
 
 battery_warns() { [ -n "$(battery_colour)" ]; }
 
-battery() {  # full|mid|short|none
-  local colour detail text
-  SEG=
-  SEG_W=0
-  [ "$BATTERY" = 1 ] && [ "$1" != none ] || return 0
-  colour=$(battery_colour)
+# battery_text: the battery's words for one reading that has a battery.
+battery_text() {  # full|mid|short
+  local detail text
   detail=
   if [ "$BAT_ON_BATTERY" = 1 ]; then
     if [ "$BAT_PCT" -lt 10 ]; then
@@ -382,6 +389,16 @@ battery() {  # full|mid|short|none
     mid) text="battery $BAT_PCT%" ;;
     *) text="$BAT_PCT%" ;;
   esac
+  printf '%s' "$text"
+}
+
+battery() {  # full|mid|short|none
+  local colour text
+  SEG=
+  SEG_W=0
+  [ "$BATTERY" = 1 ] && [ "$1" != none ] || return 0
+  colour=$(battery_colour)
+  text=$(battery_text "$1")
   if [ -n "$colour" ]; then
     SEG="${colour}${LAMP} ${text}"
     SEG_W=$((2 + ${#text}))
@@ -749,6 +766,47 @@ cmd_render() {
   printf '%s\n' "$FRAME"
 }
 
+# cmd_fields: one reading of everything a frame shows, as plain key=value lines.
+cmd_fields() {
+  local home reading=none age='' night_mark='' battery_mark='' call_kind=''
+  [ "$#" -eq 0 ] || { usage; exit 2; }
+  init_colours
+  home=$(resolve_home)
+  read_crew "$home"
+  read_night "$home"
+  read_reach "$home"
+  read_battery
+  case "$READING_KNOWN" in
+    1) reading=current ;;
+    2) reading=past; age=$(age_words "$READING_AGE") ;;
+  esac
+  printf 'reading=%s\nage=%s\n' "$reading" "$age"
+  if [ "$reading" = none ]; then
+    printf 'busy=\nfor_you=\nto_merge=\n'
+  else
+    printf 'busy=%s\nfor_you=%s\nto_merge=%s\n' "$BUSY" "$FOR_YOU" "$TO_MERGE"
+  fi
+  [ "$CALL_KIND" = - ] || call_kind=$CALL_KIND
+  if [ -n "$call_kind" ]; then
+    printf 'call_kind=%s\ncall_id=%s\ncall_title=%s\n' "$call_kind" "$CALL_ID" "$CALL_TITLE"
+  else
+    printf 'call_kind=\ncall_id=\ncall_title=\n'
+  fi
+  printf 'alert=%s\n' "$(alert_text long)"
+  [ -z "$NIGHT_TEXT" ] || [ "$NIGHT_COLOUR" != "$GREEN" ] || night_mark='done'
+  printf 'night=%s\nnight_mark=%s\n' "$NIGHT_TEXT" "$night_mark"
+  if [ "$BATTERY" = 1 ]; then
+    case "$(battery_colour)" in
+      "$RED") battery_mark=critical ;;
+      "$AMBER") battery_mark=low ;;
+    esac
+    printf 'battery=%s\n' "$(battery_text full)"
+  else
+    printf 'battery=\n'
+  fi
+  printf 'battery_mark=%s\n' "$battery_mark"
+}
+
 # pane_size: the pane's rows and columns from its terminal, or one row of 80
 # columns when the terminal does not say (a size of zero says nothing).
 pane_size() {
@@ -1054,6 +1112,7 @@ cmd_remove() {
 
 case "${1:-}" in
   render) shift; cmd_render "$@" ;;
+  fields) shift; cmd_fields "$@" ;;
   run) shift; cmd_run "$@" ;;
   open) shift; cmd_open "$@" ;;
   install) shift; cmd_install "$@" ;;

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# fm-web.sh - the primary first mate's conversation in a calm localhost page.
+# fm-web.sh - the terminal workspace as a calm localhost page.
 #
 # Runs bin/fm-web.py, a Python 3 standard-library server bound to the literal
 # 127.0.0.1 constant; there is no flag or environment variable that widens
 # it, and nothing here publishes it on a tailnet. The page shows the primary
 # Claude session's conversation, a message box that sends only through
-# bin/fm-desk-voice.sh send, and the bridge view's fleet glance
-# (docs/web.md).
+# bin/fm-desk-voice.sh send, and the bridge strip's band and the Factory
+# pane's projects in plain words, with buttons that send that pane's own
+# notes through bin/fm-factory.py act (docs/web.md).
 #
 # Usage:
 #   fm-web.sh start [--port <n>]   start in the background, print the URL

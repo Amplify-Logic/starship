@@ -6,8 +6,10 @@
 # /clear'd session,
 # the loopback bind, the token/cookie, Host, CSRF and Origin guards on every
 # POST, sends that only ever reach bin/fm-desk-voice.sh send with images saved
-# in the floater's shots folder, the fleet panel through the bridge view's
-# snapshot, and the launcher's start/status/url/stop.
+# in the floater's shots folder, the mirror of the Factory pane's screen and
+# the bridge strip's fields in the page's plain words, a button's action handed
+# to bin/fm-factory.py act and nowhere else, the settings kept in the browser,
+# and the launcher's start/status/url/stop.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -53,26 +55,50 @@ transcript() {  # <home> [<session>]
   printf '%s\n' "$1/claude/projects/-fake-project/${2:-$SESSION}.jsonl"
 }
 
-# A root whose fm-desk-voice.sh and bearings snapshot are stubs; the real
-# server and bridge view are linked in.
+# A root with the real server linked in and stand-ins for what it runs:
+# fm-desk-voice.sh records its arguments; fm-factory.py prints the home's
+# screen.json for --screen (and fails when there is none) and, for act, records
+# the action it was handed in act.asks and answers with the home's act.answer;
+# fm-bridge-strip.sh prints the home's strip.fields, or fails without one.
 make_root() {  # <home> <desk-voice-output-line>
   local home=$1 root=$1/root
   mkdir -p "$root/bin"
   ln -s "$ROOT/bin/fm-web.py" "$root/bin/fm-web.py"
-  ln -s "$ROOT/bin/fm-bridge-view.py" "$root/bin/fm-bridge-view.py"
+  cat > "$root/bin/fm-factory.py" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+home = os.environ["FM_HOME"]
+if sys.argv[1:] == ["--screen"]:
+    try:
+        sys.stdout.write(open(os.path.join(home, "screen.json")).read())
+    except OSError:
+        sys.exit("fm-factory: the fleet could not be read")
+elif sys.argv[1:] == ["act"]:
+    with open(os.path.join(home, "act.asks"), "a") as asks:
+        asks.write(sys.stdin.read() + "\n")
+    try:
+        answer = open(os.path.join(home, "act.answer")).read()
+    except OSError:
+        answer = '{"ok": true, "said": "\u2713 SENT to Starship: keep Harvest chart and land it"}'
+    if answer.startswith("refuse"):
+        sys.exit(2)
+    sys.stdout.write(answer)
+else:
+    sys.exit("stand-in fm-factory.py: unexpected arguments %r" % sys.argv[1:])
+PY
+  cat > "$root/bin/fm-bridge-strip.sh" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = fields ] || { echo "stand-in fm-bridge-strip.sh: unexpected arguments: $*" >&2; exit 2; }
+cat "$FM_HOME/strip.fields" 2>/dev/null
+SH
+  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "$home/desk-voice.args"
 printf 'FM_HOME=%s\n' "\$FM_HOME" >> "$home/desk-voice.args"
 printf '%s\n' "$2"
 SH
-  cat > "$root/bin/fm-bearings-snapshot.sh" <<'SH'
-#!/usr/bin/env bash
-cat <<'JSON'
-{"schema":"fm-bearings.v1","generated":"2026-10-06T20:00:00Z","decisions_open":[{"summary":"Pick the page colour"}],"in_flight":[{"state":"working","name":"Web page build"}],"landed":[{"what":"Bridge memory section","artifact":"https://github.com/example/repo/pull/7"}],"gates":[],"omitted":[]}
-JSON
-SH
-  chmod +x "$root/bin/fm-desk-voice.sh" "$root/bin/fm-bearings-snapshot.sh"
+  chmod +x "$root/bin/fm-desk-voice.sh"
   printf '%s\n' "$root"
 }
 
@@ -378,17 +404,212 @@ test_send_reports_typed() {
   pass "a message typed into the chat is reported as typed"
 }
 
-test_fleet_panel_reuses_bridge_snapshot() {
-  local home root port cookie out
-  home=$(make_home fleet)
-  root=$(make_root "$home" "sent: tmux %1")
-  port=$(start_web "$home" "$root")
-  cookie=$(sign_in "$home" "$port")
-  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/fleet")
-  assert_equals "$(jq -r '.needs_you.items[0].title' <<<"$out")" "Pick the page colour"
-  assert_equals "$(jq -r '.under_way.items[0].title' <<<"$out")" "Web page build"
-  assert_equals "$(jq -r '.just_finished.items[0].url' <<<"$out")" "https://github.com/example/repo/pull/7"
-  pass "the fleet panel is the bridge view's glance"
+# What bin/fm-factory.py --screen prints for a small invented fleet, in the
+# pane's own words, and what bin/fm-bridge-strip.sh fields prints beside it.
+write_screen() {  # <home>
+  cat > "$1/screen.json" <<'JSON'
+{"schema": "fm-factory-screen.v1", "as_of": "2026-11-14T08:00:00Z", "clock": "Sat 08:00",
+ "counts": {"reading": "current", "age": 0, "busy": 1, "decisions": 1, "ready_to_merge": 1, "idle": 1},
+ "count_words": [{"words": "1 busy", "colour": "amber"}, {"words": "1 decision for you", "colour": "red"},
+                 {"words": "1 ready to merge", "colour": "green"}, {"words": "1 idle", "colour": "faint"}],
+ "queue": ["4 queued", "2 in line", "2 wait on you, 1 of them deferred to a date"],
+ "needs": [
+  {"id": "garden-chart", "asking": "1794632400", "factory": "garden-journal", "factory_name": "Garden Journal",
+   "kind": "question", "ask": "Harvest chart", "title": "Harvest chart",
+   "why": "The chart can open on this week or this season.",
+   "options": [{"key": "1", "label": "this week", "suggested": true}, {"key": "2", "label": "this season", "suggested": false}],
+   "suggested_by": "Starship", "recommendation": "", "holds_up": ["Garden reminders"], "waited": "waiting 3 h",
+   "answered": null, "checking": false, "mate": null, "pr": null, "read": true},
+  {"id": "garden-share", "asking": "1794636660", "factory": "garden-journal", "factory_name": "Garden Journal",
+   "kind": "finished work", "ask": "The queued orders page is ready to merge", "title": "The queued orders page",
+   "why": "", "options": [], "suggested_by": "Starship", "recommendation": "", "holds_up": [],
+   "waited": "ready 1 h 49 min", "answered": null, "checking": false, "mate": null,
+   "pr": "https://example.invalid/g/pull/12", "read": false}],
+ "factories": [
+  {"id": "garden-journal", "name": "Garden Journal", "state": "needs you", "steered_by": "you",
+   "about": ["a phone journal for a vegetable garden", "2 workers, 1 busy"], "queue": "3 queued · 2 in line",
+   "jobs": [
+    {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
+     "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false},
+    {"id": "garden-share", "title": "The queued orders page", "state": "ready to merge", "words": "ready to merge",
+     "elapsed": "", "colour": "green", "quiet": false, "step": 3, "queue": "", "read": false},
+    {"id": "garden-labels", "title": "Print seed labels", "state": "waiting", "words": "waiting · tries again 09:30",
+     "elapsed": "", "colour": "amber", "quiet": false, "step": 1, "queue": "", "read": false}],
+   "routine": [], "next": {"title": "Harvest notes", "once_you_answer": true, "then": 1},
+   "page": {"needs": ["garden-chart", "garden-share"], "queue": ["3 queued", "2 in line", "1 deferred to a date"],
+    "jobs": [], "workers": [
+     {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
+      "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false}],
+    "folded": [{"words": "1 deferred to a date", "jobs": [{"title": "Charge for seeds", "queue": "deferred"}]}],
+    "rules": ["English only."], "rules_size": "rules 13 / 1,500 characters", "rules_mark": "", "learned": [],
+    "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}},
+  {"id": "recipe-box", "name": "Recipe Box", "state": "idle", "steered_by": "Starship", "about": ["0 workers, 0 busy"],
+   "queue": "idle since 06:00 · nothing queued", "jobs": [], "routine": [], "next": null,
+   "page": {"needs": [], "queue": ["nothing queued"], "jobs": [], "workers": [], "folded": [], "rules": [],
+    "rules_size": "", "rules_mark": "", "learned": [], "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}}],
+ "feed": {"title": "SINCE YOU LAST LOOKED, 2 h ago", "events": [
+  {"when": "06:00", "actor": "Recipe Box", "factory": "recipe-box", "word": "landed", "text": "A landed gentry recipe is in.", "colour": "green"},
+  {"when": "06:11", "actor": "Garden Journal", "factory": "garden-journal", "word": "PR ready",
+   "text": "The queued orders page has its PR ready.", "colour": "green"},
+  {"when": "07:20", "actor": "Garden Journal", "factory": "garden-journal", "word": "asked you",
+   "text": "Harvest chart needs your call.", "colour": "red"}]},
+ "steps": ["planning", "building", "checking", "ready to merge"], "voice": false}
+JSON
+  cat > "$1/strip.fields" <<'FIELDS'
+reading=current
+age=
+busy=1
+for_you=1
+to_merge=1
+call_kind=decision
+call_id=garden-chart
+call_title=Harvest chart
+alert=1 failed, 1 stopped
+night=night shift from 23:30
+night_mark=
+battery=battery 9%, plug in now
+battery_mark=critical
+FIELDS
+}
+
+mirror() {  # <home> [<query>]
+  curl -sS --cookie "$(cat "$1/web.test-cookie")" "http://127.0.0.1:$(cat "$1/web.test-port")/api/mirror${2:-}"
+}
+
+test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
+  local home out
+  home=$(make_home mirror)
+  serve_home "$home"
+  assert_equals "$(mirror "$home" | jq -r .error)" "the fleet could not be read" "a fleet that cannot be read says why"
+  write_screen "$home"
+  sleep 2.2   # the server keeps one reading for two seconds
+  out=$(mirror "$home")
+  m() { jq -r ".model | $1" <<<"$out"; }
+  assert_equals "$(m '[.band.lamps[] | "\(.count) \(.words) (\(.mark))"] | join(", ")')" \
+    "1 busy (work), 1 decision for you (you), 1 ready for your OK (done)" "the three lamps"
+  assert_equals "$(m '.band.call | "\(.id)|\(.title)|\(.question)|\(.listed)"')" "garden-chart|Harvest chart|true|true" \
+    "the most urgent call is the strip's"
+  assert_equals "$(m '.band | "\(.alert)|\(.night)|\(.battery)|\(.battery_mark)"')" \
+    "1 hit a problem, 1 stopped|night shift from 23:30|battery 9%, plug in now|critical" "the strip's alert, night shift and battery"
+  assert_equals "$(m '[.summary[] | .words] | join(", ")')" "1 busy, 1 decision for you, 1 ready for your OK, 1 idle" \
+    "the count line"
+  assert_equals "$(m '.queue | join(", ")')" "4 waiting to start, 2 in line, 2 wait on you, 1 of them put off to a date" \
+    "the queue line"
+  assert_equals "$(m '.steps | join(", ")')" "planning, building, checking, ready for your OK" "the four steps"
+  # A call keeps what the button must send back: its id, its asking, its answers' keys.
+  assert_equals "$(m '.needs[0] | "\(.id) \(.asking) \(.project) \(.question) \(.waited) \(.read)"')" \
+    "garden-chart 1794632400 garden-journal true waiting 3 h true" "a question"
+  assert_equals "$(m '.needs[0].options | map("\(.key)=\(.label)/\(.suggested)") | join(" ")')" \
+    "1=this week/true 2=this season/false" "its answers"
+  # Only the pane's own words change; a title, and what a worker says it is
+  # doing, are left as written even when they hold one of those words.
+  assert_equals "$(m '.needs[1] | "\(.ask)|\(.question)|\(.pr)"')" \
+    "The queued orders page is ready for your OK|false|https://example.invalid/g/pull/12" "finished work"
+  assert_equals "$(m '.projects[0].jobs | map("\(.title): \(.words) [\(.mark)]") | join("; ")')" \
+    "Garden reminders: sorting the queued reminders [work]; The queued orders page: ready for your OK [done]; Print seed labels: waiting, tries again 09:30 [work]" \
+    "a project's jobs"
+  assert_equals "$(m '.projects[0] | "\(.you_steer) \(.queue | join(", ")) | \(.next.title) \(.next.once_you_answer) | \(.about)"')" \
+    "true 3 waiting to start, 2 in line | Harvest notes true | a phone journal for a vegetable garden. 2 workers, 1 busy" \
+    "a project's row"
+  assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title) | \(.workers[0].title)"')" \
+    "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds | Garden reminders" \
+    "a project's own page"
+  assert_equals "$(m '.projects[1] | "\(.idle) \(.queue | join(", "))"')" "true idle since 06:00, nothing waiting to start" \
+    "an idle project"
+  assert_equals "$(m '.feed.title')" "Since you last looked, 2 h ago" "the feed's heading"
+  assert_equals "$(m '.feed.events | map("\(.word): \(.text) [\(.mark)]") | join("; ")')" \
+    "went live: A landed gentry recipe is in. [done]; ready for your OK: The queued orders page is ready for your OK. [done]; asked you: Harvest chart needs your call. [you]" \
+    "the feed"
+  assert_equals "$(mirror "$home" "?since=$(jq -r .version <<<"$out")" | jq -c .)" \
+    "{\"version\":\"$(jq -r .version <<<"$out")\",\"unchanged\":true,\"clock\":\"Sat 08:00\"}" "an unchanged reading is not sent again"
+  # Without the strip the band still has the pane's counts and its first call.
+  rm "$home/strip.fields"
+  sleep 2.2
+  out=$(mirror "$home")
+  assert_equals "$(m '.band | "\(.lamps | length) \(.call.id) \(.alert)|\(.battery)"')" "3 garden-chart |" \
+    "a strip that cannot be read leaves the band its lamps"
+  assert_equals "$(status_of "http://127.0.0.1:$(cat "$home/web.test-port")/api/mirror")" "403" "the mirror needs the cookie"
+  pass "the mirror is the pane's screen and the strip's fields, with only the pane's own jargon reworded"
+}
+
+test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
+  local home port cookie csrf url out
+  home=$(make_home act)
+  serve_home "$home"
+  port=$(cat "$home/web.test-port")
+  cookie=$(cat "$home/web.test-cookie")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/act"
+  post() { curl -sS -X POST --cookie "$cookie" -H 'Content-Type: application/json' -H "X-FM-CSRF: $csrf" --data "$1" "$url"; }
+  out=$(post '{"action":"keep","item":"garden-share","asking":"1794636660","merge":true}')
+  assert_equals "$(jq -c . "$home/act.asks")" '{"action":"keep","item":"garden-share","asking":"1794636660"}' \
+    "the action reaches bin/fm-factory.py act with only the fields the pane's keys take"
+  assert_equals "$(jq -c . <<<"$out")" '{"ok":true,"said":"Sent to Starship: keep Harvest chart and make it live"}' \
+    "what the pane says comes back in the page's words"
+  assert_absent "$home/desk-voice.args"
+  post '{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"}' >/dev/null
+  post '{"action":"talk","factory":"garden-journal","text":"check the ribbon"}' >/dev/null
+  assert_equals "$(sed -n '2,3p' "$home/act.asks" | jq -c .)" \
+    '{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"}
+{"action":"talk","factory":"garden-journal","text":"check the ribbon"}' "an answer and a typed note"
+  printf '{"ok": false, "said": "\\u2717 NOT SENT: the inbox is locked. Nothing reached Starship."}' > "$home/act.answer"
+  assert_equals "$(post '{"action":"keep","item":"garden-share"}' | jq -c .)" \
+    '{"ok":false,"said":"Not sent: the inbox is locked. Nothing reached Starship."}' "a note that did not go says so"
+  : > "$home/act.asks"
+
+  # Refused before the factory script runs: every POST guard, an action the
+  # pane has no key for, a name that is not one, and words too long to be a note.
+  assert_equals "$(status_of -X POST --cookie "$cookie" --data '{"action":"keep","item":"garden-share"}' "$url")" "403" "no CSRF header"
+  assert_equals "$(status_of -X POST -H "X-FM-CSRF: $csrf" --data '{"action":"keep","item":"garden-share"}' "$url")" "403" "no cookie"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" -H 'Origin: https://evil.example' --data '{"action":"keep","item":"garden-share"}' "$url")" "403" "foreign Origin"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"merge","item":"garden-share"}' "$url")" "400" "merge is not an action"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"keep","item":"../etc; rm"}' "$url")" "400" "a name that is not one"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"steer","factory":"garden-journal","who":"them"}' "$url")" "400" "someone else steering"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "{\"action\":\"talk\",\"factory\":\"garden-journal\",\"text\":\"$(printf 'x%.0s' $(seq 1 4001))\"}" "$url")" "400" "words too long"
+  assert_equals "$(cat "$home/act.asks")" "" "a refused request reached the factory script"
+  printf 'refuse' > "$home/act.answer"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"keep","item":"garden-share"}' "$url")" "400" \
+    "an action the factory script cannot read"
+  pass "a button's action goes to bin/fm-factory.py act, guarded like a send, and its answer comes back"
+}
+
+# The settings script is the page's own, fetched as the browser fetches it and
+# run against a stand-in for the browser's storage.
+test_settings_are_kept_in_the_browser() {
+  command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
+  local home out
+  home=$(make_home settings)
+  serve_home "$home"
+  curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/settings.js" > "$home/settings.js"
+  out=$(node - "$home/settings.js" <<'JS'
+const S = require(process.argv[2]);
+const kept = {};
+const storage = { getItem: k => (k in kept ? kept[k] : null), setItem: (k, v) => { kept[k] = String(v); } };
+const page = () => ({ style: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+const out = [];
+out.push('first visit: ' + JSON.stringify(S.load(storage)));
+S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less' });
+out.push('next visit: ' + JSON.stringify(S.load(storage)));
+const el = page();
+S.apply(el, S.load(storage));
+out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(el.attrs));
+S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less' });
+out.push('a bad value: ' + JSON.stringify(S.load(storage)));
+kept[S.KEY] = '{not json';
+out.push('unreadable: ' + JSON.stringify(S.load(storage)));
+out.push('no storage: ' + JSON.stringify(S.load(null)) + ' ' + JSON.stringify(S.save(null, { text: 0 })));
+out.push('sizes: ' + S.TEXT_STEPS.join(' ') + ' | ' + S.TEXT_NAMES.join(' '));
+console.log(out.join('\n'));
+JS
+) || fail "the settings script did not run: $out"
+  assert_equals "$out" 'first visit: {"text":1,"style":"calm","theme":"auto","motion":"auto"}
+next visit: {"text":3,"style":"lively","theme":"dark","motion":"less"}
+on the page: 125% {"data-style":"lively","data-theme":"dark","data-motion":"less"}
+a bad value: {"text":1,"style":"calm","theme":"dark","motion":"less"}
+unreadable: {"text":1,"style":"calm","theme":"auto","motion":"auto"}
+no storage: {"text":1,"style":"calm","theme":"auto","motion":"auto"} {"text":0,"style":"calm","theme":"auto","motion":"auto"}
+sizes: 87.5 100 112.5 125 150 | Small Normal Large Larger Largest' "the settings a browser keeps and what they put on the page"
+  pass "settings default to calm and normal, come back on the next visit, and survive a browser with no storage"
 }
 
 test_launcher_start_status_url_stop() {
@@ -417,5 +638,7 @@ test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice
 test_send_uses_desk_voice_with_saved_images
 test_send_reports_typed
-test_fleet_panel_reuses_bridge_snapshot
+test_the_mirror_is_the_pane_and_the_strip_in_plain_words
+test_a_button_is_handed_to_the_factory_script_and_nowhere_else
+test_settings_are_kept_in_the_browser
 test_launcher_start_status_url_stop
