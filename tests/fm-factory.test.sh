@@ -1000,34 +1000,35 @@ test_ready_work_the_overview_has_not_listed_reads_busy() {
 }
 
 # A worker whose checks are running reads steadily busy at checking, "checks
-# running", as the count line counts it. A run-step reading the reader could
-# not verify (unknown) keeps "no reading" rather than claiming checks run.
+# running", as the count line counts it: on a validating reading, and on an
+# unknown run-step reading between two while the worker lives. A dead worker's
+# unknown reading reads "no reading" rather than claiming checks run.
 test_a_worker_whose_checks_run_reads_checks_running() {
   reset_case
   write_registry
   write_world
-  printf '#!/usr/bin/env bash\necho alive\n' > "$TMP_ROOT/case$CASE/probe"
-  chmod +x "$TMP_ROOT/case$CASE/probe"
   printf 'window=tmux:fm-shop-checkout\n' >> "$HOME_FIX/state/shop-checkout.meta"
-  local reading
-  for reading in "working|validating (running) · run: r9|busy|checking|checks running" \
-    "unknown|selected run status unverified; run ids: r9|no reading|null|null"; do
-    local s="${reading%%|*}" rest="${reading#*|}"
-    local d="${rest%%|*}" want="${rest#*|}"
+  local reading verdict s d want
+  for reading in "alive|working|validating (running) · run: r9|busy|checking|checks running" \
+    "alive|unknown|selected run status unverified; run ids: r9|busy|checking|checks running" \
+    "dead|unknown|selected run status unverified; run ids: r9|no reading|null|null"; do
+    IFS='|' read -r verdict s d want <<<"$reading"
+    printf '#!/usr/bin/env bash\necho %s\n' "$verdict" > "$TMP_ROOT/case$CASE/probe"
+    chmod +x "$TMP_ROOT/case$CASE/probe"
     jq --arg s "$s" --arg d "$d" '(.tasks[] | select(.id == "shop-checkout").current_state)
       |= (.state = $s | .source = "run-step" | .detail = $d | .raw = "state: \($s) · source: run-step · \($d)")' \
       "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
     FM_FLEET_STATE_PROBE="$TMP_ROOT/case$CASE/probe" overview_cached data > "$TMP_ROOT/case$CASE/record.json" \
       || fail "--data failed"
     assert_equals "$(q '.factories[] | .jobs[] | select(.id == "shop-checkout") | "\(.state)|\(.step)|\(.doing)"')" \
-      "$want" "a worker on a $s run-step reading"
-    if [[ "$s" == working ]]; then
-      assert_equals "$(q .counts.busy)" "2" "the count line on a working reading"
+      "$want" "a $verdict worker on a $s run-step reading"
+    if [[ "$verdict" == alive ]]; then
+      assert_equals "$(q .counts.busy)" "2" "the count line for a live worker on a $s reading"
       assert_equals "$(q '.factories[] | select(.id == "sample-shop") | .crew.busy')" "2" \
-        "the factory's busy count on a working reading"
+        "the factory's busy count for a live worker on a $s reading"
     fi
   done
-  pass "factory record: running checks read checks running; an unknown run-step reading reads no reading"
+  pass "factory record: a live worker whose checks run reads checks running between readings; a dead one reads no reading"
 }
 
 # A home whose backlog is not markdown has no rows in the snapshot's markdown

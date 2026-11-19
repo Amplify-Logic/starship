@@ -611,6 +611,31 @@ def buckets_for(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
     return result
 
 
+def alive_ids(tasks: List[Dict[str, Any]]) -> set:
+    """The tasks the overview's own liveness check (_fm_fleet_liveness) reads alive, in one bash call."""
+    lines = []
+    for task in tasks:
+        meta = (((task.get("paths") or {}).get("meta") or {}).get("path") or "")
+        if task.get("id") and meta:
+            lines.append("%s\t%s" % (task["id"], meta))
+    if not lines:
+        return set()
+    script = (
+        '. "$1/fm-fleet-status-lib.sh" || exit 1\n'
+        'probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}\n'
+        'while IFS="$(printf "\\t")" read -r id meta; do\n'
+        '  printf "%s\\t%s\\n" "$id" "$(_fm_fleet_liveness "$meta" 0 "$probe" 2>/dev/null </dev/null)"\n'
+        'done\n'
+    )
+    try:
+        out = subprocess.run(["bash", "-c", script, "fm-factory", BIN], input="\n".join(lines) + "\n",
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.split("\t", 1)[0] for line in out.stdout.splitlines()
+            if "\t" in line and line.split("\t", 1)[1].strip() == "alive"}
+
+
 def overview_reading(home: str) -> Optional[Dict[str, Any]]:
     """The overview reading the bridge strip and the status bar show.
 
@@ -1375,6 +1400,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                 "read": read_sources(home, row["id"], (row.get("hold_reason"), shape.get("question")))}
 
     # Live work: every task with metadata whose work item is not queued or done.
+    unverified_alive = alive_ids([t for t in tasks if not buckets.get(t["id"])
+                                  and (t.get("current_state") or {}).get("source") == "run-step"
+                                  and (t.get("current_state") or {}).get("state") == "unknown"])
     running_ids = []
     for task in tasks:
         row = row_of.get(task["id"])
@@ -1402,10 +1430,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             bucket = "ready"
         if bucket == "working":
             job.update(state="busy", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (not bucket and state.get("state") == "parked"
-                                        and state.get("source") == "run-step"):
-            # A run the reader reports validating, or a run-step reading parked
-            # short of a decision, reads busy at checking.
+        elif bucket == "validating" or (not bucket and state.get("source") == "run-step" and (
+                state.get("state") == "parked" or task["id"] in unverified_alive)):
+            # A run the reader reports validating, a run-step reading parked
+            # short of a decision, or an unknown run-step reading on a worker
+            # _fm_fleet_liveness reads alive (which the overview counts busy)
+            # reads busy at checking. A dead worker's unknown reading does not.
             job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")
         elif bucket == "decision":
             # A worker's question, or a review finding the checks put to
