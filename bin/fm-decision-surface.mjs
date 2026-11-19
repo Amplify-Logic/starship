@@ -159,51 +159,17 @@ function splitExplicitOptions(value) {
   return [...new Set(pieces)];
 }
 
-function splitAlternatives(value) {
-  const pieces = value
-    .split(/\s+\b(?:or|vs\.?)\s+/i)
-    .map(cleanOption)
-    .filter((item) => item.length > 1);
-  return [...new Set(pieces)];
-}
-
-function twoWayTitle(title) {
-  const plain = title.trim().replace(/\?$/, "");
-  if (/[,()]|\s\/\s|\svs\.?\s/i.test(plain)) return [];
-  const pieces = plain.split(/\s+or\s+/i).map(cleanOption);
-  return pieces.length === 2 && pieces.every((item) => item.length > 1) && pieces[0] !== pieces[1] ? pieces : [];
-}
-
-export function optionsFrom(title, reason, recommendation) {
-  let source = "";
+// Options are only ever a recorded list: an `Options:` (or `Choose:`) label in
+// the hold reason, or the explicit marks bin/fm-tap-desk.sh keeps. A question
+// with neither shows no options, rather than options cut out of its sentence.
+export function optionsFrom(title, reason) {
   const explicit = reason.match(/\b(?:Options?|Choose|Captain must choose)\s*:\s*(.*)/i);
-  if (explicit) source = explicit[1];
-  if (!source && /^Choose\b/i.test(reason)) source = reason.replace(/^Choose\s*/i, "");
-  if (!source) {
-    const choosePhrase = reason.match(/\b(?:captain chooses|choose)\s+(.+)/i);
-    if (choosePhrase) source = choosePhrase[1];
-  }
-  if (source) {
-    source = source.split(/\bRecommendation:\s*/i)[0];
-    source = source.split(/\b(?:Report|Evidence|Follow-on|See)\b\s*:/i)[0];
-    const parsed = splitExplicitOptions(source);
-    if (parsed.length >= 2) return parsed;
-  }
-  const alternativePhrase = reason.match(/\b(?:whether to|alternatives? (?:are|is))\s+([^.;]+?\s+or\s+[^.;]+)/i);
-  if (alternativePhrase) {
-    const parsed = splitAlternatives(alternativePhrase[1]);
-    if (parsed.length >= 2) return parsed;
-  }
-  const versusSentence = sentences(reason).find((sentence) => /\bvs\.?\b/i.test(sentence));
-  if (versusSentence) {
-    const beforeSemicolon = versusSentence.split(";")[0];
-    const afterColon = beforeSemicolon.includes(":") ? beforeSemicolon.slice(beforeSemicolon.indexOf(":") + 1) : beforeSemicolon;
-    const parsed = splitAlternatives(afterColon);
-    if (parsed.length >= 2) return parsed;
-  }
-  const titled = twoWayTitle(title);
-  if (titled.length === 2) return titled;
-  return recommendation ? [recommendation] : [];
+  if (!explicit) return [];
+  let source = explicit[1];
+  source = source.split(/\bRecommendation:\s*/i)[0];
+  source = source.split(/\b(?:Report|Evidence|Follow-on|See)\b\s*:/i)[0];
+  const parsed = splitExplicitOptions(source);
+  return parsed.length >= 2 ? parsed : [];
 }
 
 // bin/fm-captain-hold.sh records only `Origin:` in the held task's body; the
@@ -284,7 +250,7 @@ function loadTasks(home) {
         repo: task.repo,
         group: normalizeRepo(task.repo),
         created: task.created,
-        options: optionsFrom(task.title || "", task.hold_reason || "", recommendation),
+        options: optionsFrom(task.title || "", task.hold_reason || ""),
         recommendation,
         origin: identity.origin,
         key: identity.key,
@@ -314,7 +280,7 @@ function optionMarkup(decision) {
                   <span><strong>Option ${index + 1}</strong>${escapeHtml(option)}</span>
                 </label>`).join("");
   const empty = decision.options.length === 0
-    ? '<p class="missing">No explicit options were separable from the backlog without guessing. Write the exact decision below.</p>'
+    ? '<p class="missing">No options are recorded for this decision. Write the exact decision below.</p>'
     : "";
   return `${choices}
                 <label class="option-row custom-row">
@@ -699,7 +665,7 @@ function showDecision(page, id) {
   console.log(`Title: ${decision.title}`);
   console.log(`Reason: ${decision.reason}`);
   console.log("Options:");
-  if (decision.options.length === 0) console.log("  - Exact answer required; source options were not separable without guessing.");
+  if (decision.options.length === 0) console.log("  - Exact answer required; no options are recorded for this decision.");
   else decision.options.forEach((option) => console.log(`  - ${option}`));
   console.log(`Recommendation: ${decision.recommendation || "No explicit recommendation is recorded in the backlog."}`);
   console.log(`Blocking: ${decision.dependents.length} dependent item${decision.dependents.length === 1 ? "" : "s"}`);

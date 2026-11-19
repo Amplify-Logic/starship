@@ -2361,6 +2361,9 @@ def read_row(width: int, lead: str, item: Dict[str, Any]) -> Row:
 # hold it: the bridge strip can name a call a record or two before the pane has it.
 WANT_SECONDS = 60
 
+# What an empty overview says, so a first look is never a blank screen.
+FIRST_RUN_HINT = "No work yet. Ask Starship for a first report, and it shows up here."
+
 
 class View:
     """Draws a record; holds the cursor, the talk box and pending notices."""
@@ -2947,6 +2950,9 @@ class View:
             keys.band = True
             return [keys]
         kind, ident = self.at()
+        if kind == "none":
+            # Nothing to move to, open, talk to or steer: only q does anything.
+            return [row(width, [S(" q quit", "faint")])]
         keys = ["↑↓ move"]
         if kind == "need":
             need = self.need(ident)
@@ -2988,6 +2994,10 @@ class View:
         else:
             rows += [row(width, [S(" NOTHING NEEDS YOU", "green", True)]), row(width)]
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
+        if not needs and not any(f["jobs"] for f in self.record["factories"]):
+            # A first run: say what to do next instead of an empty screen.
+            rows += flow(width, [S("     ")], FIRST_RUN_HINT, "ice")
+            rows.append(row(width))
         idle_started = False
         for fac in self.ordered():
             if fac["state"] == "idle" and not idle_started:

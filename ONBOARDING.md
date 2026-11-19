@@ -177,6 +177,7 @@ You should see: a few minutes later, a short plain-English report on that part.
 Check it against what you know.
 That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
 Your setup is finished.
+To see this and every later job at a glance, ask your first mate to open the Factory pane (`bin/fm-factory-pane.sh install`, run inside Herdr; see [docs/factory-pane.md](docs/factory-pane.md)).
 
 If the session ends before the first report, just say so next time, for example "let's finish setting up", and your first mate picks up where it left off.
 If the report never comes back, ask "why can't you start a worker?" and fix what it names.

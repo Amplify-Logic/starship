@@ -84,6 +84,7 @@ if (!route || route.reason !== "Choose: route north; OR route south. Recommendat
 if (JSON.stringify(route.options) !== JSON.stringify(["route north", "route south"])) process.exit(4);
 if (route.recommendation !== "route north.") process.exit(5);
 if (!access || access.group !== "another-sample") process.exit(6);
+if (JSON.stringify(access.options) !== "[]") process.exit(10);
 if (!html.includes("Firstmate recommendation - advisory, not decided")) process.exit(7);
 if (!html.includes("No explicit recommendation is recorded in the backlog.")) process.exit(8);
 if (/https?:\/\//.test(html) || /<link\b[^>]*href=/.test(html) || /<script\b[^>]*src=/.test(html)) process.exit(9);
