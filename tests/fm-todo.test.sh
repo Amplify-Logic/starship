@@ -1381,7 +1381,7 @@ test_the_recheck_rolls_through_every_line_in_three_working_days() {
   # shellcheck disable=SC2086
   out=$(todo_at "$h" "$T_1100" recheck --passes-per-day 1 $first)
   for n in $(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p'); do
-    case " $(printf '%s ' $first)" in
+    case " $(printf '%s\n' "$first" | tr '\n' ' ')" in
       *" $n "*) fail "the last pass's line came up again before the rest: $n" ;;
     esac
   done
