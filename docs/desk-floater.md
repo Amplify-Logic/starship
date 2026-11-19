@@ -94,6 +94,8 @@ Right Shift follows the same tap rules as Right Command: held with a letter to t
 It also takes no screenshot while you are typing, so a Shift brushed on the way to a capital, a question mark or Return is ignored: a tap within a second and a half of your last key, or followed by a key within half a second, counts as typing.
 A tap that stands takes its screenshot half a second after you let go, and two taps within that half second take one screenshot.
 While macOS has secure typing on, such as in a password field or a terminal with Secure Keyboard Entry, the floater cannot see your keys, so Right Shift takes no screenshot then; use the Camera control.
+A lone Right Shift press that takes no screenshot says why on the status line for a few seconds: `Shot skipped - typing` (too close to a key), `Shot skipped - held` (longer than half a second), or `Shot skipped - secure` (secure typing is on); hover the status line to read a message cut short.
+Shift used with a letter, another modifier or a click is an ordinary Shift press and shows nothing.
 A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse within the first third of a second of holding Right Option (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press.
 Once Right Option has been held longer than that, you are talking: a key or a click, even one that opens a menu, leaves the recording running, and releasing Right Option still sends it.
 System shortcuts that macOS keeps to itself, such as a quick Right Command-Tab or Right Command-Space, are hidden from the floater and can read as a tap; use the left Command key for those.
@@ -135,6 +137,7 @@ Asking Terminal needs the Automation permission (see [Permissions](#permissions)
 Tap Right Shift, or click the Camera control, to take a screenshot of the whole display under the mouse pointer.
 Take several in a row, moving the pointer to another display in between if you like: they stack, and about three seconds after the last one they are sent to Firstmate together as one message, with nothing more to press.
 The camera shows how many are stacked, the status line reads "2 shots stacked", then "Sent" once they are delivered.
+A capture that fails reads `Shot failed - ` and the capture's own reason, such as `screen capture failed`.
 
 The message names each image by its full path, for example `Screenshots: /…/state/desk-voice/shots/<time>-<id>.png /…/<time>-<id>.png`, so Firstmate can open them.
 A message with screenshots, with or without words, travels the same way as a voice message: typed into the Firstmate chat, or saved to the mailbox when that chat cannot be reached or, for screenshots alone, holds text you have not sent yet, see [How transcripts reach Firstmate](#how-transcripts-reach-firstmate).

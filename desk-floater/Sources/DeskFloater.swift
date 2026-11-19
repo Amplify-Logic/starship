@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.onTalkChord = { [weak model] in model?.hotkeyTalkChorded() }
         hotkeys.onDictateTap = { [weak model] in model?.toggleDictation() }
         hotkeys.onShotTap = { [weak model] in model?.takeShot() }
+        hotkeys.onShotSkipped = { [weak model] reason in model?.shotSkipped(reason) }
         hotkeys.onTrustChanged = { [weak model] trusted in model?.keysTrusted = trusted }
         model.onFixKeys = { [weak hotkeys] in hotkeys?.requestAccess() }
         hotkeys.start()
@@ -252,8 +253,22 @@ final class WindowMover {
 /// limit, with no other key, click or modifier used while it was down. A key
 /// with a typing guard also leaves taps close to typing alone: pressed within
 /// `quiet` of the last key, or followed by a key within `settle` of its
-/// release, it was a Shift brushed while typing rather than a tap.
+/// release, it was a Shift brushed while typing rather than a tap. Such a key
+/// also keeps why a lone press did not count (`takeSkip`), so the floater can
+/// say so; a press used with another key, click or modifier is a shortcut and
+/// leaves no reason.
 struct TapKey {
+    enum Skip: Equatable {
+        case typing, held
+
+        var message: String {
+            switch self {
+            case .typing: return "Shot skipped - typing"
+            case .held: return "Shot skipped - held"
+            }
+        }
+    }
+
     let keyCode: UInt16
     // Device-dependent modifier bit that tells the right-hand key from the left.
     let bit: UInt
@@ -262,9 +277,12 @@ struct TapKey {
     let settle: TimeInterval
     private var downAt: Date?
     private var chorded = false
+    // Pressed within `quiet` of the last key.
+    private var nearTyping = false
     private var lastKeyAt: Date?
     // A tap waiting out `settle`.
     private var pending: Date?
+    private var skip: Skip?
 
     init(keyCode: UInt16, bit: UInt, flag: NSEvent.ModifierFlags,
          quiet: TimeInterval = 0, settle: TimeInterval = 0) {
@@ -291,6 +309,7 @@ struct TapKey {
         lastKeyAt = max(lastKeyAt ?? now, now)
         if let tap = pending, now >= tap, now.timeIntervalSince(tap) < settle {
             pending = nil
+            skip = .typing
         }
         chord()
     }
@@ -308,12 +327,23 @@ struct TapKey {
                 .subtracting(flag)
                 .subtracting(allowed)
             downAt = now
-            chorded = !flags.intersection(others).isEmpty || typed(within: quiet, before: now)
+            chorded = !flags.intersection(others).isEmpty
+            nearTyping = typed(within: quiet, before: now)
             return false
         }
         guard let started = downAt else { return false }
         downAt = nil
-        guard !chorded && now.timeIntervalSince(started) < limit else { return false }
+        guard !chorded else { return false }
+        guard now.timeIntervalSince(started) < limit else {
+            if settle > 0 {
+                skip = .held
+            }
+            return false
+        }
+        guard !nearTyping else {
+            skip = .typing
+            return false
+        }
         if settle > 0 {
             pending = now
         }
@@ -326,6 +356,12 @@ struct TapKey {
         guard pending == tap else { return false }
         pending = nil
         return true
+    }
+
+    /// Why the last lone press did not count, once.
+    mutating func takeSkip() -> Skip? {
+        defer { skip = nil }
+        return skip
     }
 
     private func typed(within interval: TimeInterval, before now: Date) -> Bool {
@@ -393,6 +429,8 @@ final class HotkeyMonitor {
     var onTalkChord: (() -> Void)?
     var onDictateTap: (() -> Void)?
     var onShotTap: (() -> Void)?
+    // Why a lone Right Shift press took no screenshot, for the status line.
+    var onShotSkipped: ((String) -> Void)?
     var onTrustChanged: ((Bool) -> Void)?
 
     private static let rightOptionKey: UInt16 = 61
@@ -493,6 +531,7 @@ final class HotkeyMonitor {
             if event.type == .keyDown {
                 dictateKey.keyPressed(at: at)
                 shotKey.keyPressed(at: at)
+                reportShotSkip()
             } else {
                 dictateKey.chord()
                 shotKey.chord()
@@ -519,6 +558,13 @@ final class HotkeyMonitor {
                           allowed: talkKey.isDown ? .option : [], limit: tapLimit) {
             shotTapped(at: at)
         }
+        reportShotSkip()
+    }
+
+    private func reportShotSkip() {
+        if let skip = shotKey.takeSkip() {
+            onShotSkipped?(skip.message)
+        }
     }
 
     /// A Right Shift tap becomes a screenshot only once typing has not resumed
@@ -526,10 +572,17 @@ final class HotkeyMonitor {
     /// terminal's Secure Keyboard Entry) macOS hides key presses from the
     /// floater, so a capital letter would read as a lone Shift tap: no shot then.
     private func shotTapped(at tap: Date) {
-        guard !IsSecureEventInputEnabled() else { return }
+        guard !IsSecureEventInputEnabled() else {
+            onShotSkipped?("Shot skipped - secure")
+            return
+        }
         Timer.scheduledTimer(withTimeInterval: shotKey.settle, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.shotKey.takeSettled(tap: tap) else { return }
+                guard let self else { return }
+                guard self.shotKey.takeSettled(tap: tap) else {
+                    self.reportShotSkip()
+                    return
+                }
                 self.onShotTap?()
             }
         }
@@ -966,16 +1019,21 @@ final class FloaterModel: ObservableObject {
         stack.shotStarted(at: Date())
         shotsChanged()
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
-            let path = Self.shoot(repoRoot: repoRoot, fmHome: fmHome, display: display)
+            let (path, error) = Self.shoot(repoRoot: repoRoot, fmHome: fmHome, display: display)
             await MainActor.run {
                 self.stack.shotFinished(path, at: Date())
                 self.shotsChanged()
                 if path == nil {
-                    self.flash("Shot failed")
+                    self.flash(error.map { "Shot failed - \($0)" } ?? "Shot failed", for: 5)
                 }
                 self.scheduleFlush()
             }
         }
+    }
+
+    /// A Right Shift press that took no screenshot, with the reason.
+    func shotSkipped(_ reason: String) {
+        flash(reason, for: 3)
     }
 
     /// A talk-to-Firstmate message is being recorded or transcribed, so stacked
@@ -1662,16 +1720,50 @@ final class FloaterModel: ObservableObject {
             .flatMap { RetryResult.parse($0) }
     }
 
-    /// Captures one display to this home's screenshot folder; nil on failure.
-    nonisolated private static func shoot(repoRoot: String, fmHome: String, display: Int?) -> String? {
+    /// The reason a script such as `fm-desk-voice.sh shot` gives on failure:
+    /// its last message line, without the script's name.
+    nonisolated static func lastMessage(from stderr: String) -> String? {
+        guard let line = stderr.split(whereSeparator: \.isNewline)
+            .map({ $0.trimmingCharacters(in: .whitespaces) })
+            .last(where: { !$0.isEmpty }) else { return nil }
+        guard let colon = line.range(of: ": "), line.hasPrefix("fm-") else { return line }
+        return String(line[colon.upperBound...])
+    }
+
+    /// Captures one display to this home's screenshot folder: the image's
+    /// path, or nil and the capture's own reason when it failed.
+    nonisolated private static func shoot(repoRoot: String, fmHome: String, display: Int?) -> (String?, String?) {
         let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
         var args = ["shot"]
         if let display {
             args += ["--display", String(display)]
         }
-        let path = run(bin: bin, args: args, env: ["FM_HOME": fmHome])?
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: bin)
+        proc.arguments = args
+        var environment = ProcessInfo.processInfo.environment
+        environment["FM_HOME"] = fmHome
+        proc.environment = environment
+        let out = Pipe()
+        let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do {
+            try proc.run()
+        } catch {
+            return (nil, "cannot start \((bin as NSString).lastPathComponent)")
+        }
+        // Both outputs are a line or two, so reading one to the end first cannot stall.
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        FileHandle.standardError.write(errData)
+        let path = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return path.isEmpty ? nil : path
+        if proc.terminationStatus == 0 && !path.isEmpty {
+            return (path, nil)
+        }
+        return (nil, lastMessage(from: String(data: errData, encoding: .utf8) ?? ""))
     }
 
     nonisolated private static func speak(repoRoot: String, fmHome: String, args: [String]) -> String? {
@@ -1733,6 +1825,7 @@ struct FloaterView: View {
                 recentToggle
             }
             Text(model.status)
+                .help(model.status)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(keysOffIdle ? Color(red: 1.0, green: 0.72, blue: 0.35) : Color.white)
                 .lineLimit(1)

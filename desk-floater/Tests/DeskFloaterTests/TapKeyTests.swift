@@ -111,6 +111,67 @@ final class TapKeyTests: XCTestCase {
         XCTAssertNotNil(tap(&key, down: 0.2, up: 0.3), "a click is not typing, so the next tap stands")
     }
 
+    func testTapRightAfterTypingSaysTyping() {
+        var key = TapKey.rightShift
+        key.keyPressed(at: at(0))
+        XCTAssertNil(tap(&key, down: 1, up: 1.1))
+        XCTAssertEqual(key.takeSkip(), .typing)
+        XCTAssertNil(key.takeSkip(), "a reason is given once")
+    }
+
+    func testKeyRightAfterTheTapSaysTyping() {
+        var key = TapKey.rightShift
+        key.keyPressed(at: at(0))
+        guard let tapped = tap(&key, down: 3, up: 3.05) else {
+            return XCTFail("the press itself reads as a tap")
+        }
+        XCTAssertNil(key.takeSkip())
+        key.keyPressed(at: at(3.2))
+        XCTAssertEqual(key.takeSkip(), .typing)
+        XCTAssertFalse(key.takeSettled(tap: tapped))
+    }
+
+    func testSlowPressSaysHeld() {
+        var key = TapKey.rightShift
+        XCTAssertNil(tap(&key, down: 0, up: 0.6))
+        XCTAssertEqual(key.takeSkip(), .held)
+    }
+
+    func testShortcutsAndShotsGiveNoReason() {
+        var key = TapKey.rightShift
+        // A capital letter after a pause.
+        XCTAssertFalse(key.update(keyCode: 60, flags: rightShiftDown, at: at(5), allowed: [], limit: limit))
+        key.keyPressed(at: at(5.05))
+        XCTAssertFalse(key.update(keyCode: 60, flags: [], at: at(5.12), allowed: [], limit: limit))
+        XCTAssertNil(key.takeSkip(), "Shift used for a capital is not a skipped shot")
+        // Shift-click, after a pause long enough to pass the quiet window.
+        XCTAssertFalse(key.update(keyCode: 60, flags: rightShiftDown, at: at(10), allowed: [], limit: limit))
+        key.chord()
+        XCTAssertFalse(key.update(keyCode: 60, flags: [], at: at(10.8), allowed: [], limit: limit))
+        XCTAssertNil(key.takeSkip(), "Shift held for a click is not a skipped shot")
+        // A tap that stands.
+        guard let tapped = tap(&key, down: 20, up: 20.1) else {
+            return XCTFail("a lone tap away from typing is a tap")
+        }
+        XCTAssertTrue(key.takeSettled(tap: tapped))
+        XCTAssertNil(key.takeSkip())
+    }
+
+    func testDictationKeyGivesNoReason() {
+        var key = TapKey.rightCommand
+        let rightCommandDown = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.command.rawValue | 0x10)
+        XCTAssertFalse(key.update(keyCode: 54, flags: rightCommandDown, at: at(0), allowed: [], limit: limit))
+        XCTAssertFalse(key.update(keyCode: 54, flags: [], at: at(0.6), allowed: [], limit: limit))
+        XCTAssertNil(key.takeSkip())
+    }
+
+    func testFailedShotShowsTheScriptsLastMessage() {
+        XCTAssertEqual(FloaterModel.lastMessage(from: "fm-desk-voice: screen capture failed\n"), "screen capture failed")
+        XCTAssertEqual(FloaterModel.lastMessage(from: "some noise\nfm-desk-voice: cannot finalize screenshot\n\n"),
+                       "cannot finalize screenshot")
+        XCTAssertNil(FloaterModel.lastMessage(from: "  \n"))
+    }
+
     func testDictationKeyKeepsItsPlainTap() {
         var key = TapKey.rightCommand
         let rightCommandDown = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.command.rawValue | 0x10)
