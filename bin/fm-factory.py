@@ -1084,7 +1084,7 @@ def checking_sentence(detail: str) -> str:
             if needle == "parked at" and found:
                 return "answering the %s the checks found" % plural(int(found.group(1)), "point", "points")
             return words
-    return "running the checks"
+    return "checks running"
 
 
 def held_state(row: Dict[str, Any], today: str = "") -> str:
@@ -1402,8 +1402,11 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             bucket = "ready"
         if bucket == "working":
             job.update(state="busy", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (not bucket and state.get("state") == "parked"
-                                        and state.get("source") == "run-step"):
+        elif bucket == "validating" or (not bucket and state.get("source") == "run-step"):
+            # A checks run the reader could not verify this time (unknown) or
+            # parked short of a decision folds to no field, which the overview
+            # counts busy while the worker lives (_fm_fleet_collect), so it
+            # stays busy here too rather than dropping out between readings.
             job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")
         elif bucket == "decision":
             # A worker's question, or a review finding the checks put to
