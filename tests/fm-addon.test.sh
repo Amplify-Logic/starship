@@ -91,7 +91,7 @@ test_no_addon_means_no_hooks() {
   done
   assert_equals "${expected%$'\n'}" "$(addon "$home" hooks bootstrap-sweep 2>&1)" \
     "a home with no add-on must list only the shipped bootstrap-sweep hooks, in name order"
-  for point in session-start sentinel watcher deck-staging todo-verbs todo-page; do
+  for point in session-start sentinel watcher deck-staging todo-verbs todo-admit todo-page; do
     assert_equals "" "$(addon "$home" hooks "$point" 2>&1)" "a home with no add-on must list no $point hook"
   done
   for point in session-start sentinel deck-staging todo-page; do

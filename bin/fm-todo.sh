@@ -4,7 +4,8 @@
 # Usage:
 #   fm-todo.sh sync [--morning-json FILE]
 #   fm-todo.sh sweep-start [--at EPOCH] [--pass]
-#   fm-todo.sh recheck [--since EPOCH ID ...]
+#   fm-todo.sh recheck [--passes-per-day N | --since EPOCH ID ...]
+#   fm-todo.sh find --about KEY [--about KEY ...]
 #   fm-todo.sh verify --item ID --how TEXT [--rev REV] [--at EPOCH]
 #   fm-todo.sh close --item ID --evidence TEXT [--reason fulfilled|dismissed|superseded] [--actor NAME]
 #                    [--source-change DIGEST]
@@ -42,10 +43,25 @@
 # obligation and every command tombstone is kept, so done and drop keep
 # suppressing a reopen, and the journal is never trimmed.
 #
-# IDENTITY. An item is one ask. It is matched by an explicitly shared alias
-# only: a ledger record's `source:ref`, key and provenance tokens; a morning
+# IDENTITY. An item is one ask. It is matched first by an explicitly shared
+# alias: a ledger record's `source:ref`, key and provenance tokens; a morning
 # action's `source:ref`, key and optional `aliases`; `firstmate-backlog:<task>`.
 # Two asks on one thread are two items unless a source says they are the same.
+#
+# WHAT AN ASK IS ABOUT. An item also keeps `about` keys, lowercase
+# `name:value` tokens with no spaces: a ledger record's `about` (observe
+# --about), a morning action's `about` list, and every match of the home's
+# patterns in its title, ask and why. config/todo-about holds one
+# `name regex` line per pattern (for example a fixed-length device id or a
+# ticket number shape); a line that is not one is skipped. A new ask that
+# matches no alias attaches to the one open or waiting ask that shares any of
+# its keys, so the same ask seen on another channel or by a re-scan joins the
+# line already there instead of adding a second. Only an ask attaches, never
+# to a held decision, and two candidate lines mean two asks, so it adds its
+# own. `find --about KEY` prints each open or waiting ask about every given
+# key (id, revision, state, its keys, title, tab-separated; never routine
+# activity or a team update), so a tool that settled one can close it with
+# `close` and its own evidence.
 #
 # VERIFICATION IS ITS OWN FACT. Sync never renews it. It changes only on a
 # newer source read: an open ledger record's change time (an unchanged re-read
@@ -62,14 +78,20 @@
 # sweep. A pass never moves the page's "Closed since" boundary, which stays at
 # the previous morning sweep.
 #
-# RE-CHECK ON EVERY PASS. `recheck` prints one `recheck:` line per open or
-# waiting item that names an external source to re-read: id, revision, state,
-# source label, its source refs (the item's `source:ref` aliases, never a
-# ledger key, a held decision or a Firstmate-internal line), link and title,
-# tab-separated. A parked item, routine activity and a team update are not
-# listed; like a held decision, they answer to the morning sweep's freshness
-# floor, never a pass's. bin/fm-channel-intake.sh `claim` prints these and the
-# pass answers each with `verify` or `close`. `recheck --since EPOCH ID ...`
+# ROLLING RE-CHECK. `recheck` prints one `recheck:` line per open or waiting
+# item that names an external source to re-read: id, revision, state, source
+# label, its source refs (the item's `source:ref` aliases, never a ledger key,
+# a held decision or a Firstmate-internal line), link and title,
+# tab-separated. It lists a rolling share, oldest check first, so every such
+# line is re-read at least once in three working days without any one pass
+# re-reading them all: the share is at least five lines, at least the lines
+# over three working days of passes (--passes-per-day, default 16), and at
+# least the lines already past three working days spread over one day of
+# passes. When the share leaves lines out, one `TODO_RECHECK: rolling share`
+# line says how many. A parked item, routine activity and a team update are
+# not listed; like a held decision, they answer to the morning sweep's
+# freshness floor, never a pass's. bin/fm-channel-intake.sh `claim` prints
+# these and the pass answers each with `verify` or `close`. `recheck --since EPOCH ID ...`
 # prints one `TODO_RECHECK:` line counting the listed ids still open or
 # waiting with no verification at or after EPOCH, and names them.
 #
@@ -79,7 +101,8 @@
 # why; a deadline such as "tomorrow" or a duration the ask is about stays. The
 # page computes ages itself from the item's ask time (`asked_at`: the earliest
 # source's ask epoch, a ledger record's source epoch or creation, a morning
-# action's `asked_at`, a held task's `since` day).
+# action's `asked_at`, a held task's `since` day). An item no source gave a
+# time keeps the time the store first saw it, so every line has an ask date.
 #
 # CHANGES, NOT SNAPSHOTS. Sync applies only what changed since the last sync,
 # so repeated syncs, an old sidecar and a re-asserted morning action are
@@ -123,9 +146,14 @@
 # `reopen` brings a closed or waiting item back to the captain's lane, ending
 # the hand-over, and refuses an item that is already open.
 # Each line prints one `TODO_CMD:` result naming the item's source refs. A
-# held backlog decision is never answered here: done/drop on one says to
-# record the answer through bin/fm-captain-hold.sh, and the item releases when
-# the backlog does. A line with no leading verb prints `TODO_CMD:
+# held backlog decision is never answered here: done/drop on one closes the
+# row and files a reconcile request for the held task through
+# bin/fm-captain-hold.sh reconcile-requests under the source id `todo-page`
+# (bound on first use), the same request the Factory pane's x key files, and
+# the result line says whether it was filed. Firstmate then settles the task
+# with `reconcile close` and its evidence, or `reconcile note` and `reopen`
+# when it is still live. FM_TODO_CAPTAIN_HOLD replaces the captain-hold
+# command for tests. A line with no leading verb prints `TODO_CMD:
 # not-a-command` and changes nothing. Exit 1 when any line was refused.
 #
 # ADD-ON VERBS. A home's add-on (bin/fm-addon.sh) can take more one-line verbs
@@ -181,6 +209,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STORE="${FM_TODO_STORE_OVERRIDE:-$DATA/todo}"
 INTAKE_DIR="$DATA/channel-intake"
 HOOK_TIMEOUT="${FM_ADDON_HOOK_TIMEOUT:-20}"
+# The captain-hold source id this store files reconcile requests under.
+TODO_SOURCE_ID=todo-page
 
 usage() {
   awk '
@@ -241,7 +271,7 @@ esac
 cmd=$1
 shift
 case "$cmd" in
-  sync|sweep-start|recheck|verify|close|hand-over|reopen|ack|command|mark|list) ;;
+  sync|sweep-start|recheck|find|verify|close|hand-over|reopen|ack|command|mark|list) ;;
   *) die "unknown command: $cmd" ;;
 esac
 
@@ -254,7 +284,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --morning-json) [ "$#" -ge 2 ] || die '--morning-json requires a value'; morning=$2; shift 2 ;;
     --pass|--clear) args+=("$1"); shift ;;
-    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text|--to|--note|--source-change)
+    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text|--to|--note|--source-change|--passes-per-day|--about)
       [ "$#" -ge 2 ] || die "$1 requires a value"
       case "$1" in
         --item) item=$2 ;;
@@ -270,14 +300,50 @@ done
 run_items() {
   python3 "$SCRIPT_DIR/fm-todo-items.py" "$cmd" --store "$STORE" --now "$(now_epoch)" \
     --intake "$INTAKE_DIR" --sources "$sources" --backlog "$(backlog_path)" \
-    --morning-json "$morning" --captain-names "$captain_names" ${args[@]+"${args[@]}"}
+    --morning-json "$morning" --captain-names "$captain_names" \
+    --about-patterns "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/todo-about" ${args[@]+"${args[@]}"}
 }
 
 [ "$cmd" = command ] || { run_items; exit; }
 
+out=$(run_items) && code=0 || code=$?
+
+# done or drop on a held decision asks for it to be re-checked through the
+# captain-hold reconcile intake, the path the Factory pane's x key takes, under
+# this store's own source id; the result line says whether it was filed.
+HELD_TASK_RE='s/^TODO_CMD: (already )?(done|drop) [^ ]+ \[([^]]* )?firstmate-backlog:([A-Za-z0-9._-]+)( [^]]*)?\].*/\4/p'
+held_tasks=$(printf '%s\n' "$out" | sed -nE "$HELD_TASK_RE" | sort -u)
+reconciled=''
+if [ -n "$held_tasks" ]; then
+  if [ -n "${FM_TODO_CAPTAIN_HOLD:-}" ]; then
+    read -r -a hold_cmd <<<"$FM_TODO_CAPTAIN_HOLD"
+  else
+    hold_cmd=(bash "$SCRIPT_DIR/fm-captain-hold.sh")
+  fi
+  # Typing done or drop on a held row is this store's opt-in to the intake.
+  binding=$(FM_HOME="$FM_HOME" "${hold_cmd[@]}" binding "$TODO_SOURCE_ID" 2>/dev/null) || binding=''
+  [ -n "$binding" ] || FM_HOME="$FM_HOME" "${hold_cmd[@]}" bind "$TODO_SOURCE_ID" >/dev/null 2>&1 || true
+  reconciled=$(printf '%s\n' "$held_tasks" | FM_HOME="$FM_HOME" "${hold_cmd[@]}" reconcile-requests \
+    --source-id "$TODO_SOURCE_ID" --source "the to-do page's done or drop command" 2>&1) || true
+  noted=''
+  while IFS= read -r result_line; do
+    task=$(printf '%s\n' "$result_line" | sed -nE "$HELD_TASK_RE")
+    if [ -z "$task" ]; then
+      :
+    elif printf '%s\n' "$reconciled" | grep -qxF "reconcile: $task"; then
+      result_line="$result_line (held decision $task: re-check requested; settle it with fm-captain-hold.sh reconcile close or note)"
+    else
+      why=$(printf '%s\n' "$reconciled" | grep -F "refused: $task (" | head -n 1 | sed -E 's/^refused: [^ ]+ \((.*)\)$/\1/')
+      [ -n "$why" ] || why=$(printf '%s\n' "$reconciled" | grep -v '^reconcile-requests:' | sed -n '$p')
+      result_line="$result_line (held decision $task: re-check not requested: ${why:-no answer from fm-captain-hold.sh})"
+    fi
+    noted="$noted$result_line"$'\n'
+  done <<<"$out"
+  out=${noted%$'\n'}
+fi
+
 # A line no built-in verb took, typed against one row, is offered to the
 # add-on's todo-verbs hooks; untargeted lines never are.
-out=$(run_items) && code=0 || code=$?
 hooks=''
 if [ -n "$item" ] && printf '%s\n' "$out" | grep -q '^TODO_CMD: not-a-command '; then
   hooks=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" hooks todo-verbs 2>/dev/null || true)

@@ -64,6 +64,9 @@
 #                  against one row that no built-in page command takes; the
 #                  first that prints a result takes it (its header owns the
 #                  contract).
+#   todo-admit     executables bin/fm-channel-intake.sh observe runs before it
+#                  records a new ask; the first that exits non-zero refuses it
+#                  (its header owns the contract).
 #   todo-page      executables bin/fm-todo-render.sh runs on every render of
 #                  the day's to-do page; each prints an HTML section placed on
 #                  the page (its header owns the contract).
@@ -229,7 +232,7 @@ resolve_addon() {
 
 valid_point() {
   case "$1" in
-    bootstrap|bootstrap-sweep|session-start|sentinel|watcher|deck-staging|todo-verbs|todo-page) return 0 ;;
+    bootstrap|bootstrap-sweep|session-start|sentinel|watcher|deck-staging|todo-verbs|todo-admit|todo-page) return 0 ;;
   esac
   return 1
 }
