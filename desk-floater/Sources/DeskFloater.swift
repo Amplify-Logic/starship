@@ -566,7 +566,7 @@ final class HotkeyMonitor {
     }
 
     private func reportShotSkip() {
-        if let skip = shotKey.takeSkip() {
+        if let skip = shotKey.takeSkip(), skip != .held || !IsSecureEventInputEnabled() {
             onShotSkipped?(skip.message)
         }
     }
