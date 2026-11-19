@@ -49,7 +49,8 @@ What `open` does, in this order, re-reading Herdr after every step:
   6. Opens windows until as many Herdr clients show the session as the layout
      names views, each with its font size, in the layout's `terminal` app:
      Terminal through AppleScript (with the view's profile, or Starship's
-     cream profile while bin/fm-theme.sh has the workspace in light), or a new Ghostty
+     cream profile while bin/fm-theme.sh has the workspace in light and
+     Terminal has that profile), or a new Ghostty
      instance through `open -na Ghostty --args`. Every view starts with this
      process's environment minus what a Herdr pane hands down (HERDR_*,
      TERM_PROGRAM and the like), since a Herdr client that inherits it refuses
@@ -534,8 +535,9 @@ def step(kind: str, text: str, **extra: Any) -> Dict[str, Any]:
 
 def view_text(index: int, view: Dict[str, Any], terminal: str = "Terminal") -> str:
     parts = []
-    if terminal == "Terminal" and view_profile(view):
-        parts.append("profile %s" % view_profile(view))
+    profile = cream_profile() or view["profile"]
+    if terminal == "Terminal" and profile:
+        parts.append("profile %s" % profile)
     if view["size"]:
         parts.append("size %s" % view["size"])
     return "view %d in %s%s" % (index + 1, terminal, " (%s)" % ", ".join(parts) if parts else "")
@@ -739,8 +741,12 @@ on run argv
   set cmd to item 1 of argv
   set prof to item 2 of argv
   set fsize to item 3 of argv
+  set cream to item 4 of argv
   set wasRunning to (application "Terminal" is running)
   tell application "Terminal"
+    if cream is not "" then
+      if exists settings set cream then set prof to cream
+    end if
     if prof is not "" then
       if not (exists settings set prof) then error "Terminal has no profile named " & prof
     end if
@@ -809,12 +815,11 @@ def open_ghostty(size: str) -> None:
     launch(argv + ["-e", herdr_bin()], "Ghostty")
 
 
-def view_profile(view: Dict[str, Any]) -> str:
-    """The view's Terminal profile, or the cream one while the workspace is light."""
+def cream_profile() -> str:
+    """Starship's cream Terminal profile while the workspace is light, else nothing."""
     theme = subprocess.run(["bash", os.path.join(ROOT, "bin", "fm-theme.sh"), "terminal-profile"],
                            capture_output=True, text=True, env=dict(os.environ, FM_HOME=home_dir()))
-    light = theme.stdout.strip() if theme.returncode == 0 else ""
-    return light or view["profile"]
+    return theme.stdout.strip() if theme.returncode == 0 else ""
 
 
 def open_view(layout: Dict[str, Any], index: int) -> None:
@@ -823,7 +828,7 @@ def open_view(layout: Dict[str, Any], index: int) -> None:
     if layout["terminal"] == "Ghostty":
         open_ghostty(view["size"])
     else:
-        osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view_profile(view), view["size"])
+        osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view["profile"], view["size"], cream_profile())
     deadline = time.time() + wait_limit()
     while time.time() < deadline:
         if len(herdr_clients()) > before:

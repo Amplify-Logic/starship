@@ -31,7 +31,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 
 `bin/fm-theme.sh light` switches the whole workspace to cream, a warm and soft light look, and `bin/fm-theme.sh dark` switches it back to the dark flight deck; `bin/fm-theme.sh status` shows what each part is in.
 One run moves the Terminal windows to Starship's cream profile, swaps Herdr's theme and reloads it, and repaints the running bridge strip and Factory pane in place, so no tab or pane closes.
-Dark gives back exactly the Terminal profile and Herdr theme that were in use before the first switch to light.
+Dark gives back exactly the Terminal profile and Herdr theme that were in use before the first switch to light, and leaves both as they are when no switch to light saved them.
 The choice is remembered in `config/workspace-theme` (`light` or `dark`), so new panes, restarts and the `starship` desk's Terminal views start in it.
 Claude Code chats keep their own theme: type `/theme` in each and choose the matching light or dark mode.
 The script's header owns what each step changes and what it keeps.

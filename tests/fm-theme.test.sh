@@ -190,15 +190,20 @@ test_a_theme_herdr_refuses_leaves_its_config_alone() {
   pass "theme: a theme Herdr's own check refuses leaves config.toml as it was, and the rest still switches"
 }
 
-test_without_a_saved_dark_theme_the_shipped_one_is_used() {
-  local out
+test_dark_with_nothing_saved_leaves_terminal_and_herdr_alone() {
+  local out before
   reset_case
-  rm -f "$HCONF"
-  out=$(FM_THEME_TEST_NO_SERVER=1 theme dark) || fail "dark failed: $out"
-  assert_has "$(cat "$HCONF")" 'panel_bg      = "#0d1524"' "the shipped dark theme was not written"
+  before=$(cat "$T/tabs" "$T/default" "$T/startup")
+  out=$(theme dark) || fail "dark failed: $out"
+  cmp -s "$HCONF" "$TMP_ROOT/case$CASE/original.toml" || fail "dark with nothing saved changed Herdr's config"
+  assert_lacks "$(cat "$TMP_ROOT/case$CASE/herdr-calls")" 'reload-config' "Herdr was reloaded with nothing written"
+  assert_eq "$(cat "$T/tabs" "$T/default" "$T/startup")" "$before" "dark with nothing remembered changed Terminal"
+  assert_has "$out" 'Terminal: no dark profile is remembered' "the untouched Terminal is not reported"
+  assert_has "$out" 'Herdr: no dark theme is saved' "the untouched Herdr config is not reported"
+  assert_has "$(theme status)" 'Herdr: a theme of its own' "status claims the owner's own theme is Starship's dark"
+  out=$(FM_THEME_TEST_NO_SERVER=1 theme light) || fail "light without a Herdr server failed: $out"
   assert_has "$out" 'no running workspace took the reload' "a missing Herdr server is not reported"
-  assert_has "$(theme status)" 'Herdr: dark theme' "status does not read the shipped dark theme"
-  pass "theme: with nothing saved, dark writes Starship's flight deck theme, and no Herdr server is not a failure"
+  pass "theme: with nothing saved, dark leaves Terminal and Herdr as they are, and no Herdr server is not a failure"
 }
 
 test_status_changes_nothing() {
@@ -250,7 +255,7 @@ fm_test_run \
   test_light_and_back_to_dark \
   test_switching_twice_keeps_the_saved_dark_look \
   test_a_theme_herdr_refuses_leaves_its_config_alone \
-  test_without_a_saved_dark_theme_the_shipped_one_is_used \
+  test_dark_with_nothing_saved_leaves_terminal_and_herdr_alone \
   test_status_changes_nothing \
   test_missing_parts_are_skipped_not_failed \
   test_usage

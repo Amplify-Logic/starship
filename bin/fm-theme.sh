@@ -15,12 +15,12 @@
 #     dark profile's font. The dark profile is the one Terminal used by default
 #     before that first switch, remembered in
 #     data/workspace-theme/terminal-dark-profile; dark moves the cream tabs back
-#     to it.
+#     to it, and leaves Terminal as it is when none is remembered.
 #   - Herdr: the [theme] tables of Herdr's config.toml are replaced with
 #     assets/themes/herdr-light.toml, or for dark with the tables that were
 #     there before the first switch to light (saved in
-#     data/workspace-theme/herdr-dark.toml), else assets/themes/herdr-dark.toml.
-#     Every other line of config.toml stays as it was. The new file must pass
+#     data/workspace-theme/herdr-dark.toml); with nothing saved, dark leaves
+#     config.toml as it is. Every other line of config.toml stays as it was. The new file must pass
 #     `herdr config check` before it replaces the old one, and the old one is
 #     kept as data/workspace-theme/herdr-config.before.toml; then
 #     `herdr server reload-config` applies it to the running workspace.
@@ -239,8 +239,8 @@ terminal_step() {  # light|dark
     say "Terminal: $moved tab(s) and new windows now use $cream (from $dark)"
   else
     if [ -z "$dark" ]; then
-      dark=Basic
-      say "Terminal: no dark profile was remembered; using $dark"
+      say "Terminal: no dark profile is remembered from a switch to light; left as it is"
+      return 0
     fi
     moved=$(osa "$TERMINAL_SWITCH" "$cream" "$dark" 2>&1) \
       || { fail "Terminal: switching to $dark failed: $moved"; return 0; }
@@ -315,7 +315,8 @@ herdr_switch() {  # light|dark <herdr> <temporary directory>
   elif [ -s "$SAVED/herdr-dark.toml" ]; then
     cp "$SAVED/herdr-dark.toml" "$tmp/block"
   else
-    shipped_block "$THEMES/herdr-dark.toml" "$tmp/block"
+    say "Herdr: no dark theme is saved from a switch to light; config.toml left as it is"
+    return 0
   fi
   if [ -f "$HERDR_CONFIG" ] && same_block "$tmp/current" "$tmp/block"; then
     say "Herdr: already $mode"
@@ -391,11 +392,9 @@ cmd_status() {
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-theme.XXXXXX") || return 1
     theme_split "$HERDR_CONFIG" "$tmp/keep" "$tmp/current"
     shipped_block "$THEMES/herdr-light.toml" "$tmp/light"
-    shipped_block "$THEMES/herdr-dark.toml" "$tmp/dark"
     if same_block "$tmp/current" "$tmp/light"; then
       say "Herdr: light theme in config.toml"
-    elif same_block "$tmp/current" "$tmp/dark" \
-      || { [ -s "$SAVED/herdr-dark.toml" ] && same_block "$tmp/current" "$SAVED/herdr-dark.toml"; }; then
+    elif [ -s "$SAVED/herdr-dark.toml" ] && same_block "$tmp/current" "$SAVED/herdr-dark.toml"; then
       say "Herdr: dark theme in config.toml"
     else
       say "Herdr: a theme of its own in config.toml"

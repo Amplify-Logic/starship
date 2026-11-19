@@ -277,8 +277,9 @@ test_an_empty_session_gets_the_whole_desk_in_order() {
   pass "desk: an empty session gets the whole desk, in layout order"
 }
 
-# While bin/fm-theme.sh has the workspace in light, the views open in the
-# cream Terminal profile instead of the layout's own.
+# While bin/fm-theme.sh has the workspace in light, Terminal is given the
+# cream profile for the views beside the layout's own, which it keeps when it
+# has no cream profile yet.
 test_views_open_in_cream_while_the_workspace_is_light() {
   new_case true
   layout
@@ -286,8 +287,8 @@ test_views_open_in_cream_while_the_workspace_is_light() {
   local out
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "open view 1 in Terminal (profile Starship Cream, size 13)" "view 1 is not named in cream"
-  assert_grep "terminal open exec $FAKE/bin/herdr|Starship Cream|13" "$FAKE_HERDR_CALLS" "view 1 did not open in cream"
-  assert_grep "terminal open exec $FAKE/bin/herdr|Starship Cream|10" "$FAKE_HERDR_CALLS" "view 2 did not open in cream"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Big Profile|13|Starship Cream" "$FAKE_HERDR_CALLS" "view 1 was not offered cream"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Small Profile|10|Starship Cream" "$FAKE_HERDR_CALLS" "view 2 was not offered cream"
   pass "desk: views open in the cream profile while the workspace is light"
 }
 
