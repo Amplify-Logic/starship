@@ -78,7 +78,9 @@
 #                          deferred to the same long recheck cadence
 #                          (wedge_defer_validating), while a parked, terminal,
 #                          ci-monitoring, absent or unreadable run, or a home
-#                          without that flag, escalates unchanged.
+#                          without that flag, escalates unchanged - except a
+#                          lane whose own `paused:` wait has elapsed, which is
+#                          consulted without the flag (wedge_defer_validating).
 #                          A pane whose recorded endpoint holds no agent at all is
 #                          not a wedge and is reported ONCE instead of escalating
 #                          on that cadence forever (wedge_dead_record); only the
