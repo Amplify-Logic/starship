@@ -614,6 +614,7 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
   assert_not_contains "$feed" "Sharper cup photos" "a blocker reached the feed"
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (typed) · s who steers · q quit" "keys"
+  assert_not_contains "$out" "first report" "a pane with work shows no first-run hint"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
   assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
@@ -1079,9 +1080,43 @@ test_a_new_home_with_no_work_opens_empty() {
     screen=$(PATH="$path" python3 "$FACTORY" --plain --fresh 2>&1) \
       || fail "the pane did not open on a new home with $(PATH="$path" command -v tasks-axi): $screen"
     assert_contains "$screen" "NOTHING NEEDS YOU" "a new home shows an empty pane"
+    assert_contains "$screen" "Ask Starship for a first report" "an empty pane says what to do next"
+    assert_equals "$(printf '%s\n' "$screen" | tail -n 1)" " q quit" "an empty pane offers only the key that does something"
   done
+  # A registered project with no work yet still gets the hint, and its keys.
+  printf -- '- sample [direct-PR] - a sample (added 2026-11-01)\n' > "$HOME_FIX/data/projects.md"
+  screen=$(python3 "$FACTORY" --plain --fresh 2>&1) || fail "the pane did not open with an idle project: $screen"
+  assert_contains "$screen" "Ask Starship for a first report" "a pane with no work says what to do next"
+  assert_contains "$screen" "enter open" "a pane with a factory still offers its keys"
   [ -n "$REAL_TASKS_AXI" ] || echo "skip: tasks-axi not found; the new home was read through the stand-in only"
-  pass "factory pane: a brand-new home with no work opens and shows an empty pane"
+  pass "factory pane: a brand-new home with no work opens with a first-run hint and only working keys"
+}
+
+# A home that has done work, all of it landed, is idle but not new: RIGHT NOW
+# must not say there is no work yet, whether the landing is still in SINCE YOU
+# LAST LOOKED (today) or has dropped out of its 48-hour look-back (four days ago).
+test_an_idle_home_with_history_shows_no_first_run_hint() {
+  local landed screen
+  for landed in 2026-11-14 2026-11-10; do
+    reset_case
+    write_projects
+    python3 - "$HOME_FIX" "$landed" <<'PY'
+import json, os, sys
+home, landed = sys.argv[1], sys.argv[2]
+rows = [{"id": "cup-photos", "title": "Sharper cup photos", "repo": "sample-shop", "state": "done",
+         "structured": True, "kind": "ship", "captain_actionable": False, "hold_kind": None,
+         "hold_bucket": None, "hold_reason": None, "hold_set": None, "hold_until": None,
+         "unresolved_blocker_ids": [], "since": "2026-11-01",
+         "completion": {"verb": "merged", "date": landed}, "pr_url": None}]
+json.dump({"schema": "fm-fleet-snapshot.v1", "generated": "2026-11-14T08:00:00Z", "tasks": [],
+           "backlog": {"records": rows}}, open(os.path.join(home, "snapshot.json"), "w"))
+PY
+    screen=$(python3 "$FACTORY" --plain --fresh 2>&1) || fail "the pane did not open on an idle home: $screen"
+    assert_contains "$screen" "NOTHING NEEDS YOU" "an idle home has nothing waiting ($landed)"
+    assert_not_contains "$screen" "first report" "an idle home with work landed $landed shows no first-run hint"
+  done
+  assert_contains "$screen" "nothing new" "work landed four days ago is out of the feed"
+  pass "factory pane: an idle home with finished work shows no first-run hint"
 }
 
 test_work_no_factory_claims_is_still_shown() {
@@ -3392,6 +3427,7 @@ fm_test_run \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_a_new_home_with_no_work_opens_empty \
+  test_an_idle_home_with_history_shows_no_first_run_hint \
   test_work_no_factory_claims_is_still_shown \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \
