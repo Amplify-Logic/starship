@@ -1184,15 +1184,18 @@ EOF
 
 # Every pass re-reads what is already open, not only what is new: without it
 # an item closes only when the captain says so. The listed ids and the claim
-# time are kept so `complete` can say how many were not re-read. Fail-soft and
+# time are kept so `complete` can say how many were not re-read, and so the
+# next claim lists other lines before these. Fail-soft and
 # bounded like the page refresh: no store, or a store that cannot list, prints
 # nothing and never costs the claim.
 recheck_claim_lines() {
-  local epoch=$1 out ids
+  local epoch=$1 out ids last
+  last=$(record_field "$RECHECK_FILE" items)
   rm -f "$RECHECK_FILE"
   [ -d "$TODO_STORE/items" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
+  # shellcheck disable=SC2086
   out=$(FM_HOME="$FM_HOME" FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" recheck \
-    --passes-per-day "$(passes_per_day)" 2>/dev/null) || {
+    --passes-per-day "$(passes_per_day)" $last 2>/dev/null) || {
     log_event 'recheck list not available: fm-todo.sh recheck failed'
     return 0
   }

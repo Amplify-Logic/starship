@@ -4,7 +4,7 @@
 # Usage:
 #   fm-todo.sh sync [--morning-json FILE]
 #   fm-todo.sh sweep-start [--at EPOCH] [--pass]
-#   fm-todo.sh recheck [--passes-per-day N | --since EPOCH ID ...]
+#   fm-todo.sh recheck [--passes-per-day N] [ID ...] | recheck --since EPOCH ID ...
 #   fm-todo.sh find --about KEY [--about KEY ...]
 #   fm-todo.sh verify --item ID --how TEXT [--rev REV] [--at EPOCH]
 #   fm-todo.sh close --item ID --evidence TEXT [--reason fulfilled|dismissed|superseded] [--actor NAME]
@@ -87,8 +87,10 @@
 # re-reading them all: the share is at least five lines, at least the lines
 # over three working days of passes (--passes-per-day, default 16), and at
 # least the lines already past three working days spread over one day of
-# passes. When the share leaves lines out, one `TODO_RECHECK: rolling share`
-# line says how many. A parked item, routine activity and a team update are
+# passes. Ids given without --since are the lines the previous claim listed;
+# they are ordered after every other line, so a few lines whose source cannot
+# be read never hold the share pass after pass. When the share leaves lines
+# out, one `TODO_RECHECK: rolling share` line says how many. A parked item, routine activity and a team update are
 # not listed; like a held decision, they answer to the morning sweep's
 # freshness floor, never a pass's. bin/fm-channel-intake.sh `claim` prints
 # these and the pass answers each with `verify` or `close`. `recheck --since EPOCH ID ...`

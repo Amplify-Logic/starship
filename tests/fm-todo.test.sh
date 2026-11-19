@@ -1392,6 +1392,29 @@ test_the_recheck_rolls_through_every_line_in_three_working_days() {
   pass 'the re-check lists a rolling share, oldest check first, and every line within three working days'
 }
 
+test_lines_a_pass_could_not_read_do_not_hold_the_share() {
+  local h n first second id
+  h="$TMP_ROOT/rolling-stuck"
+  new_home "$h"
+  for n in 01 02 03 04 05 06 07 08 09 10 11 12; do
+    intake_at "$h" "$T_0900" observe --source C_BRIEF --ref "r-$n" --digest "d$n" --class obligation \
+      --title "ask number $n" >/dev/null
+  done
+  todo_at "$h" "$T_0900" sync >/dev/null
+  # The first pass cannot read any of the lines it was given.
+  first=$(intake_at "$h" "$T_1000" claim | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p')
+  assert_equals 5 "$(printf '%s\n' "$first" | grep -c .)" 'the first claim did not list a share of five'
+  intake_at "$h" "$T_1000" complete --source C_BRIEF --checkpoint c-1 >/dev/null
+  second=$(intake_at "$h" "$T_1100" claim | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p')
+  assert_equals 5 "$(printf '%s\n' "$second" | grep -c .)" 'the next claim did not list a share of five'
+  for id in $second; do
+    case " $(printf '%s ' $first)" in
+      *" $id "*) fail "a line the last pass could not read held the next share: $id" ;;
+    esac
+  done
+  pass 'lines the last pass could not read go behind the others, so they never hold the share'
+}
+
 test_a_new_ask_about_an_open_line_joins_it() {
   local h out
   h="$TMP_ROOT/about"
@@ -1499,6 +1522,7 @@ test_every_line_has_an_ask_date() {
 
 test_done_on_a_held_decision_files_a_reconcile_request
 test_the_recheck_rolls_through_every_line_in_three_working_days
+test_lines_a_pass_could_not_read_do_not_hold_the_share
 test_a_new_ask_about_an_open_line_joins_it
 test_a_held_decision_never_joins_an_ask
 test_the_add_on_refuses_a_line_when_it_would_be_added

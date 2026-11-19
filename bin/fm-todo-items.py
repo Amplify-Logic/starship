@@ -729,14 +729,17 @@ def working_days_since(epoch, now):
     return count
 
 
-def rolling_share(items, now, passes_per_day):
+def rolling_share(items, now, passes_per_day, last=()):
     """(listed, every candidate, how many are past the window): oldest check first.
 
     A pass lists a share big enough that every line comes up within
     RECHECK_WORKING_DAYS working days, and the lines already past it within one
-    working day, never fewer than RECHECK_FLOOR."""
+    working day, never fewer than RECHECK_FLOOR. Lines the previous claim
+    listed go after the rest, so lines no pass can read never hold the share."""
     ppd = max(1, passes_per_day or DEFAULT_PASSES_PER_DAY)
-    due = sorted(recheck_listed(items, now), key=lambda r: (number(r['verification'].get('at')), r['id']))
+    last = set(last)
+    due = sorted(recheck_listed(items, now),
+                 key=lambda r: (r['id'] in last, number(r['verification'].get('at')), r['id']))
     late = sum(1 for r in due if working_days_since(r['verification'].get('at'), now) >= RECHECK_WORKING_DAYS)
     share = max(RECHECK_FLOOR, math.ceil(len(due) / (RECHECK_WORKING_DAYS * ppd)), math.ceil(late / ppd))
     return due[:share], len(due), late
@@ -744,7 +747,7 @@ def rolling_share(items, now, passes_per_day):
 
 def recheck(args, items, now):
     if not args.since:
-        listed, total, late = rolling_share(items, now, args.passes_per_day)
+        listed, total, late = rolling_share(items, now, args.passes_per_day, args.lines)
         for rec in listed:
             print('\t'.join(['recheck: ' + rec['id'], rec['rev'], rec['state'], rec.get('label', ''),
                              ' '.join(source_refs(rec)), rec.get('link', ''), rec.get('title', '')]))
