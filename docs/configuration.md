@@ -1166,7 +1166,8 @@ With it present, a provably-working pane about to escalate is deferred to the `F
 The recheck names that run instead of reporting a suspected wedge, the escalation count does not rise, and a run that is parked, terminal, ci-monitoring, absent or unreadable keeps the ladder.
 The away-mode daemon has no such deferral of its own.
 
-With the flag absent the wedge timer spends no current-state read for it and keeps the unchanged escalation schedule, reasons, and `demand-deep-inspection` wording.
+One lane gets this deferral without the flag: a worker whose own newest declared wait is a `paused:` line whose clearing time has passed, because a run still executing is what that worker said it was waiting on.
+With the flag absent every other lane spends no current-state read for it and keeps the unchanged escalation schedule, reasons, and `demand-deep-inspection` wording.
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes.
 [`architecture.md`](architecture.md) owns the deferral contract and `bin/fm-classify-lib.sh`'s `crew_run_is_validating` owns which verdicts count.
 
