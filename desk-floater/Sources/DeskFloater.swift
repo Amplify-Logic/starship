@@ -445,6 +445,7 @@ final class HotkeyMonitor {
     private var talkKey = TalkKey()
     private var dictateKey = TapKey.rightCommand
     private var shotKey = TapKey.rightShift
+    private var secureSkipShown = false
 
     func start() {
         let defaults = UserDefaults.standard
@@ -520,6 +521,9 @@ final class HotkeyMonitor {
 
     private func handle(_ event: NSEvent) {
         let at = TapKey.time(of: event)
+        if secureSkipShown && !IsSecureEventInputEnabled() {
+            secureSkipShown = false
+        }
         if event.type != .flagsChanged {
             // A key or click while a hotkey is held makes it a shortcut, not a
             // hotkey: Option-letter types a character, Command-click opens a link.
@@ -570,19 +574,19 @@ final class HotkeyMonitor {
     /// A Right Shift tap becomes a screenshot only once typing has not resumed
     /// right after it. While secure typing is on (a password field, or a
     /// terminal's Secure Keyboard Entry) macOS hides key presses from the
-    /// floater, so a capital letter would read as a lone Shift tap: no shot then.
+    /// floater, so a capital letter would read as a lone Shift tap: no shot then,
+    /// and the reason shows once until secure typing turns off again.
     private func shotTapped(at tap: Date) {
         guard !IsSecureEventInputEnabled() else {
-            onShotSkipped?("Shot skipped - secure")
+            if !secureSkipShown {
+                secureSkipShown = true
+                onShotSkipped?("Shot skipped - secure")
+            }
             return
         }
         Timer.scheduledTimer(withTimeInterval: shotKey.settle, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                guard self.shotKey.takeSettled(tap: tap) else {
-                    self.reportShotSkip()
-                    return
-                }
+                guard let self, self.shotKey.takeSettled(tap: tap) else { return }
                 self.onShotTap?()
             }
         }
