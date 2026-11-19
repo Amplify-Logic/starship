@@ -999,12 +999,10 @@ test_ready_work_the_overview_has_not_listed_reads_busy() {
   pass "factory record: ready work reads busy until the shared overview lists it, then ready to merge"
 }
 
-# A worker whose checks are running sits with an idle pane, and its reading
-# can come back unverified between two readings (the run reader's unknown).
-# The count line counts that live worker busy, so its row must stay busy at
-# checking too, reading "checks running", rather than dropping out until the
-# next reading.
-test_a_worker_whose_checks_run_stays_busy_between_readings() {
+# A worker whose checks are running reads steadily busy at checking, "checks
+# running", as the count line counts it. A run-step reading the reader could
+# not verify (unknown) keeps "no reading" rather than claiming checks run.
+test_a_worker_whose_checks_run_reads_checks_running() {
   reset_case
   write_registry
   write_world
@@ -1012,19 +1010,24 @@ test_a_worker_whose_checks_run_stays_busy_between_readings() {
   chmod +x "$TMP_ROOT/case$CASE/probe"
   printf 'window=tmux:fm-shop-checkout\n' >> "$HOME_FIX/state/shop-checkout.meta"
   local reading
-  for reading in "working|validating (running) · run: r9" "unknown|selected run status unverified; run ids: r9"; do
-    jq --arg s "${reading%%|*}" --arg d "${reading#*|}" '(.tasks[] | select(.id == "shop-checkout").current_state)
+  for reading in "working|validating (running) · run: r9|busy|checking|checks running" \
+    "unknown|selected run status unverified; run ids: r9|no reading|null|null"; do
+    local s="${reading%%|*}" rest="${reading#*|}"
+    local d="${rest%%|*}" want="${rest#*|}"
+    jq --arg s "$s" --arg d "$d" '(.tasks[] | select(.id == "shop-checkout").current_state)
       |= (.state = $s | .source = "run-step" | .detail = $d | .raw = "state: \($s) · source: run-step · \($d)")' \
       "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
     FM_FLEET_STATE_PROBE="$TMP_ROOT/case$CASE/probe" overview_cached data > "$TMP_ROOT/case$CASE/record.json" \
       || fail "--data failed"
     assert_equals "$(q '.factories[] | .jobs[] | select(.id == "shop-checkout") | "\(.state)|\(.step)|\(.doing)"')" \
-      "busy|checking|checks running" "a worker whose checks run on a ${reading%%|*} reading left busy"
-    assert_equals "$(q .counts.busy)" "2" "the count line on a ${reading%%|*} reading"
-    assert_equals "$(q '.factories[] | select(.id == "sample-shop") | .crew.busy')" "2" \
-      "the factory's busy count on a ${reading%%|*} reading"
+      "$want" "a worker on a $s run-step reading"
+    if [[ "$s" == working ]]; then
+      assert_equals "$(q .counts.busy)" "2" "the count line on a working reading"
+      assert_equals "$(q '.factories[] | select(.id == "sample-shop") | .crew.busy')" "2" \
+        "the factory's busy count on a working reading"
+    fi
   done
-  pass "factory record: a worker whose checks run stays busy as the count line counts it"
+  pass "factory record: running checks read checks running; an unknown run-step reading reads no reading"
 }
 
 # A home whose backlog is not markdown has no rows in the snapshot's markdown
@@ -3398,7 +3401,7 @@ fm_test_run \
   test_terminal_theme_detection \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
-  test_a_worker_whose_checks_run_stays_busy_between_readings \
+  test_a_worker_whose_checks_run_reads_checks_running \
   test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
   test_a_factory_page_shows_its_rules_size_against_the_cap \

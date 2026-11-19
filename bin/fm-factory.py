@@ -1402,11 +1402,10 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             bucket = "ready"
         if bucket == "working":
             job.update(state="busy", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (not bucket and state.get("source") == "run-step"):
-            # A checks run the reader could not verify this time (unknown) or
-            # parked short of a decision folds to no field, which the overview
-            # counts busy while the worker lives (_fm_fleet_collect), so it
-            # stays busy here too rather than dropping out between readings.
+        elif bucket == "validating" or (not bucket and state.get("state") == "parked"
+                                        and state.get("source") == "run-step"):
+            # A run the reader reports validating, or a run-step reading parked
+            # short of a decision, reads busy at checking.
             job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")
         elif bucket == "decision":
             # A worker's question, or a review finding the checks put to
