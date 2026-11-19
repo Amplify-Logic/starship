@@ -215,7 +215,7 @@ import tempfile
 import threading
 import time
 
-from fm_terminal_theme import DARK, palette, select_theme
+from fm_terminal_theme import DARK, palette, remembered_theme, select_theme
 import wave
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -4072,9 +4072,23 @@ def reexec() -> None:
 
 
 def use_terminal_theme() -> None:
-    global PALETTE, BAND, HULL
+    global PALETTE, BAND, HULL, THEME_SEEN
+    THEME_SEEN = remembered_theme()
     PALETTE = palette(select_theme(query=sys.stdout.isatty()))
     BAND, HULL = PALETTE["band"], PALETTE["hull"]
+
+
+THEME_SEEN: Optional[str] = None
+
+
+def theme_switched() -> bool:
+    """True, with the new colours in use, when bin/fm-theme.sh switched the
+    remembered theme since this pane chose its colours; the caller repaints."""
+    now = remembered_theme()
+    if now is None or now == THEME_SEEN:
+        return False
+    use_terminal_theme()
+    return True
 
 
 def live(pane: Pane) -> None:
@@ -4103,6 +4117,8 @@ def live(pane: Pane) -> None:
             if view.talking is None and view.confirm is None and view.notice is None and watch.changed():
                 reload = True
                 break
+            if theme_switched():
+                resized[0] = True
             pane.reload()
             pane.watch_calls()
             if time.time() - focus_checked > 3:
@@ -4278,6 +4294,7 @@ def follow(home: str, task_id: str) -> None:
             if watch.changed():
                 reload = True
                 break
+            theme_switched()
             record = cached(home)
             if record is not None:
                 job = job_in(record, task_id)

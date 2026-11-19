@@ -1,0 +1,37 @@
+# Starship's light Herdr theme, cream: warm paper, brown-black ink, muted lamps.
+# bin/fm-theme.sh writes this [theme] block into Herdr's config.toml for light.
+# The colours match the cream Terminal profile and the light palette in
+# bin/fm_terminal_theme.py.
+[theme]
+name = "solarized-light"
+
+auto_switch = false
+
+[theme.custom]
+# Where you are: deep teal.
+accent        = "#1a626b"    # teal      border of the pane you are in, and highlights
+
+# Surfaces. The panes themselves keep the terminal background, which the cream
+# Terminal profile sets to paper, #f6f0e4.
+panel_bg      = "#ece4d4"    # hull      tab bar, menus and pop-up panels
+sidebar_bg    = "#ece4d4"    # hull      the sidebar
+surface0      = "#e4dac7"    # deck      a selected or focused item
+surface1      = "#d9ccb4"    # bezel     the row under the pointer
+surface_dim   = "#d9ccb4"    # bezel     separators and the scrollbar track
+active_row_bg = "#d9ccb4"    # bezel     the workspace and the worker you are in
+selection_bg  = "#cbbb9e"    # bezel-lit the cursor row while you navigate with the keyboard
+
+# Text.
+text          = "#3a3128"    # ink       everything you read
+subtext0      = "#54493b"    # mist      second-level text
+overlay1      = "#54493b"    # mist      brighter hints
+overlay0      = "#6a5e4d"    # faint     quiet hints, the border of a pane you are not in, an unknown state
+mauve         = "#54493b"    # mist      branch names
+
+# Lamps. Herdr draws each worker's state in one of these.
+yellow        = "#7e4c0e"    # ochre     working: you are waiting for it
+teal          = "#34683f"    # green     done
+green         = "#34683f"    # green     idle, and lines added in git
+red           = "#9c382f"    # brick     blocked: it is waiting for you
+peach         = "#7e4c0e"    # ochre     interrupted, and warnings
+blue          = "#1a626b"    # teal      something new to look at

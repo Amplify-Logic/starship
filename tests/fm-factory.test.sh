@@ -1569,6 +1569,64 @@ while True:   # keep reading so its last writes drain and it can exit
 PY
 }
 
+# A switch by bin/fm-theme.sh repaints a running Factory pane in place, in the
+# switched colours (cream ink 58;49;40 for dark ice 232;238;247).
+test_the_live_pane_repaints_when_the_theme_is_switched() {
+  local took
+  reset_case
+  write_registry
+  write_world
+  mkdir -p "$HOME_FIX/config"
+  printf 'dark\n' > "$HOME_FIX/config/workspace-theme"
+  overview_cached python3 "$FACTORY" refresh || fail "the first record could not be built"
+  took=$(overview_cached python3 - "$FACTORY" "$HOME_FIX/config/workspace-theme" <<'PY'
+import fcntl, os, pty, select, struct, sys, termios, time
+factory, choice = sys.argv[1:3]
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 100, 0, 0))
+    os.execvp("python3", ["python3", factory, "view"])
+seen = b""
+def drain(seconds, until, start=0):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end:
+        if until in seen[start:]:
+            return True
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                seen += os.read(fd, 65536)
+            except OSError:
+                break
+    return False
+result = "no dark screen"
+if drain(20, b"38;2;232;238;247m"):
+    mark = len(seen)
+    began = time.time()
+    with open(choice + ".new", "w") as handle:
+        handle.write("light\n")
+    os.rename(choice + ".new", choice)
+    result = "%.1f" % (time.time() - began) if drain(15, b"38;2;58;49;40m", mark) else "never"
+    alive = os.waitpid(pid, os.WNOHANG)[0] == 0
+    result += "" if alive else " ended"
+print(result)
+os.write(fd, b"q")
+end = time.time() + 15
+while not os.waitpid(pid, os.WNOHANG)[0]:
+    if time.time() >= end:
+        os.kill(pid, 9)
+        break
+    drain(0.3, b"\0never")
+PY
+) || fail "the live pane could not be driven"
+  case "$took" in
+    never|'no dark screen'|''|*ended) fail "the live pane did not repaint in cream: $took" ;;
+  esac
+  awk -v t="$took" 'BEGIN { exit !(t < 3) }' || fail "the live pane took ${took}s to repaint"
+  pass "factory pane: a running pane repaints in the switched theme in place (${took}s)"
+}
+
 # On 2026-11-15 the owner parked a held decision and it stayed on screen: the
 # pane refreshed its record only every twenty seconds, and a whole refresh
 # reads every worker. A changed call now rebuilds the record on its own.
@@ -2555,8 +2613,8 @@ test_a_live_copy_follows_the_terminal_theme() {
   assert_contains "$dark" "live copy" "the dark copy draws"
   assert_contains "$light" "live copy" "the light copy draws"
   assert_contains "$dark" "38;2;116;215;234m" "the dark title is the dark palette's cyan"
-  assert_contains "$light" "38;2;0;99;120m" "the light title is the light palette's cyan"
-  assert_contains "$light" "38;2;86;103;125m" "the light read-only note is the light palette's faint"
+  assert_contains "$light" "38;2;26;98;107m" "the light title is the light palette's cyan"
+  assert_contains "$light" "38;2;106;94;77m" "the light read-only note is the light palette's faint"
   assert_not_contains "$light" "38;2;116;215;234m" "the light copy still paints the dark cyan"
   pass "factory tab: a worker's live copy paints with the terminal's theme"
 }
@@ -3348,7 +3406,10 @@ test_terminal_theme_detection() {
   python3 - "$ROOT/bin" <<'PY' || fail "terminal theme detection"
 import os, pty, re, select, sys, termios, time
 sys.path.insert(0, sys.argv[1])
-from fm_terminal_theme import background_theme, select_theme, palette
+from fm_terminal_theme import background_theme, remembered_theme, select_theme, palette
+import tempfile
+home = tempfile.mkdtemp()
+os.environ['FM_HOME'] = home
 
 for colour, expected in [('ffff/ffff/ffff', 'light'), ('00/00/00', 'dark'),
                          ('f/f/f', 'light'), ('000/FFF/000', 'light'),
@@ -3368,6 +3429,22 @@ for setting, fallback, expected in [
 ]:
     os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG=fallback)
     assert select_theme(query=False) == expected, (setting, fallback)
+
+# The home's remembered theme (bin/fm-theme.sh) comes after an explicit
+# FM_TERMINAL_THEME and before detection; anything but light or dark is ignored.
+os.makedirs(os.path.join(home, 'config'))
+for remembered, setting, fallback, expected in [
+    ('light\n', 'auto', '15;0', 'light'), ('dark\n', 'auto', '0;15', 'dark'),
+    ('light\n', 'dark', '0;15', 'dark'), ('dark\n', 'light', '15;0', 'light'),
+    ('sepia\n', 'auto', '0;15', 'light'), ('', 'auto', '15;0', 'dark'),
+]:
+    with open(os.path.join(home, 'config', 'workspace-theme'), 'w') as handle:
+        handle.write(remembered)
+    os.environ.update(FM_TERMINAL_THEME=setting, COLORFGBG=fallback)
+    assert select_theme(query=False) == expected, (remembered, setting, fallback)
+assert remembered_theme() is None
+os.remove(os.path.join(home, 'config', 'workspace-theme'))
+assert remembered_theme() is None
 
 # Real tty query: fragmented replies, timeout, precedence, and restoration.
 for setting, response, expected in [
@@ -3440,6 +3517,7 @@ fm_test_run \
   test_a_worker_whose_checks_run_reads_checks_running \
   test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
+  test_the_live_pane_repaints_when_the_theme_is_switched \
   test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \
   test_parked_work_says_until_when_it_is_parked \

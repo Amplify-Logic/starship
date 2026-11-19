@@ -1114,19 +1114,49 @@ test_terminal_theme_colours() {
   light=$(FM_TERMINAL_THEME=light frame 110)
   auto=$(FM_TERMINAL_THEME=auto COLORFGBG='0;15' frame 110)
   assert_contains "$dark" "$HULL_BG" "dark keeps the original hull"
-  assert_contains "$light" "${E}[48;2;242;246;251m" "light hull"
-  assert_contains "$light" "${E}[38;2;0;99;120m" "light wordmark"
-  assert_contains "$light" "${E}[38;2;139;78;0m" "light busy lamp"
-  assert_contains "$light" "${E}[38;2;21;108;65m" "light ready lamp"
-  assert_contains "$light" "${E}[38;2;179;43;35m" "light decision lamp"
+  assert_contains "$light" "${E}[48;2;236;228;212m" "light hull is cream"
+  assert_contains "$light" "${E}[38;2;26;98;107m" "light wordmark"
+  assert_contains "$light" "${E}[38;2;126;76;14m" "light busy lamp"
+  assert_contains "$light" "${E}[38;2;52;104;63m" "light ready lamp"
+  assert_contains "$light" "${E}[38;2;156;56;47m" "light decision lamp"
   assert_equals "$auto" "$light" "auto uses COLORFGBG off a tty"
   assert_equals "$(printf '%s' "$dark" | plain)" "$(printf '%s' "$light" | plain)" "theme changes no layout or words"
   assert_equals "$(FM_TERMINAL_THEME=auto COLORFGBG='' frame 110)" "$dark" "no detection keeps dark"
-  pass "bridge strip: override and auto change only colours"
+  # The home's remembered theme (bin/fm-theme.sh) wins over detection, and an
+  # explicit FM_TERMINAL_THEME wins over it.
+  printf 'light\n' > "$HOME_FIX/config/workspace-theme"
+  assert_equals "$(FM_TERMINAL_THEME=auto COLORFGBG='0;0' frame 110)" "$light" "the remembered light theme"
+  assert_equals "$(FM_TERMINAL_THEME=dark frame 110)" "$dark" "an explicit override wins over the remembered theme"
+  printf 'dark\n' > "$HOME_FIX/config/workspace-theme"
+  assert_equals "$(FM_TERMINAL_THEME=auto COLORFGBG='0;15' frame 110)" "$dark" "the remembered dark theme"
+  pass "bridge strip: override, remembered theme and auto change only colours"
+}
+
+test_a_running_strip_repaints_when_the_theme_is_switched() {
+  local out from tries=40
+  reset_case
+  a_busy_fleet
+  out="$TMP_ROOT/case$CASE/frames"
+  printf 'dark\n' > "$HOME_FIX/config/workspace-theme"
+  start_loop "$ROOT" "$out"
+  shows "$out" '1 decision for you' 15 || { stop_loop; fail "the strip did not start: $(plain < "$out")"; }
+  assert_contains "$(cat "$out")" "$HULL_BG" "the strip did not start in the remembered dark theme"
+  from=$(($(wc -c < "$out") + 1))
+  printf 'light\n' > "$HOME_FIX/config/workspace-theme.new"
+  mv "$HOME_FIX/config/workspace-theme.new" "$HOME_FIX/config/workspace-theme"
+  until tail -c "+$from" "$out" | grep -qF "${E}[48;2;236;228;212m"; do
+    tries=$((tries - 1))
+    [ "$tries" -gt 0 ] || { stop_loop; fail "a running strip did not repaint in cream after the switch"; }
+    sleep 0.1
+  done
+  kill -0 "$LOOP_PID" 2>/dev/null || fail "the strip's process ended rather than repainting in place"
+  stop_loop
+  pass "bridge strip: a running strip repaints in the switched theme within seconds, in place"
 }
 
 fm_test_run \
   test_terminal_theme_colours \
+  test_a_running_strip_repaints_when_the_theme_is_switched \
   test_a_fleet_lights_busy_decision_and_ready_lamps \
   test_the_decision_lamp_counts_in_its_own_words \
   test_only_the_owners_live_held_decisions_light_the_red_lamp \
