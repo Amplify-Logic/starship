@@ -535,9 +535,12 @@ def step(kind: str, text: str, **extra: Any) -> Dict[str, Any]:
 
 def view_text(index: int, view: Dict[str, Any], terminal: str = "Terminal") -> str:
     parts = []
-    profile = cream_profile() or view["profile"]
-    if terminal == "Terminal" and profile:
-        parts.append("profile %s" % profile)
+    if terminal == "Terminal":
+        cream = cream_profile()
+        if cream:
+            parts.append("profile %s, else %s" % (cream, view["profile"] or "the default"))
+        elif view["profile"]:
+            parts.append("profile %s" % view["profile"])
     if view["size"]:
         parts.append("size %s" % view["size"])
     return "view %d in %s%s" % (index + 1, terminal, " (%s)" % ", ".join(parts) if parts else "")
@@ -818,7 +821,7 @@ def open_ghostty(size: str) -> None:
 def cream_profile() -> str:
     """Starship's cream Terminal profile while the workspace is light, else nothing."""
     theme = subprocess.run(["bash", os.path.join(ROOT, "bin", "fm-theme.sh"), "terminal-profile"],
-                           capture_output=True, text=True, env=dict(os.environ, FM_HOME=home_dir()))
+                           capture_output=True, text=True)
     return theme.stdout.strip() if theme.returncode == 0 else ""
 
 

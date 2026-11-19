@@ -286,7 +286,7 @@ test_views_open_in_cream_while_the_workspace_is_light() {
   printf 'light\n' > "$FM_HOME/config/workspace-theme"
   local out
   out=$(desk open) || fail "open failed: $out"
-  assert_contains "$out" "open view 1 in Terminal (profile Starship Cream, size 13)" "view 1 is not named in cream"
+  assert_contains "$out" "open view 1 in Terminal (profile Starship Cream, else Big Profile, size 13)" "view 1 is not named in cream"
   assert_grep "terminal open exec $FAKE/bin/herdr|Big Profile|13|Starship Cream" "$FAKE_HERDR_CALLS" "view 1 was not offered cream"
   assert_grep "terminal open exec $FAKE/bin/herdr|Small Profile|10|Starship Cream" "$FAKE_HERDR_CALLS" "view 2 was not offered cream"
   pass "desk: views open in the cream profile while the workspace is light"

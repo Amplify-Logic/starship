@@ -72,6 +72,9 @@ cat > "$BINDIR/herdr" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_THEME_TEST_HERDR_CALLS"
 case "$1 $2" in
+  'plugin config-dir')
+    [ -n "${FM_THEME_TEST_PLUGINS:-}" ] || exit 1
+    echo "$FM_THEME_TEST_PLUGINS/$3" ;;
   'config check')
     [ -z "${FM_THEME_TEST_CHECK_FAILS:-}" ] || { echo "config: issues found"; exit 1; }
     grep -q '^\[theme\]' "$HERDR_CONFIG_PATH" || exit 1
@@ -241,6 +244,28 @@ test_missing_parts_are_skipped_not_failed() {
   pass "theme: a closed Terminal, no Terminal or no Herdr is reported and skipped"
 }
 
+# With no FM_HOME, the choice goes to the home the bridge strip was installed
+# for (recorded by its install in Herdr's plugin config), which is where the
+# strip and the Factory pane read it.
+test_without_fm_home_the_installed_home_is_used() {
+  local plugins out
+  reset_case
+  plugins="$TMP_ROOT/case$CASE/plugins"
+  mkdir -p "$plugins/starship.bridge"
+  printf '%s\n' "$HOME_FIX" > "$plugins/starship.bridge/home"
+  out=$(env -u FM_HOME FM_THEME_TEST_PLUGINS="$plugins" HERDR_BIN_PATH="$BINDIR/herdr" HERDR_CONFIG_PATH="$HCONF" \
+    FM_THEME_OSASCRIPT='' FM_THEME_TEST_HERDR_CALLS="$TMP_ROOT/case$CASE/herdr-calls" bash "$THEME" light) \
+    || fail "light failed: $out"
+  assert_eq "$(cat "$HOME_FIX/config/workspace-theme")" light "light was not remembered in the strip's installed home"
+  out=$(env -u FM_HOME FM_THEME_TEST_PLUGINS="$plugins" HERDR_BIN_PATH="$BINDIR/herdr" FM_THEME_OSASCRIPT='' \
+    HERDR_CONFIG_PATH="$HCONF" bash "$THEME" status)
+  assert_has "$out" "Home: $HOME_FIX" "status does not name the home it read"
+  assert_has "$out" 'Remembered: light' "status did not read the installed home"
+  assert_eq "$(env -u FM_HOME FM_THEME_TEST_PLUGINS="$plugins" HERDR_BIN_PATH="$BINDIR/herdr" bash "$THEME" terminal-profile)" \
+    "$CREAM" "the desk would not read the installed home"
+  pass "theme: with no FM_HOME, the choice is kept in the home the bridge strip was installed for"
+}
+
 test_usage() {
   local rc=0
   theme sepia >/dev/null 2>&1 || rc=$?
@@ -258,4 +283,5 @@ fm_test_run \
   test_dark_with_nothing_saved_leaves_terminal_and_herdr_alone \
   test_status_changes_nothing \
   test_missing_parts_are_skipped_not_failed \
+  test_without_fm_home_the_installed_home_is_used \
   test_usage

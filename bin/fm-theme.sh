@@ -44,8 +44,10 @@
 #                                   (bin/fm-desk.py opens its views in it)
 #
 # Environment:
-#   FM_HOME            the home whose choice is remembered (default: this code
-#                      root)
+#   FM_HOME            the home whose choice is remembered (default: the home
+#                      the bridge strip, else the Factory pane, was installed
+#                      for, as they read it from Herdr's plugin config; else
+#                      this code root)
 #   HERDR_BIN_PATH     the Herdr binary (default: herdr on PATH)
 #   HERDR_CONFIG_PATH  Herdr's config file (default: ~/.config/herdr/config.toml)
 # Test seams:
@@ -61,7 +63,23 @@ set -u
 SCRIPT_DIR=$(CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 ROOT=$(CDPATH='' cd -P -- "$SCRIPT_DIR/.." && pwd -P)
 ME=fm-theme.sh
-FM_HOME=${FM_HOME:-$ROOT}
+herdr_bin() { printf '%s' "${HERDR_BIN_PATH:-herdr}"; }
+
+# The home the panes read the choice from when FM_HOME is unset: the one
+# `install` recorded for the bridge strip, else for the Factory pane.
+installed_home() {
+  local plugin dir recorded
+  command -v "$(herdr_bin)" >/dev/null 2>&1 || return 1
+  for plugin in starship.bridge starship.factory; do
+    dir=$("$(herdr_bin)" plugin config-dir "$plugin" 2>/dev/null | tail -n 1) || continue
+    [ -n "$dir" ] && [ -f "$dir/home" ] || continue
+    recorded=$(head -n 1 "$dir/home")
+    [ -z "$recorded" ] || { printf '%s' "$recorded"; return 0; }
+  done
+  return 1
+}
+
+[ -n "${FM_HOME:-}" ] || FM_HOME=$(installed_home) || FM_HOME=$ROOT
 CHOICE_FILE="$FM_HOME/config/workspace-theme"
 SAVED="$FM_HOME/data/workspace-theme"
 THEMES="$ROOT/assets/themes"
@@ -79,8 +97,6 @@ usage() {
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '%s: %s\n' "$ME" "$*" >&2; FAILED=1; }
-
-herdr_bin() { printf '%s' "${HERDR_BIN_PATH:-herdr}"; }
 
 remembered() {
   local value=''
@@ -368,6 +384,7 @@ cmd_status() {
   local choice cream answer tmp
   choice=$(remembered)
   [ -n "$choice" ] || choice="nothing yet (panes follow the terminal background)"
+  say "Home: $FM_HOME"
   say "Remembered: $choice"
   case "${FM_TERMINAL_THEME:-}" in
     light|dark) say "Note: FM_TERMINAL_THEME=$FM_TERMINAL_THEME is set here and wins in panes started with it" ;;
