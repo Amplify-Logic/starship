@@ -1300,6 +1300,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factory.update(steered_by=steering.get(factory["id"], "Starship"), jobs=[], needs=[], talk=[])
 
     rows = [r for r in (snapshot.get("backlog") or {}).get("records") or [] if r.get("structured") and r.get("id")]
+    history = bool(rows)
     tasks = live_tasks(snapshot)
     if buckets is None:
         buckets = buckets_for(tasks)
@@ -1732,6 +1733,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                       for f in factories],
         "rules_cap": PROFILE_CAP,
         "feed": feed,
+        "history": history,
         "snapshot": {"generated": snapshot.get("generated"), "schema": snapshot.get("schema")},
     }
 
@@ -2994,8 +2996,8 @@ class View:
         else:
             rows += [row(width, [S(" NOTHING NEEDS YOU", "green", True)]), row(width)]
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
-        if not needs and not self.record["feed"] and \
-                not any(f["jobs"] or f["idle_since"] for f in self.record["factories"]):
+        if not needs and not self.record.get("history", True) and \
+                not any(f["jobs"] for f in self.record["factories"]):
             # A first run: say what to do next instead of an empty screen.
             rows += flow(width, [S("     ")], FIRST_RUN_HINT, "ice")
             rows.append(row(width))
