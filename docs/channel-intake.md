@@ -26,7 +26,7 @@ A tick therefore looks like this.
 
 1. launchd runs `tick`. It reads no source and finds the due set from each source's own checkpoint and backoff.
 2. If anything is due it records one armed cycle and appends exactly one wake.
-3. The orchestrator runs `claim`, which hands back each due source's checkpoint, its coverage sentence, the bounded revision window, the tracked thread parents with their reply markers, any extra read the source's kind owes, and `recheck:` lines for a rolling share of the open and waiting to-do items that name a source, oldest check first, so each is re-read at least once in three working days; `bin/fm-todo.sh --help` owns which items are listed and how big the share is.
+3. The orchestrator runs `claim`, which hands back each due source's checkpoint, its coverage sentence, the bounded revision window, the tracked thread parents with their reply markers, any extra read the source's kind owes, and `recheck:` lines for a rolling share of the open and waiting to-do items that name a source, round robin from where the previous claim stopped, so each is re-read at least once in three working days; `bin/fm-todo.sh --help` owns which items are listed and how big the share is.
    It then records the pass with `bin/fm-todo.sh sweep-start --pass`, so every listed item the pass does not re-read shows as not re-checked.
 4. The orchestrator reads those sources through its own authenticated connector path.
    It re-reads every `recheck:` item at its source in the same pass, applying the closing rules in `daily-todo-freshness`, and records each outcome with `bin/fm-todo.sh verify` or, with the evidence, `bin/fm-todo.sh close`.

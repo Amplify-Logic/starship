@@ -1185,7 +1185,7 @@ EOF
 # Every pass re-reads what is already open, not only what is new: without it
 # an item closes only when the captain says so. The listed ids and the claim
 # time are kept so `complete` can say how many were not re-read, and so the
-# next claim lists other lines before these. Fail-soft and
+# next claim starts its share after them. Fail-soft and
 # bounded like the page refresh: no store, or a store that cannot list, prints
 # nothing and never costs the claim.
 recheck_claim_lines() {

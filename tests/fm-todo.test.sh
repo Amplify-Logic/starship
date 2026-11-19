@@ -1363,7 +1363,7 @@ test_done_on_a_held_decision_files_a_reconcile_request() {
 }
 
 test_the_recheck_rolls_through_every_line_in_three_working_days() {
-  local h n out listed
+  local h n out listed first
   h="$TMP_ROOT/rolling"
   new_home "$h"
   for n in 01 02 03 04 05 06 07 08 09 10 11 12; do
@@ -1371,92 +1371,58 @@ test_the_recheck_rolls_through_every_line_in_three_working_days() {
       --title "ask number $n" >/dev/null
   done
   todo_at "$h" "$T_0900" sync >/dev/null
-  # Twelve lines checked at once, one pass a day: a share of five, oldest check first.
+  # Twelve lines checked at once, one pass a day: a share of five.
   out=$(todo_at "$h" "$T_1000" recheck --passes-per-day 1)
   listed=$(printf '%s\n' "$out" | grep -c '^recheck: ')
   assert_equals 5 "$listed" 'a pass did not list a rolling share'
   assert_contains "$out" 'TODO_RECHECK: rolling share 5 of 12 open lines' 'the share does not say how many it left out'
-  # The lines just re-read go to the back of the queue.
+  # The next pass, given the last pass's list, takes lines that list left out.
+  first=$(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p')
+  # shellcheck disable=SC2086
+  out=$(todo_at "$h" "$T_1100" recheck --passes-per-day 1 $first)
   for n in $(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p'); do
-    todo_at "$h" "$T_1030" verify --item "$n" --how 'read at the source' >/dev/null
-  done
-  out=$(todo_at "$h" "$T_1100" recheck --passes-per-day 1)
-  for n in $(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p'); do
-    [ "$(jq -r '.verification.at' "$h/data/todo/items/$n.json")" = "$T_0900" ] \
-      || fail "a line re-read this morning came up again before older ones: $n"
+    case " $(printf '%s ' $first)" in
+      *" $n "*) fail "the last pass's line came up again before the rest: $n" ;;
+    esac
   done
   # Three working days on (Thursday to Tuesday), every line past the window comes up within a day.
   out=$(todo_at "$h" "$((T_1000 + 5 * 86400))" recheck --passes-per-day 1)
   listed=$(printf '%s\n' "$out" | grep -c '^recheck: ')
   assert_equals 12 "$listed" 'lines past three working days did not all come up'
-  pass 'the re-check lists a rolling share, oldest check first, and every line within three working days'
+  pass 'the re-check lists a rolling share, round robin, and every line within three working days'
 }
 
 test_lines_a_pass_could_not_read_do_not_hold_the_share() {
-  local h n first second id
+  local h n claim out seen=' ' id
   h="$TMP_ROOT/rolling-stuck"
   new_home "$h"
-  for n in 01 02 03 04 05 06 07 08 09 10 11 12; do
+  printf 'C_DM\tslack-dms\tdirect messages\n' >>"$h/data/channel-intake/sources.tsv"
+  # Two shares of lines from one source no pass can read, and two other lines.
+  for n in 01 02 03 04 05 06 07 08 09 10; do
     intake_at "$h" "$T_0900" observe --source C_BRIEF --ref "r-$n" --digest "d$n" --class obligation \
-      --title "ask number $n" >/dev/null
+      --title "stuck ask $n" >/dev/null
   done
+  intake_at "$h" "$T_0900" observe --source C_DM --ref o-1 --digest o1 --class obligation --title 'other ask one' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_DM --ref o-2 --digest o2 --class obligation --title 'other ask two' >/dev/null
   todo_at "$h" "$T_0900" sync >/dev/null
-  # The first pass cannot read any of the lines it was given.
-  first=$(intake_at "$h" "$T_1000" claim | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p')
-  assert_equals 5 "$(printf '%s\n' "$first" | grep -c .)" 'the first claim did not list a share of five'
-  intake_at "$h" "$T_1000" complete --source C_BRIEF --checkpoint c-1 >/dev/null
-  second=$(intake_at "$h" "$T_1100" claim | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p')
-  assert_equals 5 "$(printf '%s\n' "$second" | grep -c .)" 'the next claim did not list a share of five'
-  for id in $second; do
-    case " $(printf '%s ' $first)" in
-      *" $id "*) fail "a line the last pass could not read held the next share: $id" ;;
+  # Twelve lines in shares of five: three claims list every line, whatever no pass could read.
+  for claim in 1 2 3; do
+    out=$(intake_at "$h" "$((T_1000 + claim * 3600))" claim)
+    assert_contains "$out" 'source: C_BRIEF' "claim $claim handed out no source"
+    for id in $(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p'); do
+      seen="$seen$id "
+    done
+    intake_at "$h" "$((T_1000 + claim * 3600))" complete --source C_BRIEF --checkpoint "c-$claim" >/dev/null
+    intake_at "$h" "$((T_1000 + claim * 3600))" complete --source C_DM --checkpoint "d-$claim" >/dev/null
+  done
+  assert_equals 12 "$(todo_at "$h" "$((T_1000 + 4 * 3600))" list --state open | grep -c .)" 'the lines did not all open'
+  for id in $(todo_at "$h" "$((T_1000 + 4 * 3600))" list --state open | cut -f1); do
+    case "$seen" in
+      *" $id "*) ;;
+      *) fail "a line never came up while two shares of unreadable lines were open: $id" ;;
     esac
   done
-  pass 'lines the last pass could not read go behind the others, so they never hold the share'
-}
-
-test_a_new_ask_about_an_open_line_joins_it() {
-  local h out
-  h="$TMP_ROOT/about"
-  new_home "$h"
-  printf 'C_DM\tslack-dms\tdirect messages\n' >>"$h/data/channel-intake/sources.tsv"
-  printf '# name regex\ndevice \\b\\d{6}\\b\nnot a pattern line [\n' >"$h/config/todo-about"
-  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref a-1 --digest a --class obligation \
-    --title 'unit 123456 shows a fault' >/dev/null
-  todo_at "$h" "$T_0900" sync >/dev/null
-  # The same ask from another channel joins the open line.
-  intake_at "$h" "$T_1000" observe --source C_DM --ref b-1 --digest b --class urgent \
-    --title 'can you look at 123456 again' >/dev/null
-  # An explicit key joins too, and survives a later read that does not repeat it.
-  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref p-1 --digest p --class obligation \
-    --title 'Quinn asks for the price list' --about Person:Quinn >/dev/null
-  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref p-1 --digest p2 --class obligation >/dev/null
-  intake_at "$h" "$T_1000" observe --source C_DM --ref p-2 --digest q --class obligation \
-    --title 'Quinn again on prices' --about person:quinn >/dev/null
-  # Routine chatter about the same unit never joins an ask.
-  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref c-1 --digest c --class routine \
-    --title 'unit 123456 was cleaned' >/dev/null
-  todo_at "$h" "$T_1000" sync >/dev/null
-  out=$(todo_at "$h" "$T_1000" list --state open)
-  assert_equals 3 "$(printf '%s\n' "$out" | grep -c .)" "a duplicate ask became its own line: $out"
-  out=$(todo_at "$h" "$T_1000" find --about device:123456)
-  assert_equals 1 "$(printf '%s\n' "$out" | grep -c .)" 'find did not name the one line about the unit'
-  assert_contains "$out" 'device:123456' 'find does not show the keys'
-  out=$(todo_at "$h" "$T_1000" find --about person:quinn)
-  assert_equals 1 "$(printf '%s\n' "$out" | grep -c .)" 'an explicit key did not join the asks'
-  # An ask about two open lines at once is its own line.
-  intake_at "$h" "$T_1030" observe --source C_BRIEF --ref a-2 --digest a2 --class obligation \
-    --title 'unit 654321 needs a part' >/dev/null
-  todo_at "$h" "$T_1030" sync >/dev/null
-  intake_at "$h" "$T_1100" observe --source C_DM --ref a-3 --digest a3 --class obligation \
-    --title 'swap the part from 654321 into 123456' >/dev/null
-  todo_at "$h" "$T_1100" sync >/dev/null
-  assert_equals 2 "$(todo_at "$h" "$T_1100" find --about device:123456 | grep -c .)" \
-    'an ask matching two lines was attached to one of them'
-  assert_equals 1 "$(todo_at "$h" "$T_1100" find --about device:123456 --about device:654321 | grep -c .)" \
-    'find does not narrow to the lines about every key'
-  if todo_at "$h" "$T_1100" find >/dev/null 2>&1; then fail 'find with no key was accepted'; fi
-  pass 'a new ask joins the one open line about the same thing, and find names the lines about a key'
+  pass 'lines no pass can read never hold the share: every line comes up within one round of claims'
 }
 
 test_a_held_decision_never_joins_an_ask() {

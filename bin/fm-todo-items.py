@@ -730,19 +730,19 @@ def working_days_since(epoch, now):
 
 
 def rolling_share(items, now, passes_per_day, last=()):
-    """(listed, every candidate, how many are past the window): oldest check first.
+    """(listed, every candidate, how many are past the window): in id order, round robin.
 
     A pass lists a share big enough that every line comes up within
-    RECHECK_WORKING_DAYS working days, and the lines already past it within one
-    working day, never fewer than RECHECK_FLOOR. Lines the previous claim
-    listed go after the rest, so lines no pass can read never hold the share."""
+    RECHECK_WORKING_DAYS working days of passes, and bigger while lines are
+    past it, never fewer than RECHECK_FLOOR. The share starts after the last
+    line the previous claim listed and wraps, so whether a pass could read a
+    line never decides which lines the next pass gets."""
     ppd = max(1, passes_per_day or DEFAULT_PASSES_PER_DAY)
-    last = set(last)
-    due = sorted(recheck_listed(items, now),
-                 key=lambda r: (r['id'] in last, number(r['verification'].get('at')), r['id']))
+    due = list(recheck_listed(items, now))
     late = sum(1 for r in due if working_days_since(r['verification'].get('at'), now) >= RECHECK_WORKING_DAYS)
     share = max(RECHECK_FLOOR, math.ceil(len(due) / (RECHECK_WORKING_DAYS * ppd)), math.ceil(late / ppd))
-    return due[:share], len(due), late
+    start = sum(1 for r in due if r['id'] <= last[-1]) % len(due) if last and due else 0
+    return (due[start:] + due[:start])[:share], len(due), late
 
 
 def recheck(args, items, now):
@@ -752,7 +752,7 @@ def recheck(args, items, now):
             print('\t'.join(['recheck: ' + rec['id'], rec['rev'], rec['state'], rec.get('label', ''),
                              ' '.join(source_refs(rec)), rec.get('link', ''), rec.get('title', '')]))
         if len(listed) < total:
-            print(f'TODO_RECHECK: rolling share {len(listed)} of {total} open lines, oldest check first'
+            print(f'TODO_RECHECK: rolling share {len(listed)} of {total} open lines, round robin'
                   + (f'; {late} not re-read in {RECHECK_WORKING_DAYS} working days' if late else ''))
         return 0
     # Re-read means a verify or a close at or after the claim that listed it.

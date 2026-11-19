@@ -42,7 +42,7 @@ Every stage below exists to close one of those gaps.
 
 A pass is not only an intake of new messages.
 Every `recheck:` line its claim prints is an open or waiting item to re-read at its source in that same pass, through the stage below that owns the source.
-The claim lists a rolling share, oldest check first, so every line comes up at least once in three working days; a line waiting on someone else is re-read like any other, and one they have settled closes with that evidence.
+The claim lists a rolling share, round robin from where the last claim stopped, so every line comes up at least once in three working days; a line waiting on someone else is re-read like any other, and one they have settled closes with that evidence.
 Record each outcome on the item: `bin/fm-todo.sh verify` when it is still open, `bin/fm-todo.sh close` with the evidence when it is discharged.
 `complete` reports the listed items left unread; that count is a miss to fix in the next pass, not a result.
 

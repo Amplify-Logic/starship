@@ -82,14 +82,14 @@
 # item that names an external source to re-read: id, revision, state, source
 # label, its source refs (the item's `source:ref` aliases, never a ledger key,
 # a held decision or a Firstmate-internal line), link and title,
-# tab-separated. It lists a rolling share, oldest check first, so every such
-# line is re-read at least once in three working days without any one pass
-# re-reading them all: the share is at least five lines, at least the lines
-# over three working days of passes (--passes-per-day, default 16), and at
-# least the lines already past three working days spread over one day of
-# passes. Ids given without --since are the lines the previous claim listed;
-# they are ordered after every other line, so a few lines whose source cannot
-# be read never hold the share pass after pass. When the share leaves lines
+# tab-separated. It lists a rolling share, round robin in id order, so every
+# such line is re-read at least once in three working days without any one
+# pass re-reading them all: the share is at least five lines, at least the
+# lines over three working days of passes (--passes-per-day, default 16), and
+# at least the lines already past three working days spread over one day of
+# passes. Ids given without --since are the lines the previous claim listed,
+# in order; the share starts after the last of them and wraps, so lines whose
+# source cannot be read never hold the share pass after pass. When the share leaves lines
 # out, one `TODO_RECHECK: rolling share` line says how many. A parked item, routine activity and a team update are
 # not listed; like a held decision, they answer to the morning sweep's
 # freshness floor, never a pass's. bin/fm-channel-intake.sh `claim` prints
