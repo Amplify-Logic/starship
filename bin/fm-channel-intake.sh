@@ -8,8 +8,22 @@
 #                                [--class CLASS] [--title TEXT] [--link URL]
 #                                [--dedup-key KEY] [--thread PARENT] [--reply-marker VALUE]
 #                                [--source-epoch EPOCH] [--partner]
-#                                [--partner-awaiting-since EPOCH]
+#                                [--partner-awaiting-since EPOCH] [--about KEY ...]
 # A new item needs a --title; a later re-read of a known one does not.
+# --about KEY (repeatable) names what the ask is about as a lowercase
+# `name:value` token with no spaces, such as a device id, a ticket number or a
+# person and subject; every read adds its keys to the record's `about`, and
+# bin/fm-todo.sh matches a new ask to the line already open about the same
+# thing by them (its header owns the matching).
+# ADD-TIME RULES. Before a new ask (outage, urgent, deadline or obligation) is
+# recorded, each add-on `todo-admit` hook (bin/fm-addon.sh) runs with
+# FM_INTAKE_SOURCE, FM_INTAKE_KIND, FM_INTAKE_REF, FM_INTAKE_CLASS,
+# FM_INTAKE_TITLE, FM_INTAKE_LINK, FM_INTAKE_PARTNER (1 or 0) and
+# FM_INTAKE_ABOUT exported; one that exits non-zero refuses it, and its first
+# output line is the reason. A refused ask prints `refused <key> :: <reason>`,
+# exits 0 and records nothing, so a home's rules about what never becomes a
+# line (an announcement, a status report with no ask) hold when the line would
+# be added, not only at a later cleanup. A hook that times out admits.
 # --partner marks the ask partner- or customer-facing - a colleague relaying a
 # partner question, a customer's own message - and the mark survives every
 # later read. --partner-awaiting-since marks it partner-facing and awaiting the
@@ -116,10 +130,13 @@
 # reported by a connector is a reason to call `fail` and back off, never a
 # reason to measure the ceiling by hitting it.
 #
-# RE-CHECK ON EVERY PASS. A claim that hands out any source also prints one
-# `recheck:` line per open or waiting to-do item that names an external source
-# (bin/fm-todo.sh `recheck` owns which items and the columns), so the pass
-# re-reads what is already open instead of only what is new, and answers
+# RE-CHECK ON EVERY PASS. A claim that hands out any source also prints the
+# `recheck:` lines of bin/fm-todo.sh `recheck`, a rolling share of the open and
+# waiting to-do items that name an external source, sized from this intake's
+# passes a day (its active window over interval_seconds) so every such item is
+# re-read at least once in three working days (that header owns which items,
+# the share and the columns). The pass re-reads what is already open instead
+# of only what is new, and answers
 # each line with `fm-todo.sh verify` or `close`. The claim records the
 # listed ids and its own time; every `complete` then prints how many of them
 # are still open with no re-read since the claim, and names them. No to-do
@@ -936,12 +953,12 @@ item_body() {
   [ -z "${19:-}" ] || printf '\n%s' "${19}"
 }
 
-# The partner marks an observe recorded, carried verbatim by every later
-# rewrite of the record so a resolve or a notification stamp cannot silently
-# demote a partner- or customer-facing ask.
+# The partner marks and about keys an observe recorded, carried verbatim by
+# every later rewrite of the record so a resolve or a notification stamp cannot
+# silently demote a partner- or customer-facing ask or forget what it is about.
 attention_fields() {
   [ -f "$1" ] && [ ! -L "$1" ] || return 0
-  grep -E '^(partner_hint|awaiting_since)=' "$1" || true
+  grep -E '^(partner_hint|awaiting_since|about)=' "$1" || true
 }
 
 # --- wake delivery ----------------------------------------------------------
@@ -959,6 +976,15 @@ check_path() {
 }
 
 CHECK_LIB_LOADED=false
+TIMEOUT_LIB_LOADED=false
+
+load_timeout_lib() {
+  if [ "$TIMEOUT_LIB_LOADED" != true ]; then
+    # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+    . "$SCRIPT_DIR/fm-timeout-lib.sh"
+    TIMEOUT_LIB_LOADED=true
+  fi
+}
 
 load_check_lib() {
   if [ "$CHECK_LIB_LOADED" != true ]; then
@@ -1158,14 +1184,18 @@ EOF
 
 # Every pass re-reads what is already open, not only what is new: without it
 # an item closes only when the captain says so. The listed ids and the claim
-# time are kept so `complete` can say how many were not re-read. Fail-soft and
+# time are kept so `complete` can say how many were not re-read, and so the
+# next claim starts its share after them. Fail-soft and
 # bounded like the page refresh: no store, or a store that cannot list, prints
 # nothing and never costs the claim.
 recheck_claim_lines() {
-  local epoch=$1 out ids
+  local epoch=$1 out ids last
+  last=$(record_field "$RECHECK_FILE" items)
   rm -f "$RECHECK_FILE"
   [ -d "$TODO_STORE/items" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
-  out=$(FM_HOME="$FM_HOME" FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" recheck 2>/dev/null) || {
+  # shellcheck disable=SC2086
+  out=$(FM_HOME="$FM_HOME" FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" recheck \
+    --passes-per-day "$(passes_per_day)" $last 2>/dev/null) || {
     log_event 'recheck list not available: fm-todo.sh recheck failed'
     return 0
   }
@@ -1173,6 +1203,19 @@ recheck_claim_lines() {
   write_atomic "$RECHECK_FILE" "$(printf 'claimed=%s\nitems=%s' "$epoch" "${ids% }")" \
     || log_event 'recheck list not recorded'
   [ -z "$out" ] || printf '%s\n' "$out"
+}
+
+# How many passes a day this intake runs: its active window over its interval,
+# so the to-do store can size each pass's rolling re-check share.
+passes_per_day() {
+  local start end minutes=1440 h m
+  if [ -n "$CFG_ACTIVE_START" ] && [ -n "$CFG_ACTIVE_END" ]; then
+    h=${CFG_ACTIVE_START%%:*}; m=${CFG_ACTIVE_START#*:}; start=$((10#$h * 60 + 10#$m))
+    h=${CFG_ACTIVE_END%%:*}; m=${CFG_ACTIVE_END#*:}; end=$((10#$h * 60 + 10#$m))
+    minutes=$(( (end - start + 1440) % 1440 ))
+    [ "$minutes" -gt 0 ] || minutes=1440
+  fi
+  printf '%s\n' "$(( minutes * 60 / CFG_INTERVAL > 0 ? minutes * 60 / CFG_INTERVAL : 1 ))"
 }
 
 recheck_report() {
@@ -1346,7 +1389,7 @@ observe() {
   local dedup='' thread='' marker='' source_epoch='' epoch key path digest thread_marker
   local existing_digest existing_state created revisions provenance notified
   local notified_digest kind outcome prov_tag attention=''
-  local partner_hint=false awaiting_since=''
+  local partner_hint=false awaiting_since='' about='' about_key reason
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) [ "$#" -ge 2 ] || die '--source requires a value'; id=$2; shift 2 ;;
@@ -1361,6 +1404,12 @@ observe() {
       --reply-marker) [ "$#" -ge 2 ] || die '--reply-marker requires a value'; marker=$2; shift 2 ;;
       --source-epoch) [ "$#" -ge 2 ] || die '--source-epoch requires a value'; source_epoch=$2; shift 2 ;;
       --partner) partner_hint=true; shift ;;
+      --about)
+        [ "$#" -ge 2 ] || die '--about requires a value'
+        about_key=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+        printf '%s\n' "$about_key" | grep -Eqx '[a-z0-9][a-z0-9._-]*:[^[:space:]]+' \
+          || die "--about must be a name:value token with no spaces: $2"
+        about="$about $about_key"; shift 2 ;;
       --partner-awaiting-since)
         [ "$#" -ge 2 ] || die '--partner-awaiting-since requires a value'
         # The same bound the morning sidecar's awaiting_since takes, so
@@ -1467,6 +1516,7 @@ observe() {
       *) provenance="$provenance $prov_tag"; outcome=merged ;;
     esac
     attention=$(with_partner_hint "$(attention_fields "$path")" "$partner_hint" "$path" "$awaiting_since")
+    attention=$(with_about "$attention" "$about")
     if [ "$existing_digest" = "$digest" ]; then
       # Unchanged content. Provenance may still have grown, so the record is
       # rewritten, but nothing about the item's attention state moves - except
@@ -1493,7 +1543,14 @@ observe() {
     return 0
   fi
 
+  if is_ask_class "$class" && reason=$(admit_refusal "$id" "$kind" "$ref" "$class" "$title" "$link" \
+    "$partner_hint" "$about"); then
+    log_event "item $key from $prov_tag refused at add time: $reason"
+    printf 'refused %s :: %s\n' "$key" "$reason"
+    return 0
+  fi
   attention=$(with_partner_hint "$attention" "$partner_hint" '' "$awaiting_since")
+  attention=$(with_about "$attention" "$about")
   save_item "$path" "$(item_body "$key" "$id" "$kind" "$ref" "$link" "$class" \
     "$title" "$digest" open "$epoch" "$epoch" "$source_epoch" '' '' 0 "$prov_tag" '' '' "$attention")"
   if [ -n "$source_epoch" ] && [ "$epoch" -ge "$source_epoch" ]; then
@@ -1505,6 +1562,50 @@ observe() {
   fi
   log_event "item $key opened from $prov_tag as $class"
   printf 'new %s\n' "$key"
+}
+
+# The about keys kept: every read adds its keys to the ones already recorded.
+with_about() {
+  local attention=$1 new=$2 old merged
+  old=$(printf '%s\n' "$attention" | sed -n 's/^about=//p')
+  merged=$(printf '%s %s\n' "$old" "$new" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
+  attention=$(printf '%s\n' "$attention" | grep -v '^about=' || true)
+  [ -z "${merged% }" ] || attention=$(printf '%s\nabout=%s' "$attention" "${merged% }")
+  printf '%s' "$attention" | sed '/^$/d'
+}
+
+is_ask_class() {
+  case "$1" in outage|urgent|deadline|obligation) return 0 ;; esac
+  return 1
+}
+
+# The reason the first add-on todo-admit hook refuses a new ask with, printed
+# with status 0; status 1 when every hook admits it, or there are none.
+admit_refusal() {  # <source> <kind> <ref> <class> <title> <link> <partner> <about>
+  local hooks root hook result rc partner=0
+  [ "$7" != true ] || partner=1
+  hooks=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" hooks todo-admit 2>/dev/null) || return 1
+  [ -n "$hooks" ] || return 1
+  load_timeout_lib
+  while IFS="$(printf '\t')" read -r root hook; do
+    [ -n "$hook" ] || continue
+    rc=0
+    result=$(fm_run_timed "${FM_ADDON_HOOK_TIMEOUT:-20}" env FM_HOME="$FM_HOME" FM_ROOT="$ROOT" \
+      FM_HOOK_ROOT="$root" FM_INTAKE_SOURCE="$1" FM_INTAKE_KIND="$2" FM_INTAKE_REF="$3" \
+      FM_INTAKE_CLASS="$4" FM_INTAKE_TITLE="$5" FM_INTAKE_LINK="$6" FM_INTAKE_PARTNER="$partner" \
+      FM_INTAKE_ABOUT="${8# }" "$hook" </dev/null 2>/dev/null) || rc=$?
+    if fm_timed_out "$rc"; then
+      log_event "todo-admit hook ${hook##*/} ran out of time; admitted"
+      continue
+    fi
+    [ "$rc" -ne 0 ] || continue
+    result=$(printf '%s\n' "$result" | sed -n '/[^[:space:]]/{p;q;}')
+    printf '%s\n' "${result:-refused by the add-on rule ${hook##*/}}"
+    return 0
+  done <<EOF
+$hooks
+EOF
+  return 1
 }
 
 # The partner marks kept: once an earlier observe marked an item

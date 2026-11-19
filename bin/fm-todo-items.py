@@ -5,6 +5,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -20,7 +21,17 @@ SLOT_FIELDS = ('title', 'link', 'class', 'kind', 'ask', 'why', 'label', 'since',
                'ends_at', 'posted', 'asked_at', 'partner', 'tooling')
 # Records that were never an ask: the intake retires them and nobody closes them.
 UNOWED_KINDS = ('info', 'update')
+ASK_KINDS = ('decision', 'approval', 'reply')
 RETIRED_TTL = 30 * 86400
+# The rolling re-check: every line a pass can re-read comes up at least once
+# in this many working days, a share of them per pass and never fewer than
+# RECHECK_FLOOR.
+RECHECK_WORKING_DAYS = 3
+RECHECK_FLOOR = 5
+DEFAULT_PASSES_PER_DAY = 16
+ABOUT_KEY = re.compile(r'^[a-z0-9][a-z0-9._-]*:\S+$')
+# The home's own `name regex` lines (config/todo-about), read once per run.
+ABOUT_PATTERNS = []
 
 
 class Refusal(Exception):
@@ -155,6 +166,7 @@ def ledger_observations(intake_dir, labels):
             label = labels.get(source, source)
             aliases = ([f'{source}:{rec["ref"]}'] if rec.get('ref') else []) + [f'ledger:{rec["key"]}']
             aliases += rec.get('provenance', '').split()
+            about = rec.get('about', '').split()
             state = {'archived': 'closed', 'waiting': 'waiting'}.get(rec.get('state'), 'open')
             o = {
                 'slot': 'ledger:' + rec['key'], 'aliases': aliases,
@@ -162,7 +174,7 @@ def ledger_observations(intake_dir, labels):
                 'rev': rec.get('edited_digest') or rec.get('digest', ''),
                 'title': rec.get('title', ''), 'link': rec.get('link', ''), 'class': cls or 'obligation',
                 'kind': 'reply' if cls in RANK else ('update' if cls == 'update' else 'info'),
-                'label': label, 'state': state,
+                'label': label, 'state': state, 'about': about,
             }
             # A team announcement sorts by when it was posted, not when it was read.
             if cls == 'update':
@@ -226,6 +238,9 @@ def morning_observations(doc, day, now):
             if end is None or end.tzinfo is None:
                 raise Refusal('morning action ends_at must be an ISO timestamp with a zone')
             ends_at = int(end.timestamp())
+        about = raw.get('about', [])
+        if not isinstance(about, list) or not all(isinstance(a, str) for a in about):
+            raise Refusal('morning action about must be a list of strings')
         ident = f'{raw["source"]}:{raw["ref"]}'
         aliases = [ident, f'ledger:{key}'] + [a for a in raw.get('aliases', []) if isinstance(a, str) and ':' in a]
         obs.append({
@@ -240,6 +255,7 @@ def morning_observations(doc, day, now):
             'partner': raw.get('partner', False), 'tooling': raw.get('tooling', False),
             'asked_at': number(asked),
             'ends_at': ends_at,
+            'about': about,
             # The sidecar is the morning sweep's own verification record.
             'verified': {'at': read, 'how': raw.get('verified_how') or 'morning verification sweep'},
         })
@@ -326,6 +342,60 @@ def backlog_observations(path):
     return obs
 
 
+# --- what an ask is about -------------------------------------------------------
+
+def load_about_patterns(path):
+    """The home's `name regex` lines; a line that is not one is skipped, never fatal."""
+    patterns = []
+    target = Path(path) if path else None
+    if not target or not target.is_file() or target.is_symlink():
+        return patterns
+    for line in target.read_text().splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or fields[0].startswith('#') or not re.match(r'^[a-z0-9][a-z0-9._-]*$', fields[0]):
+            continue
+        try:
+            patterns.append((fields[0], re.compile(fields[1])))
+        except re.error:
+            continue
+    return patterns
+
+
+def normal_about(key):
+    key = '-'.join(str(key).lower().split())
+    return key if ABOUT_KEY.match(key) else ''
+
+
+def about_keys(obs):
+    """What one observation is about: its explicit keys plus the home's patterns over its words."""
+    keys = {normal_about(k) for k in obs.get('about') or []}
+    text = ' '.join(str(obs.get(f) or '') for f in ('title', 'ask', 'why'))
+    for name, pattern in ABOUT_PATTERNS:
+        for match in pattern.finditer(text):
+            keys.add(normal_about(f'{name}:{match.group(0)}'))
+    keys.discard('')
+    return keys
+
+
+def held(aliases):
+    return any(a.startswith('firstmate-backlog:') for a in aliases)
+
+
+def same_ask(items, o):
+    """The one open or waiting line a new observation is about, or None.
+
+    Only an ask that is not a held decision attaches, only to another such ask,
+    and only when exactly one line shares a key: two candidates are two asks."""
+    if o['state'] != 'open' or o.get('kind') not in ASK_KINDS or held(o['aliases']):
+        return None
+    keys = about_keys(o)
+    if not keys:
+        return None
+    hits = [r for r in items.values() if r['state'] in ('open', 'waiting') and r.get('kind') in ASK_KINDS
+            and not held(r['aliases']) and keys & set(r.get('about') or [])]
+    return hits[0] if len(hits) == 1 else None
+
+
 # --- folding ------------------------------------------------------------------
 
 PRIORITY = {'ledger': 0, 'morning': 1, 'backlog': 2}
@@ -355,8 +425,11 @@ def present(rec):
     rec['kind'] = next((s['kind'] for s in slots if s['slot'].startswith('morning:')), rec['kind'] or 'info')
     for field in ('title', 'why'):
         rec[field] = strip_relative(rec[field])
-    # The ask was made when its earliest source saw it, whichever source presents it.
-    rec['asked_at'] = min([number(s.get('asked_at')) for s in slots if number(s.get('asked_at'))] or [0])
+    # The ask was made when its earliest source saw it, whichever source presents it;
+    # a source that gave no time leaves the time the store first saw the ask.
+    rec['asked_at'] = (min([number(s.get('asked_at')) for s in slots if number(s.get('asked_at'))] or [0])
+                       or number(rec.get('first_seen')))
+    rec['about'] = sorted(set().union(*[about_keys(s) for s in slots])) if slots else []
     rec['source_snooze'] = next((s['snoozed_until'] for s in slots if s.get('snoozed_until')), '')
     rec['rev'] = rev_of(rec)
 
@@ -380,6 +453,13 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
     reads = []
     for o in observations:
         iid = next((index[a] for a in o['aliases'] if a in index), None)
+        attached = None if iid else same_ask(items, o)
+        if attached:
+            # A new sighting of a line already open, from another channel or a
+            # re-scan, joins that line instead of becoming a second one.
+            iid = attached['id']
+            store.journal({'at': now, 'item': iid, 'attached': o['aliases'][0], 'actor': 'source',
+                           'about': sorted(about_keys(o) & set(attached.get('about') or [])), 'rev': attached['rev']})
         fresh = iid is None
         if fresh:
             iid = 't-' + digest(o['aliases'][0])[:12]
@@ -550,8 +630,6 @@ def apply_command(store, items, line, target, shown_rev, now):
             return 'already ' + result
         transition(store, rec, now, 'closed', 'captain', 'fulfilled' if verb == 'done' else 'dismissed',
                    f'you wrote "{line.strip()}" on the page', pending={}, note='')
-        if any(a.startswith('firstmate-backlog:') for a in rec['aliases']):
-            result += ' (held decision: record the answer through fm-captain-hold.sh)'
     else:
         field, value = {'park': ('snoozed_until', extra.get('until')), 'mine': ('owner', 'captain')}.get(
             verb, ('pending', {'verb': verb, 'what': extra.get('what', 'investigate and come back with findings')}))
@@ -634,11 +712,48 @@ def recheck_listed(items, now):
             yield rec
 
 
+def working_days_since(epoch, now):
+    """Monday-to-Friday days after the local day of <epoch> up to the local day of <now>."""
+    if not number(epoch):
+        return 10 ** 6
+    start = datetime.date.fromisoformat(local_day(epoch))
+    end = datetime.date.fromisoformat(local_day(now))
+    days = (end - start).days
+    if days <= 0:
+        return 0
+    weeks, rest = divmod(days, 7)
+    count = weeks * 5
+    for n in range(1, rest + 1):
+        if (start + datetime.timedelta(days=weeks * 7 + n)).weekday() < 5:
+            count += 1
+    return count
+
+
+def rolling_share(items, now, passes_per_day, last=()):
+    """(listed, every candidate, how many are past the window): in id order, round robin.
+
+    A pass lists a share big enough that every line comes up within
+    RECHECK_WORKING_DAYS working days of passes, and bigger while lines are
+    past it, never fewer than RECHECK_FLOOR. The share starts after the last
+    line the previous claim listed and wraps, so whether a pass could read a
+    line never decides which lines the next pass gets."""
+    ppd = max(1, passes_per_day or DEFAULT_PASSES_PER_DAY)
+    due = list(recheck_listed(items, now))
+    late = sum(1 for r in due if working_days_since(r['verification'].get('at'), now) >= RECHECK_WORKING_DAYS)
+    share = max(RECHECK_FLOOR, math.ceil(len(due) / (RECHECK_WORKING_DAYS * ppd)), math.ceil(late / ppd))
+    start = sum(1 for r in due if r['id'] <= last[-1]) % len(due) if last and due else 0
+    return (due[start:] + due[:start])[:share], len(due), late
+
+
 def recheck(args, items, now):
     if not args.since:
-        for rec in recheck_listed(items, now):
+        listed, total, late = rolling_share(items, now, args.passes_per_day, args.lines)
+        for rec in listed:
             print('\t'.join(['recheck: ' + rec['id'], rec['rev'], rec['state'], rec.get('label', ''),
                              ' '.join(source_refs(rec)), rec.get('link', ''), rec.get('title', '')]))
+        if len(listed) < total:
+            print(f'TODO_RECHECK: rolling share {len(listed)} of {total} open lines, round robin'
+                  + (f'; {late} not re-read in {RECHECK_WORKING_DAYS} working days' if late else ''))
         return 0
     # Re-read means a verify or a close at or after the claim that listed it.
     missed = [i for i in args.lines if i in items and items[i]['state'] != 'closed'
@@ -694,6 +809,19 @@ def hand_over(store, rec, args, now):
                handover=note, source_change=args.source_change)
 
 
+def find(args, items):
+    """Every open or waiting ask about all the given keys, so a tool that settled one can close it."""
+    keys = {normal_about(k) for k in args.about}
+    if not keys or '' in keys:
+        raise Refusal('find needs --about KEY, a lowercase name:value with no spaces, such as system:<id>')
+    for rec in sorted(items.values(), key=lambda r: r['id']):
+        if (rec['state'] in ('open', 'waiting') and rec.get('kind') not in UNOWED_KINDS
+                and keys <= set(rec.get('about') or [])):
+            print('\t'.join([rec['id'], rec['rev'], rec['state'], ' '.join(rec.get('about') or []),
+                             rec.get('title', '')]))
+    return 0
+
+
 def one(items, iid):
     if iid not in items:
         raise Refusal(f'no item with id {iid}')
@@ -713,8 +841,12 @@ def main():
     parser.add_argument('--since', type=int, default=0)
     parser.add_argument('--pass', dest='pass_', action='store_true')
     parser.add_argument('--clear', action='store_true')
+    parser.add_argument('--passes-per-day', type=int, default=0)
+    parser.add_argument('--about', action='append', default=[])
+    parser.add_argument('--about-patterns', default='')
     args = parser.parse_intermixed_args()
     now = args.now
+    ABOUT_PATTERNS[:] = load_about_patterns(args.about_patterns)
     try:
         with Store(args.store) as store:
             if args.command == 'sync':
@@ -728,6 +860,8 @@ def main():
             items = store.load()
             if args.command == 'recheck':
                 return recheck(args, items, now)
+            if args.command == 'find':
+                return find(args, items)
             if args.command == 'command':
                 lines = args.lines or [l for l in sys.stdin.read().splitlines() if l.strip()]
                 failed = False
