@@ -237,7 +237,7 @@ function decisionShape(task, identity, ownerOnly = false) {
   const parsedRecommendation = recommendationFrom(reason);
   const options = marks.present && marks.options.length > 0
     ? marks.options
-    : optionsFrom(task.title || "", reason);
+    : optionsFrom(reason);
   const recommended = marks.present && marks.recommended && options.includes(marks.recommended)
     ? marks.recommended
     : "";
@@ -877,7 +877,7 @@ function commandMark(args) {
     const reason = task.hold_reason && task.hold_reason !== "-" ? task.hold_reason : "";
     const options = args.options.length > 0
       ? [...new Set(args.options.map((option) => option.trim()))]
-      : optionsFrom(task.title || "", reason);
+      : optionsFrom(reason);
     const recommended = (args.recommend || "").trim();
     if (recommended && !options.includes(recommended)) fail(`--recommend must be exactly one of the options: ${options.join(" | ") || "(none parsed; pass --option)"}`);
     const easyUndo = args.flags.has("easy-undo");

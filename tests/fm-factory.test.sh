@@ -1092,6 +1092,30 @@ test_a_new_home_with_no_work_opens_empty() {
   pass "factory pane: a brand-new home with no work opens with a first-run hint and only working keys"
 }
 
+# A home that has done work, all of it landed, is idle but not new: SINCE YOU
+# LAST LOOKED lists what landed, so RIGHT NOW must not say there is no work yet.
+test_an_idle_home_with_history_shows_no_first_run_hint() {
+  reset_case
+  write_projects
+  python3 - "$HOME_FIX" <<'PY'
+import json, os, sys
+home = sys.argv[1]
+rows = [{"id": "cup-photos", "title": "Sharper cup photos", "repo": "sample-shop", "state": "done",
+         "structured": True, "kind": "ship", "captain_actionable": False, "hold_kind": None,
+         "hold_bucket": None, "hold_reason": None, "hold_set": None, "hold_until": None,
+         "unresolved_blocker_ids": [], "since": "2026-11-13",
+         "completion": {"verb": "merged", "date": "2026-11-14"}, "pr_url": None}]
+json.dump({"schema": "fm-fleet-snapshot.v1", "generated": "2026-11-14T08:00:00Z", "tasks": [],
+           "backlog": {"records": rows}}, open(os.path.join(home, "snapshot.json"), "w"))
+PY
+  local screen
+  screen=$(python3 "$FACTORY" --plain --fresh 2>&1) || fail "the pane did not open on an idle home: $screen"
+  assert_contains "$screen" "NOTHING NEEDS YOU" "an idle home has nothing waiting"
+  assert_contains "$screen" "Sharper cup photos" "the landed work is in the feed"
+  assert_not_contains "$screen" "first report" "an idle home with history shows no first-run hint"
+  pass "factory pane: an idle home with finished work shows no first-run hint"
+}
+
 test_work_no_factory_claims_is_still_shown() {
   reset_case
   write_registry
@@ -3400,6 +3424,7 @@ fm_test_run \
   test_a_ship_with_no_mode_still_reports_its_pr_ready \
   test_without_a_registry_each_project_is_a_factory \
   test_a_new_home_with_no_work_opens_empty \
+  test_an_idle_home_with_history_shows_no_first_run_hint \
   test_work_no_factory_claims_is_still_shown \
   test_a_small_pane_shows_its_height_and_says_what_is_below \
   test_a_small_pane_scrolls_to_everything \

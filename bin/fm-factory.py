@@ -2994,7 +2994,8 @@ class View:
         else:
             rows += [row(width, [S(" NOTHING NEEDS YOU", "green", True)]), row(width)]
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
-        if not needs and not any(f["jobs"] for f in self.record["factories"]):
+        if not needs and not self.record["feed"] and \
+                not any(f["jobs"] or f["idle_since"] for f in self.record["factories"]):
             # A first run: say what to do next instead of an empty screen.
             rows += flow(width, [S("     ")], FIRST_RUN_HINT, "ice")
             rows.append(row(width))

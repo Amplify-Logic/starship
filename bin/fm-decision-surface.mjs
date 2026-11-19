@@ -162,7 +162,7 @@ function splitExplicitOptions(value) {
 // Options are only ever a recorded list: an `Options:` (or `Choose:`) label in
 // the hold reason, or the explicit marks bin/fm-tap-desk.sh keeps. A question
 // with neither shows no options, rather than options cut out of its sentence.
-export function optionsFrom(title, reason) {
+export function optionsFrom(reason) {
   const explicit = reason.match(/\b(?:Options?|Choose|Captain must choose)\s*:\s*(.*)/i);
   if (!explicit) return [];
   let source = explicit[1];
@@ -250,7 +250,7 @@ function loadTasks(home) {
         repo: task.repo,
         group: normalizeRepo(task.repo),
         created: task.created,
-        options: optionsFrom(task.title || "", task.hold_reason || ""),
+        options: optionsFrom(task.hold_reason || ""),
         recommendation,
         origin: identity.origin,
         key: identity.key,
