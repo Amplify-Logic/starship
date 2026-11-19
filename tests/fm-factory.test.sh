@@ -1506,6 +1506,8 @@ test_an_action_from_a_second_screen_says_what_went_and_refuses_what_cannot() {
   printf '{"action":"look"}' | python3 "$FACTORY" act >/dev/null 2>&1
   assert_equals "$?" "2" "a bare look from a second screen is refused"
   assert_absent "$HOME_FIX/state/factory/last-look" "a second screen recorded a look without a button pressed"
+  act '{"action":"steer","factory":"sample-shop","who":"Starship","in_tab":true}' >/dev/null || fail "act could not steer from a tab"
+  assert_absent "$HOME_FIX/state/factory/last-look" "a button on a factory's tab recorded a look"
   out=$(act '{"action":"answer","item":"garden-chart","asking":"'"$((NOW - 3 * 3600))"'","option":"2"}') || fail "act failed"
   assert_equals "$out" '{"ok": true, "said": "✓ SENT to Starship: answer 2, this season (Harvest chart)"}' "what act says"
   assert_equals "$(head -n 1 "$HOME_FIX/state/factory/last-look" 2>/dev/null)" "$NOW" "a button pressed is a look"

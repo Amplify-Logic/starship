@@ -40,7 +40,8 @@ reads both from the code on disk, `bin/fm-factory.py --screen` and
 its own; mirror_model only lays them out and swaps the few terms docs/web.md
 lists. A button on the page is one of the pane's writing keys: POST /api/act
 hands the action to `bin/fm-factory.py act`, which sends the note that key
-sends. The page decides and merges nothing. This process never takes the
+sends; a button on a project tab says `in_tab`, so it records no look, as a
+key in a factory's tab does not. The page decides and merges nothing. This process never takes the
 session lock, never drains wakes, and never writes backlog or fleet state.
 
 The page's settings (text size, style, light or dark, reduced motion) live in
@@ -1109,6 +1110,11 @@ def decode_act_body(body: bytes) -> Dict[str, Any]:
         if who not in ("you", "Starship"):
             raise ValueError("who steers is you or Starship")
         ask["who"] = who
+    in_tab = payload.get("in_tab")
+    if in_tab is not None:
+        if in_tab is not True:
+            raise ValueError("in_tab is true or absent")
+        ask["in_tab"] = True
     text = payload.get("text")
     if text is not None:
         if not isinstance(text, str) or len(text) > ACT_TEXT_MAX:
@@ -2285,7 +2291,7 @@ async function act(ask){
   let answer={ok:false,said:'Not sent: the page lost its connection.'};
   try{
     const r=await fetch('/api/act',{method:'POST',credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify(ask)});
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify(tab==='home'?ask:Object.assign({in_tab:true},ask))});
     try{answer=await r.json();}catch(e){answer={ok:false,said:'Not sent ('+r.status+').'};}
   }catch(e){}
   acting=false;

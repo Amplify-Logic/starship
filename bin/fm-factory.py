@@ -3317,13 +3317,16 @@ def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
     (item, or factory and job). An `asking` beside an item is the
     asking the screen showed; when the record's differs the call was settled
     or asked again since, and nothing is sent. The answer says whether it went
-    (`ok`) and the words the pane would say (`said`). Every action is a look.
+    (`ok`) and the words the pane would say (`said`). Every action is a look,
+    as a key press in the pane is, unless `in_tab` is true: the button was on
+    a factory's own tab, and a factory's tab records no look.
     """
     action = ask.get("action")
     if action not in ACTIONS:
         raise ValueError("unknown action: %s" % action)
     now = now_epoch()
-    note_look(home, now)
+    if ask.get("in_tab") is not True:
+        note_look(home, now)
     view = View(first_record(home))
     need = view.need(ask["item"]) if ask.get("item") else None
     if ask.get("item") and action != "read" and (need is None or ask.get("asking") not in (None, asking(need))):

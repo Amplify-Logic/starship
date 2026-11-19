@@ -552,6 +552,9 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   assert_equals "$(sed -n '2,3p' "$home/act.asks" | jq -c .)" \
     '{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"}
 {"action":"talk","factory":"garden-journal","text":"check the ribbon"}' "an answer and a typed note"
+  post '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' >/dev/null
+  assert_equals "$(sed -n '4p' "$home/act.asks" | jq -c .)" \
+    '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' "a project tab's button says it was on a tab"
   printf '{"ok": false, "said": "\\u2717 NOT SENT: the inbox is locked. Nothing reached Starship."}' > "$home/act.answer"
   assert_equals "$(post '{"action":"keep","item":"garden-share"}' | jq -c .)" \
     '{"ok":false,"said":"Not sent: the inbox is locked. Nothing reached Starship."}' "a note that did not go says so"
@@ -565,6 +568,7 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"merge","item":"garden-share"}' "$url")" "400" "merge is not an action"
   assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"keep","item":"../etc; rm"}' "$url")" "400" "a name that is not one"
   assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"steer","factory":"garden-journal","who":"them"}' "$url")" "400" "someone else steering"
+  assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"action":"keep","item":"garden-share","in_tab":"yes"}' "$url")" "400" "in_tab that is not true"
   assert_equals "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "{\"action\":\"talk\",\"factory\":\"garden-journal\",\"text\":\"$(printf 'x%.0s' $(seq 1 4001))\"}" "$url")" "400" "words too long"
   assert_equals "$(cat "$home/act.asks")" "" "a refused request reached the factory script"
   printf 'refuse' > "$home/act.answer"

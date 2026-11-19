@@ -36,7 +36,7 @@ The page is another window onto the one primary session, not a second first mate
 
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
 The page chooses no call, counts nothing and orders nothing itself, so it cannot disagree with the terminal.
-It reads them again about every three seconds while visible. Opening the page is not a look for Since you last looked; pressing one of its buttons is, as a key press in the pane is.
+It reads them again about every three seconds while visible. Opening the page is not a look for Since you last looked; pressing one of its buttons on All projects is, as a key press in the pane is, and a button on a project tab is not, as a key in a factory's own tab is not.
 A worker shows the step it is on and the one line it says about what it is doing, not a copy of its terminal.
 
 Words that are already plain are the terminal's own.
