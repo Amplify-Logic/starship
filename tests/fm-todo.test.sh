@@ -1425,6 +1425,50 @@ test_lines_a_pass_could_not_read_do_not_hold_the_share() {
   pass 'lines no pass can read never hold the share: every line comes up within one round of claims'
 }
 
+test_a_new_ask_about_an_open_line_joins_it() {
+  local h out
+  h="$TMP_ROOT/about"
+  new_home "$h"
+  printf 'C_DM\tslack-dms\tdirect messages\n' >>"$h/data/channel-intake/sources.tsv"
+  printf '# name regex\ndevice \\b\\d{6}\\b\nnot a pattern line [\n' >"$h/config/todo-about"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref a-1 --digest a --class obligation \
+    --title 'unit 123456 shows a fault' >/dev/null
+  todo_at "$h" "$T_0900" sync >/dev/null
+  # The same ask from another channel joins the open line.
+  intake_at "$h" "$T_1000" observe --source C_DM --ref b-1 --digest b --class urgent \
+    --title 'can you look at 123456 again' >/dev/null
+  # An explicit key joins too, and survives a later read that does not repeat it.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref p-1 --digest p --class obligation \
+    --title 'Quinn asks for the price list' --about Person:Quinn >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref p-1 --digest p2 --class obligation >/dev/null
+  intake_at "$h" "$T_1000" observe --source C_DM --ref p-2 --digest q --class obligation \
+    --title 'Quinn again on prices' --about person:quinn >/dev/null
+  # Routine chatter about the same unit never joins an ask.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref c-1 --digest c --class routine \
+    --title 'unit 123456 was cleaned' >/dev/null
+  todo_at "$h" "$T_1000" sync >/dev/null
+  out=$(todo_at "$h" "$T_1000" list --state open)
+  assert_equals 3 "$(printf '%s\n' "$out" | grep -c .)" "a duplicate ask became its own line: $out"
+  out=$(todo_at "$h" "$T_1000" find --about device:123456)
+  assert_equals 1 "$(printf '%s\n' "$out" | grep -c .)" 'find did not name the one line about the unit'
+  assert_contains "$out" 'device:123456' 'find does not show the keys'
+  out=$(todo_at "$h" "$T_1000" find --about person:quinn)
+  assert_equals 1 "$(printf '%s\n' "$out" | grep -c .)" 'an explicit key did not join the asks'
+  # An ask about two open lines at once is its own line.
+  intake_at "$h" "$T_1030" observe --source C_BRIEF --ref a-2 --digest a2 --class obligation \
+    --title 'unit 654321 needs a part' >/dev/null
+  todo_at "$h" "$T_1030" sync >/dev/null
+  intake_at "$h" "$T_1100" observe --source C_DM --ref a-3 --digest a3 --class obligation \
+    --title 'swap the part from 654321 into 123456' >/dev/null
+  todo_at "$h" "$T_1100" sync >/dev/null
+  assert_equals 2 "$(todo_at "$h" "$T_1100" find --about device:123456 | grep -c .)" \
+    'an ask matching two lines was attached to one of them'
+  assert_equals 1 "$(todo_at "$h" "$T_1100" find --about device:123456 --about device:654321 | grep -c .)" \
+    'find does not narrow to the lines about every key'
+  if todo_at "$h" "$T_1100" find >/dev/null 2>&1; then fail 'find with no key was accepted'; fi
+  pass 'a new ask joins the one open line about the same thing, and find names the lines about a key'
+}
+
 test_a_held_decision_never_joins_an_ask() {
   local h
   h="$TMP_ROOT/about-held"
