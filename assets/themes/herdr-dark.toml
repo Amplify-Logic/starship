@@ -1,0 +1,37 @@
+# Starship's dark Herdr theme, the flight deck: night blue, ice text, cyan for
+# where you are. bin/fm-theme.sh writes this [theme] block into Herdr's
+# config.toml for dark when it has no saved copy of the block that was there
+# before the first switch to light.
+[theme]
+name = "tokyo-night"
+
+auto_switch = false
+
+[theme.custom]
+# Where you are: cyan.
+accent        = "#74d7ea"    # cyan      border of the pane you are in, and highlights
+
+# Surfaces, from outside the ship to inside it. The panes themselves keep the
+# terminal background, which the Terminal profile sets to void, #060b14.
+panel_bg      = "#0d1524"    # hull      tab bar, menus and pop-up panels
+sidebar_bg    = "#0d1524"    # hull      the sidebar
+surface0      = "#131d30"    # deck      a selected or focused item
+surface1      = "#26354e"    # bezel     the row under the pointer
+surface_dim   = "#26354e"    # bezel     separators and the scrollbar track
+active_row_bg = "#26354e"    # bezel     the workspace and the worker you are in
+selection_bg  = "#3d5273"    # bezel-lit the cursor row while you navigate with the keyboard
+
+# Text.
+text          = "#e8eef7"    # ice       everything you read
+subtext0      = "#a3b4cb"    # mist      second-level text
+overlay1      = "#a3b4cb"    # mist      brighter hints
+overlay0      = "#6b7f9c"    # faint     quiet hints, the border of a pane you are not in, an unknown state
+mauve         = "#a3b4cb"    # mist      branch names (kept grey so no colour is spent on decoration)
+
+# Lamps. Herdr draws each worker's state in one of these.
+yellow        = "#ffb648"    # amber     working: you are waiting for it
+teal          = "#62dd9a"    # green     done
+green         = "#62dd9a"    # green     idle, and lines added in git
+red           = "#ff7a6b"    # red       blocked: it is waiting for you
+peach         = "#ffb648"    # amber     interrupted, and warnings
+blue          = "#74d7ea"    # cyan      something new to look at

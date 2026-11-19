@@ -57,8 +57,9 @@
 #   FM_HOME                       the home whose crew is shown. Unset, the home
 #                                 `install` recorded is used, else this code root.
 #   HERDR_BIN_PATH                the Herdr binary (default: herdr on PATH)
-#   FM_TERMINAL_THEME             auto (default), light or dark; detection is
-#                                 owned by bin/fm_terminal_theme.py
+#   FM_TERMINAL_THEME             auto (default), light or dark; with the home's
+#                                 remembered theme (bin/fm-theme.sh), owned by
+#                                 bin/fm_terminal_theme.py
 # Test seams:
 #   FM_BRIDGE_STRIP_PMSET         battery reader run as `<cmd> -g batt`; empty
 #                                 for no battery (default: pmset on a Mac only)
@@ -114,10 +115,12 @@ AMBER=$(fg '255;182;72')
 GREEN=$(fg '98;221;154')
 RED=$(fg '255;122;107')
 
-# Detect once, before reading clicks or drawing, never in render_frame.
-# Keep the original dark colours if Python is unavailable.
+# Detect once, before reading clicks or drawing, never in render_frame, and
+# again only when bin/fm-theme.sh switches the home's remembered theme
+# (theme_switched). Keep the original dark colours if Python is unavailable.
 init_colours() {
   local query='' hull ice mist faint off cyan amber green red
+  THEME_SEEN=$(remembered_theme)
   [ ! -t 1 ] || query=--query
   if command -v python3 >/dev/null 2>&1; then
     {
@@ -130,6 +133,25 @@ init_colours() {
     LAMP_OFF=$(fg "$off"); CYAN=$(fg "$cyan"); AMBER=$(fg "$amber")
     GREEN=$(fg "$green"); RED=$(fg "$red")
   fi
+}
+
+# remembered_theme: the home's config/workspace-theme when it says light or
+# dark, else nothing (bin/fm_terminal_theme.py owns the order it is read in).
+remembered_theme() {
+  local value=''
+  [ -f "${FM_HOME:-$ROOT}/config/workspace-theme" ] \
+    && IFS= read -r value < "${FM_HOME:-$ROOT}/config/workspace-theme" 2>/dev/null
+  case "$value" in light|dark) printf '%s' "$value" ;; esac
+}
+
+# theme_switched: 0, with the new colours in use, when the remembered theme
+# changed since the colours were chosen, so the running strip repaints in place.
+THEME_SEEN=
+theme_switched() {
+  local now
+  now=$(remembered_theme)
+  [ -n "$now" ] && [ "$now" != "$THEME_SEEN" ] || return 1
+  init_colours
 }
 BOLD="${E}[1m"
 UNBOLD="${E}[22m"
@@ -720,8 +742,10 @@ cmd_render() {
     shift
   done
   case "$width$height" in ''|*[!0-9]*) usage; exit 2 ;; esac
+  FM_HOME=$(resolve_home)
+  export FM_HOME
   init_colours
-  render_frame "$(resolve_home)" "$width" "$height"
+  render_frame "$FM_HOME" "$width" "$height"
   printf '%s\n' "$FRAME"
 }
 
@@ -815,6 +839,14 @@ calls_moved() {  # <home>
   [ "$(fm_owner_calls_signal "$1/state")" != "$CALLS_SIGNAL" ]
 }
 
+# theme_moved: 0 when the remembered theme differs from the one on screen, so
+# the wait ends and the next frame repaints within a second of a switch.
+theme_moved() {
+  local now
+  now=$(remembered_theme)
+  [ -n "$now" ] && [ "$now" != "$THEME_SEEN" ]
+}
+
 # wait_input: the pause between frames, <seconds> one-second ticks unless the
 # pane is resized or clicked, or the owner's calls move. A left press on the
 # most urgent call opens it. Each read waits at most a second, because bash 3.2
@@ -825,6 +857,7 @@ wait_input() {  # <home> <seconds>
     tick=$((tick + 1))
     IFS= read -rsn1 -t 1 ch || {
       ! calls_moved "$1" || return 0
+      ! theme_moved || return 0
       continue
     }
     [ "$ch" = "$E" ] || continue
@@ -883,13 +916,15 @@ track_reading() {
 
 cmd_run() {
   local home sleeper interval tick
+  home=$(resolve_home)
+  FM_HOME=$home
+  export FM_HOME
   init_colours
   # FM_BRIDGE_STRIP_INTERVAL is a test seam for faster frames, not a setting.
   interval=$(fm_status_ttl "${FM_BRIDGE_STRIP_INTERVAL:-}" 5)
   [ "$interval" -gt 0 ] || interval=5
   READ_GRACE=$(($(fm_status_ttl "${FM_FLEET_STATE_WAIT:-}" 90) + interval))
   CODE_PRINT=$(code_print)
-  home=$(resolve_home)
   record_self
   trap cleanup EXIT
   trap 'exit 0' TERM HUP INT
@@ -914,6 +949,7 @@ cmd_run() {
       [ "$CLICKS" = 0 ] || [ -z "$TTY_SAVED" ] || stty "$TTY_SAVED" 2>/dev/null
       exec "$BASH" "$SELF" run
     fi
+    ! theme_switched || RESIZED=1
     pane_size
     render_frame "$home" "$PANE_COLS" "$PANE_ROWS"
     [ "$RESIZED" = 0 ] || printf '%s[2J' "$E"
@@ -930,6 +966,7 @@ cmd_run() {
         wait "$sleeper" 2>/dev/null
         kill "$sleeper" 2>/dev/null
         ! calls_moved "$home" || break
+        ! theme_moved || break
       done
     fi
   done

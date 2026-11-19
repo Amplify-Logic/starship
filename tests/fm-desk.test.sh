@@ -277,6 +277,20 @@ test_an_empty_session_gets_the_whole_desk_in_order() {
   pass "desk: an empty session gets the whole desk, in layout order"
 }
 
+# While bin/fm-theme.sh has the workspace in light, the views open in the
+# cream Terminal profile instead of the layout's own.
+test_views_open_in_cream_while_the_workspace_is_light() {
+  new_case true
+  layout
+  printf 'light\n' > "$FM_HOME/config/workspace-theme"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "open view 1 in Terminal (profile Starship Cream, size 13)" "view 1 is not named in cream"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Starship Cream|13" "$FAKE_HERDR_CALLS" "view 1 did not open in cream"
+  assert_grep "terminal open exec $FAKE/bin/herdr|Starship Cream|10" "$FAKE_HERDR_CALLS" "view 2 did not open in cream"
+  pass "desk: views open in the cream profile while the workspace is light"
+}
+
 test_a_second_run_changes_nothing() {
   new_case true
   layout
@@ -898,6 +912,7 @@ PY
 
 fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
+  test_views_open_in_cream_while_the_workspace_is_light \
   test_a_second_run_changes_nothing \
   test_every_herdr_call_names_the_default_session \
   test_a_restored_session_gets_its_dead_panes_started_in_place \

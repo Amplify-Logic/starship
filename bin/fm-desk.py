@@ -48,7 +48,8 @@ What `open` does, in this order, re-reading Herdr after every step:
      recorded for that factory in this session, else the tab with its label.
   6. Opens windows until as many Herdr clients show the session as the layout
      names views, each with its font size, in the layout's `terminal` app:
-     Terminal through AppleScript (with the view's profile), or a new Ghostty
+     Terminal through AppleScript (with the view's profile, or Starship's
+     cream profile while bin/fm-theme.sh has the workspace in light), or a new Ghostty
      instance through `open -na Ghostty --args`. Every view starts with this
      process's environment minus what a Herdr pane hands down (HERDR_*,
      TERM_PROGRAM and the like), since a Herdr client that inherits it refuses
@@ -533,8 +534,8 @@ def step(kind: str, text: str, **extra: Any) -> Dict[str, Any]:
 
 def view_text(index: int, view: Dict[str, Any], terminal: str = "Terminal") -> str:
     parts = []
-    if view["profile"] and terminal == "Terminal":
-        parts.append("profile %s" % view["profile"])
+    if terminal == "Terminal" and view_profile(view):
+        parts.append("profile %s" % view_profile(view))
     if view["size"]:
         parts.append("size %s" % view["size"])
     return "view %d in %s%s" % (index + 1, terminal, " (%s)" % ", ".join(parts) if parts else "")
@@ -808,13 +809,21 @@ def open_ghostty(size: str) -> None:
     launch(argv + ["-e", herdr_bin()], "Ghostty")
 
 
+def view_profile(view: Dict[str, Any]) -> str:
+    """The view's Terminal profile, or the cream one while the workspace is light."""
+    theme = subprocess.run(["bash", os.path.join(ROOT, "bin", "fm-theme.sh"), "terminal-profile"],
+                           capture_output=True, text=True, env=dict(os.environ, FM_HOME=home_dir()))
+    light = theme.stdout.strip() if theme.returncode == 0 else ""
+    return light or view["profile"]
+
+
 def open_view(layout: Dict[str, Any], index: int) -> None:
     view = layout["views"][index]
     before = len(herdr_clients())
     if layout["terminal"] == "Ghostty":
         open_ghostty(view["size"])
     else:
-        osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view["profile"], view["size"])
+        osascript(OPEN_VIEW, "exec " + shlex.quote(herdr_bin()), view_profile(view), view["size"])
     deadline = time.time() + wait_limit()
     while time.time() < deadline:
         if len(herdr_clients()) > before:

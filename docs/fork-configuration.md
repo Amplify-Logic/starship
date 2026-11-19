@@ -12,6 +12,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Worker permissions, accounts, or environment (this fork's additions) | [Worker command guard](#worker-command-guard-configcommand-guard), [worker outward actions](#worker-outward-actions-configoutward-permissions), [Claude concise prompt](#claude-concise-prompt-configclaude-concise-prompt), and [vendor account pinning](#vendor-account-pinning-configaccountsjson) |
 | Backlog, preferences, and memory (this fork's additions) | [Startup digest trim](#startup-digest-trim-configstartup-digest-trim) and [address and tone](#address-and-tone) |
 | Naming the factories the Factory pane shows | [Factory registry](#factory-registry-datafactoriesmd) |
+| Light (cream) or dark for the whole workspace in one switch | [Workspace theme](#workspace-theme-configworkspace-theme) |
 | Light or dark colours in the Factory pane and bridge strip | [Terminal theme](#terminal-theme-fm_terminal_theme) |
 | The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
 | What `starship` opens in Herdr: tabs, panes, Terminal or Ghostty windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
@@ -26,16 +27,25 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
 
+## Workspace theme (`config/workspace-theme`)
+
+`bin/fm-theme.sh light` switches the whole workspace to cream, a warm and soft light look, and `bin/fm-theme.sh dark` switches it back to the dark flight deck; `bin/fm-theme.sh status` shows what each part is in.
+One run moves the Terminal windows to Starship's cream profile, swaps Herdr's theme and reloads it, and repaints the running bridge strip and Factory pane in place, so no tab or pane closes.
+Dark gives back exactly the Terminal profile and Herdr theme that were in use before the first switch to light.
+The choice is remembered in `config/workspace-theme` (`light` or `dark`), so new panes, restarts and the `starship` desk's Terminal views start in it.
+Claude Code chats keep their own theme: type `/theme` in each and choose the matching light or dark mode.
+The script's header owns what each step changes and what it keeps.
+
 ## Terminal theme (`FM_TERMINAL_THEME`)
 
 The Factory pane and bridge strip share `FM_TERMINAL_THEME`: `auto` (default), `light` or `dark`.
-Set it in the environment inherited by the pane process, for example `export FM_TERMINAL_THEME=light` before starting the workspace.
+An explicit `light` or `dark` wins over the remembered [workspace theme](#workspace-theme-configworkspace-theme) in panes started with it; leave it unset to follow the switch.
 Invalid values behave as `auto`.
-In automatic mode they query the terminal background with OSC 11 at startup, wait at most 150 ms for an RGB reply and use its relative luminance to select readable colours.
+In automatic mode with no remembered workspace theme, they query the terminal background with OSC 11 at startup, wait at most 150 ms for an RGB reply and use its relative luminance to select readable colours.
 If the terminal does not answer, the final ANSI background index in `COLORFGBG` is used when available; otherwise the original dark colours remain.
 Redirected output does not query the terminal.
 Detection runs once, not per frame; restart the pane after changing the terminal theme.
-`bin/fm_terminal_theme.py` owns the detection and shared palettes; no other pane or status surface uses this setting.
+`bin/fm_terminal_theme.py` owns the detection, the order of these inputs and the shared palettes; no other pane or status surface uses this setting.
 
 ## Fork changes to upstream settings
 
