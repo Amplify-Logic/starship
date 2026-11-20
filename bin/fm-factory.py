@@ -16,6 +16,20 @@ Usage:
                                           --height, only what a pane that tall
                                           shows when it opens; with --item, the
                                           highlight is on that item of NEEDS YOU
+  fm-factory.py --screen [--fresh]        print the screen as data
+                                          (fm-factory-screen.v1): what the
+                                          overview and every factory's page
+                                          show, in the pane's own words, from
+                                          the cached record kept current the
+                                          way a live pane keeps it. A second
+                                          screen such as bin/fm-web.py draws it
+  fm-factory.py act                       one writing key pressed from a second
+                                          screen: reads one JSON action on
+                                          stdin, sends the note that key sends
+                                          in the pane, and prints
+                                          {"ok": ..., "said": ...}; exit 2 when
+                                          the action cannot be read (act() owns
+                                          the actions and their fields)
   fm-factory.py view [--factory ID] [--item ID]
                                           the live pane (Herdr runs it through
                                           bin/fm-factory-pane.sh run); --item
@@ -220,6 +234,7 @@ import wave
 from typing import Any, Dict, List, Optional, Tuple
 
 SCHEMA = "fm-factory.v1"
+SCREEN_SCHEMA = "fm-factory-screen.v1"
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 BIN = os.path.join(ROOT, "bin")
 STEPS = ["planning", "building", "checking", "ready to merge"]
@@ -2595,7 +2610,7 @@ class View:
             head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(False)
         if seg_len(head) + 10 > width:
             head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(True)
-        line = row(width, head, [S(time.strftime("%a %H:%M", time.localtime(self.now())), "mist")])
+        line = row(width, head, [S(self.clock_words(), "mist")])
         line.hull = True
         return [line] + self.queue_rows(width)
 
@@ -2624,19 +2639,25 @@ class View:
             line.hull = hull
         return rows
 
+    def waited(self, need: Dict[str, Any]) -> str:
+        """How long a need has waited, or that it is answered and waits for Starship."""
+        now = self.now()
+        question = need["kind"] == "question"
+        sent = self.answered_of(need)
+        if sent:
+            # Answered; it stays listed until Starship has acted on that.
+            return "answered %s, waiting for Starship" % (
+                when_words(sent["at"], now) if sent.get("at") else "just now")
+        if not need.get("since"):
+            return "waiting" if question else "ready"
+        return ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60)
+
     def need_head(self, need: Dict[str, Any], full: bool):
         """The lead, title and right-hand words of a need's first row."""
-        now = self.now()
         fac = self.factory(need["factory"])
         question = need["kind"] == "question"
         sent = self.answered_of(need)
-        waited = ("waiting " if question else "ready ") + minutes_words((now - need["since"]) // 60) \
-            if need.get("since") else ("waiting" if question else "ready")
-        if sent:
-            # Answered; it stays listed until Starship has acted on that.
-            waited = "answered %s, waiting for Starship" % (
-                when_words(sent["at"], now) if sent.get("at") else "just now")
-        right = [S(waited, "cyan" if sent else "mist")]
+        right = [S(self.waited(need), "cyan" if sent else "mist")]
         if need.get("mate"):
             right = [S("from %s" % need["mate"], "mist"), S(" · ", "faint")] + right
         if not full:
@@ -2745,6 +2766,18 @@ class View:
             return self.track(job, width, 2)
         return segs
 
+    def job_words(self, job: Dict[str, Any]) -> Tuple[str, str, bool]:
+        """A job's words: what a busy one is doing and how long it has run, else its state; and whether it is quiet."""
+        now = self.now()
+        if job["state"] == "busy":
+            elapsed = minutes_words((now - job["started"]) // 60) if job.get("started") else ""
+            if job.get("quiet") and job.get("last_sign_of_life"):
+                return "quiet for %d min, no sign of life" % ((now - job["last_sign_of_life"]) // 60), elapsed, True
+            return job.get("doing") or "at work", elapsed, False
+        if job["state"] == "waiting" and job.get("until"):
+            return "waiting · tries again %s" % clock(job["until"]), "", False
+        return job["state"], "", False
+
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
         rows = self.job_lines(width, job, full)
         if job.get("read"):
@@ -2752,21 +2785,14 @@ class View:
         return rows
 
     def job_lines(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
-        now = self.now()
         state = job["state"]
+        words, elapsed, quiet = self.job_words(job)
         if state == "busy":
-            elapsed = [S(minutes_words((now - job["started"]) // 60), "mist")] if job.get("started") else []
-            if job.get("quiet") and job.get("last_sign_of_life"):
-                doing = S("quiet for %d min, no sign of life" % ((now - job["last_sign_of_life"]) // 60), "amber")
-            else:
-                doing = S(job.get("doing") or "at work", "mist")
-            return [row(width, [S("     "), S("● ", "amber"), S(job["title"], "ice")], elapsed),
+            return [row(width, [S("     "), S("● ", "amber"), S(job["title"], "ice")],
+                        [S(elapsed, "mist")] if elapsed else []),
                     row(width, [S("       ")] + self.track(job, width)),
-                    row(width, [S("       "), doing])]
+                    row(width, [S("       "), S(words, "amber" if quiet else "mist")])]
         colour = STATE_COLOUR.get(state, "faint")
-        words = state
-        if state == "waiting" and job.get("until"):
-            words = "waiting · tries again %s" % clock(job["until"])
         dot = "● " if state in ("decision for you", "ready to merge", "needs a look", "failed", "waiting") else "· "
         return [row(width, [S("     "), S(dot, colour), S(job["title"], "ice" if full else "mist")],
                     [S(words, colour)])]
@@ -2797,20 +2823,42 @@ class View:
             line.stop = ("factory", fac["id"])
         return rows
 
+    def routine_words(self, line: Dict[str, Any]) -> Tuple[List[str], str]:
+        """A routine line's words, how many runs today and the last of them, and what it does now if anything."""
+        words = [plural(line["today"], "run today", "runs today") if line["today"] else "no run today"]
+        if line.get("last"):
+            words.append("last %s %s" % (line["last_word"], when_words(line["last"], self.now())))
+        return words, "busy" if line["running"] else ("waiting" if line["folded"] else "")
+
+    def clock_words(self) -> str:
+        """The day and time the screen shows as now."""
+        return time.strftime("%a %H:%M", time.localtime(self.now()))
+
+    @staticmethod
+    def about_words(fac: Dict[str, Any]) -> List[str]:
+        """What a factory's page says under its name: what it is about, then its crew."""
+        about = fac.get("about") or ", ".join(fac["projects"]) or ""
+        crew = fac["crew"]
+        return [x for x in (about, "%s, %d busy" % (plural(crew["workers"], "worker", "workers"), crew["busy"])) if x]
+
+    @staticmethod
+    def learned(fac: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """A factory's latest lessons, each with the day it shows."""
+        return [(time.strftime("%d %b", time.gmtime(parse_iso(item["when"]) or 0)) if item.get("when") else "",
+                 item["what"]) for item in fac["learned"][-5:]]
+
+    def talk(self, fac: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+        """What was said to and by a factory's crew: when, who, and the words."""
+        return [(when_words(line["at"], self.now()) if line.get("at") else "", line["who"], line["said"])
+                for line in fac["talk"]]
+
     def routine_rows(self, width: int, fac: Dict[str, Any]) -> List[Row]:
         """A routine kind's runs folded into one line: how many today, the last, and whether one runs now."""
         rows = []
         for line in fac.get("routine_runs") or []:
-            words = [plural(line["today"], "run today", "runs today") if line["today"] else "no run today"]
-            if line.get("last"):
-                words.append("last %s %s" % (line["last_word"], when_words(line["last"], self.now())))
-            now = []
-            if line["running"]:
-                now = [S("busy", "amber")]
-            elif line["folded"]:
-                now = [S("waiting", "amber")]
+            words, now = self.routine_words(line)
             rows.append(row(width, [S("     "), S("↻ ", "faint"), S(line["kind"], "mist"),
-                                    S("  " + " · ".join(words), "faint")], now))
+                                    S("  " + " · ".join(words), "faint")], [S(now, "amber")] if now else []))
         return rows
 
     def factory_lines(self, width: int, fac: Dict[str, Any]) -> List[Row]:
@@ -2834,7 +2882,8 @@ class View:
             rows.append(row(width, text))
         return rows
 
-    def feed_rows(self, width: int, fid: Optional[str] = None, cap: int = 12) -> List[Row]:
+    def feed(self, fid: Optional[str] = None, cap: int = 12) -> Tuple[str, List[Tuple[str, Dict[str, Any]]]]:
+        """The feed's heading and its events, oldest first, each with the time it shows."""
         now = self.now()
         events = [e for e in self.record["feed"] if fid in (None, e["factory"])][:cap]
         since = self.record.get("since_epoch")
@@ -2843,11 +2892,7 @@ class View:
             title = "LAST %s" % since_from.upper()
         else:
             title = "SINCE YOU LAST LOOKED" + (", %s" % when_words(since, now) if since else "")
-        rows = [row(width, [S(" " + title, "mist", True)]), row(width)]
-        if not events:
-            return rows + [row(width, [S("     nothing new", "faint")])]
-        names = max(len(e["actor"]) for e in events) if not fid else 0
-        words = max(len(e["word"]) for e in events)
+        stamped = []
         for event in reversed(events):
             if event["at"]:
                 stamp = when_words(event["at"], now)
@@ -2855,6 +2900,17 @@ class View:
                 stamp = "today"
             else:
                 stamp = time.strftime("%d %b", time.gmtime(parse_iso(event["date"]) or now))
+            stamped.append((stamp, event))
+        return title, stamped
+
+    def feed_rows(self, width: int, fid: Optional[str] = None, cap: int = 12) -> List[Row]:
+        title, events = self.feed(fid, cap)
+        rows = [row(width, [S(" " + title, "mist", True)]), row(width)]
+        if not events:
+            return rows + [row(width, [S("     nothing new", "faint")])]
+        names = max(len(e["actor"]) for _stamp, e in events) if not fid else 0
+        words = max(len(e["word"]) for _stamp, e in events)
+        for stamp, event in events:
             left = [S("   "), S(stamp.ljust(10), "faint")]
             if not fid:
                 left.append(S(event["actor"].ljust(names + 2), "mist"))
@@ -3048,12 +3104,9 @@ class View:
     def factory_page(self, width: int) -> List[Row]:
         fac = self.factory(self.opened)
         rows: List[Row] = []
-        about = fac.get("about") or ", ".join(fac["projects"]) or ""
-        crew = fac["crew"]
         rows += [row(width, [S(" "), S("  " if fac["needs"] else "▸ ", "cyan", True), S(fac["name"], "ice", True)],
                      self.steer(fac), band=not fac["needs"]),
-                 row(width, [S("   " + " · ".join(x for x in (about, "%s, %d busy" % (
-                     plural(crew["workers"], "worker", "workers"), crew["busy"])) if x), "faint")]),
+                 row(width, [S("   " + " · ".join(self.about_words(fac)), "faint")]),
                  row(width)]
         rows[0].stop = ("factory", fac["id"])
         needs = self.needs(fac["id"])
@@ -3097,21 +3150,17 @@ class View:
         rows += [row(width), row(width, [S(" WHAT IT HAS LEARNED LATELY", "mist", True)]), row(width)]
         if not fac["learned"]:
             rows.append(row(width, [S("     nothing recorded yet", "faint")]))
-        for item in fac["learned"][-5:]:
-            stamp = ""
-            if item.get("when"):
-                stamp = time.strftime("%d %b", time.gmtime(parse_iso(item["when"]) or 0))
-            rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], item["what"], "mist")
+        for stamp, what in self.learned(fac):
+            rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], what, "mist")
         rows += [row(width)] + self.feed_rows(width, fac["id"], cap=8)
         rows += [row(width), row(width, [S(" TALK", "mist", True)]), row(width)]
         if not fac["talk"]:
             rows.append(row(width, [S("     Nothing said here yet. Press t to talk to this crew.", "faint")]))
-        for line in fac["talk"]:
-            you = line["who"] == "you"
-            stamp = when_words(line["at"], self.now()) if line.get("at") else ""
+        for stamp, who, said in self.talk(fac):
+            you = who == "you"
             rows += flow(width, [S("   "), S(stamp.ljust(9), "faint"),
-                                 S(("you" if you else line["who"]).ljust(10), "cyan" if you else "mist")],
-                         line["said"], "ice" if you else "mist")
+                                 S(who.ljust(10), "cyan" if you else "mist")],
+                         said, "ice" if you else "mist")
         return rows
 
     def frame(self, width: int, height: Optional[int] = None) -> List[Row]:
@@ -3156,6 +3205,190 @@ class View:
         lower = row(width, [S(" ▼ %s below · pgdn" % plural(below, "more line", "more lines"), "faint")]) \
             if below > 0 else row(width)
         return head + [upper] + notes + sight + [lower] + foot
+
+
+def screen(view: View) -> Dict[str, Any]:
+    """The screen as data (fm-factory-screen.v1): what the overview and each factory's page show.
+
+    It is the same selection and the same words `--plain` draws, taken from
+    the same View, for a second screen that lays them out its own way: which
+    calls and jobs show, how long each has waited or run, the queue's counts,
+    the feed's times. docs/factory-pane.md owns the fields.
+    """
+    record = view.record
+
+    def need_of(need: Dict[str, Any]) -> Dict[str, Any]:
+        fac = view.factory(need["factory"])
+        sent = view.answered_of(need)
+        return {"id": need["id"], "asking": asking(need), "factory": fac["id"], "factory_name": fac["name"],
+                "kind": need["kind"], "ask": need["ask"], "title": need["title"], "why": need.get("why") or "",
+                "options": [{"key": o["key"], "label": o["label"], "suggested": bool(o["suggested"])}
+                            for o in need["options"]],
+                "suggested_by": need.get("suggested_by") or "Starship",
+                "recommendation": need.get("recommendation") or "",
+                "holds_up": list(need.get("holds_up") or [])[:3], "waited": view.waited(need),
+                "answered": {"key": sent.get("key")} if sent else None,
+                "checking": bool(need.get("checking")), "mate": need.get("mate"), "pr": need.get("pr"),
+                "read": bool(need.get("read"))}
+
+    def job_of(job: Dict[str, Any]) -> Dict[str, Any]:
+        words, elapsed, quiet = view.job_words(job)
+        colour = "amber" if job["state"] == "busy" else STATE_COLOUR.get(job["state"], "faint")
+        return {"id": job["id"], "title": job["title"], "state": job["state"], "words": words, "elapsed": elapsed,
+                "colour": colour, "quiet": quiet,
+                "step": STEPS.index(job["step"]) if job.get("step") in STEPS else 1,
+                "queue": job_queue_words(job) if job.get("queue") else "", "read": bool(job.get("read"))}
+
+    def feed_of(fid: Optional[str], cap: int) -> Dict[str, Any]:
+        title, events = view.feed(fid, cap)
+        return {"title": title, "events": [{"when": stamp, "actor": e["actor"], "factory": e["factory"],
+                                            "word": e["word"], "text": e["text"],
+                                            "colour": FEED_COLOUR.get(e["word"].split(" ·")[0], "amber")}
+                                           for stamp, e in events]}
+
+    def factory_of(fac: Dict[str, Any]) -> Dict[str, Any]:
+        idle = fac["state"] == "idle"
+        nxt = None if idle else fac.get("next")
+        routine = []
+        for line in fac.get("routine_runs") or []:
+            words, now = view.routine_words(line)
+            routine.append({"kind": line["kind"], "words": words, "now": now})
+        shown, folded = view.page_jobs(fac)
+        rules_words, rules_colour = ("", "faint") if not fac["rules"] else rules_size_words(
+            fac.get("rules_size", profile_size(fac["rules"])), record.get("rules_cap", PROFILE_CAP))
+        return {
+            "id": fac["id"], "name": fac["name"], "state": fac["state"], "steered_by": fac["steered_by"],
+            "about": view.about_words(fac),
+            "queue": view.idle_words(fac) if idle else view.queue_brief(fac),
+            "jobs": [job_of(job) for job in view.overview_jobs(fac)], "routine": routine,
+            "next": {"title": nxt["title"], "once_you_answer": bool(nxt["once_you_answer"]),
+                     "then": nxt["then"]} if nxt else None,
+            "page": {
+                "needs": [need["id"] for need in view.needs(fac["id"])],
+                "queue": [words for _key, words in queue_parts(fac["queue"])] if fac["jobs"] and fac.get("queue")
+                else [],
+                "jobs": [job_of(job) for job in shown],
+                "workers": [job_of(job) for job in tab_workers(fac)],
+                "folded": [{"words": words, "jobs": [{"title": job["title"], "queue": job_queue_words(job)}
+                                                     for job in jobs]} for words, jobs in fold_parts(folded)],
+                "rules": list(fac["rules"]), "rules_size": rules_words,
+                "rules_mark": {"red": "over", "amber": "near"}.get(rules_colour, ""),
+                "learned": [{"when": stamp, "what": what} for stamp, what in view.learned(fac)],
+                "feed": feed_of(fac["id"], 8),
+                "talk": [{"when": stamp, "who": who, "said": said} for stamp, who, said in view.talk(fac)]}}
+
+    return {"schema": SCREEN_SCHEMA, "as_of": record.get("as_of"),
+            "clock": view.clock_words(),
+            "counts": record["counts"], "count_words": [{"words": words, "colour": colour}
+                                                     for words, colour in count_words(record["counts"])],
+            "queue": [words for _key, words in queue_parts(record["queue"])] if record.get("queue") else [],
+            "needs": [need_of(need) for need in view.needs()],
+            "factories": [factory_of(fac) for fac in view.ordered()],
+            "feed": feed_of(None, 12), "steps": list(STEPS), "voice": bool(view.voice)}
+
+
+def kept_record(home: str) -> Dict[str, Any]:
+    """The cached record, kept current the way a live pane keeps it, for a screen that asks again and again.
+
+    It answers at once with the record on disk, built first when there is
+    none, shows the overview reading's figures on it, and starts the same
+    rebuilds a live pane would, in the background and under the home's one
+    rebuild lock: a whole refresh when one is due, or the owner's calls alone
+    when their signal or the overview's ready work moved past the record's.
+    """
+    record = first_record(home)
+    if refresh_due(home, record):
+        refresh_in_background(home)
+    signal = calls_signal(home)
+    if not follow_overview(record, overview_reading(home)) or (signal and signal != record.get("calls_signal")):
+        refresh_calls_in_background(home)
+    return record
+
+
+ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read")
+
+
+def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
+    """One writing key, pressed from a screen that is not the pane: the same note down the same path.
+
+    <ask> names the action and what it is about: `answer` (item, option),
+    `keep` (item), `change` and `discuss` (item, text), `talk` (factory,
+    text), `settled` (item), `steer` (factory, who: you or Starship), `read`
+    (item, or factory and job). An `asking` beside an item is the
+    asking the screen showed; when the record's differs the call was settled
+    or asked again since, and nothing is sent. The answer says whether it went
+    (`ok`) and the words the pane would say (`said`). Every action is a look,
+    as a key press in the pane is, unless `in_tab` is true: the button was on
+    a factory's own tab, and a factory's tab records no look.
+    """
+    action = ask.get("action")
+    if action not in ACTIONS:
+        raise ValueError("unknown action: %s" % action)
+    now = now_epoch()
+    if ask.get("in_tab") is not True:
+        note_look(home, now)
+    view = View(first_record(home))
+    need = view.need(ask["item"]) if ask.get("item") else None
+    if ask.get("item") and action != "read" and (need is None or ask.get("asking") not in (None, asking(need))):
+        return {"ok": False, "said": "Not sent: this was settled elsewhere."}
+    fid = need["factory"] if need else ask.get("factory")
+    if not view.has_factory(fid):
+        return {"ok": False, "said": "Not sent: there is no such factory any more."}
+    fac = view.factory(fid)
+    text = (ask.get("text") or "").strip()
+
+    def send(note: Dict[str, Any]) -> Dict[str, Any]:
+        ok, why = send_note(home, note["request_id"], note["body"])
+        if not ok:
+            return {"ok": False, "said": "✗ NOT SENT: %s. Nothing reached Starship." % why.rstrip(".")}
+        refresh_in_background(home)
+        return {"ok": True, "said": "✓ SENT to Starship: %s" % note["done"]}
+
+    if action == "answer":
+        option = next((o for o in (need or {}).get("options") or [] if o["key"] == ask.get("option")), None)
+        if need is None or need["kind"] != "question" or option is None:
+            return {"ok": False, "said": "Not sent: that is not one of this question's answers."}
+        return send(answer_note(fac, need, option))
+    if action == "keep":
+        if need is None or need["kind"] != "finished work":
+            return {"ok": False, "said": "Not sent: that is not finished work waiting for you."}
+        return send(keep_note(fac, need))
+    if action in ("change", "discuss", "talk"):
+        if not text:
+            return {"ok": False, "said": "Nothing to send yet: there were no words in it."}
+        if action == "talk":
+            return send(talk_note(fac, {"kind": "talk"}, text, bool(ask.get("spoken")), now))
+        if need is None or (need["kind"] == "finished work") != (action == "change"):
+            return {"ok": False, "said": "Not sent: that is not here to talk about any more."}
+        return send(talk_note(fac, {"kind": action, "item": need["id"], "title": need["title"],
+                                    "pr": need.get("pr")}, text, bool(ask.get("spoken")), now))
+    if action == "settled":
+        if need is None or need["kind"] != "question":
+            return {"ok": False, "said": "Not asked: that is not a question waiting for you."}
+        # The cached record may be from before an earlier ask, so always look for one.
+        outcome, words = ask_settled(home, fac, dict(need, checking=True))
+        if outcome == "asked":
+            refresh_in_background(home)
+        return {"ok": outcome in ("asked", "already"), "said": words}
+    if action == "steer":
+        who = ask.get("who")
+        if who not in ("you", "Starship"):
+            raise ValueError("who steers is you or Starship")
+        note = steer_note(fac, who, now)
+        if fac["steered_by"] == who:
+            return {"ok": True, "said": note["done"]}
+        ok, why = send_note(home, note["request_id"], note["body"])
+        if not ok:
+            return {"ok": False, "said": "Who steers did not change: %s" % why}
+        record_steer(home, fac["id"], who, now)
+        refresh_in_background(home)
+        return {"ok": True, "said": note["done"]}
+    # read
+    item = need or next((job for job in fac["jobs"] if job["id"] == ask.get("job")), None)
+    if not item or not item.get("read"):
+        return {"ok": False, "said": "Nothing to read here yet."}
+    start_reading(home, list(item["read"]))
+    return {"ok": True, "said": "Opening %s to read." % item["title"]}
 
 
 def plain(view: View, width: int, height: Optional[int] = None) -> str:
@@ -3220,6 +3453,85 @@ def settled_request_id(fid: str, need: Dict[str, Any], requested: int) -> str:
     held = need.get("since")
     stamp = held if held is not None and requested < held else requested
     return "factory.%s.settled.%s.%d" % (fid, need["id"], stamp)
+
+
+def answer_note(fac: Dict[str, Any], need: Dict[str, Any], option: Dict[str, Any]) -> Dict[str, Any]:
+    """The note an option key sends for a question: its request id, its body, and the words that say it went."""
+    return {
+        "request_id": "factory.%s.answer.%s.%s.%s" % (fac["id"], need["id"], asking(need), option["key"]),
+        "body": "Answer for %s: %s %s\n\n(from the Factory pane; item %s%s)" % (
+            need["title"], option["key"], option["label"], need["id"],
+            ", key " + need["key"] if need.get("key") else ""),
+        "done": "answer %s, %s (%s)" % (option["key"], option["label"], need["title"]),
+        "mark": {"item": need["id"], "key": option["key"]}}
+
+
+def keep_note(fac: Dict[str, Any], need: Dict[str, Any]) -> Dict[str, Any]:
+    """The note `k` sends for finished work: keep it and land it."""
+    return {
+        "request_id": "factory.%s.keep.%s.%s" % (fac["id"], need["id"], asking(need)),
+        "body": "Keep %s: please land it.\n\n(from the Factory pane; item %s%s)" % (
+            need["title"], need["id"], ", " + need["pr"] if need.get("pr") else ""),
+        "done": "keep %s and land it" % need["title"],
+        "mark": {"item": need["id"], "key": None}}
+
+
+def talk_note(fac: Dict[str, Any], talk: Dict[str, Any], text: str, spoken: bool, now: int) -> Dict[str, Any]:
+    """The note the talk box sends: to a crew (kind talk), about a question (discuss), or changes to finished work."""
+    source = "spoken into the Factory pane" if spoken else "from the Factory pane"
+    if talk["kind"] == "talk":
+        body = "To the %s crew: %s\n\n(%s)" % (fac["name"], text, source)
+        rid = "factory.%s.talk.%d" % (fac["id"], now)
+    elif talk["kind"] == "change":
+        body = "Changes for %s: %s\n\n(%s; item %s%s)" % (
+            talk["title"], text, source, talk["item"], ", " + talk["pr"] if talk.get("pr") else "")
+        rid = "factory.%s.change.%s.%d" % (fac["id"], talk["item"], now)
+    else:
+        body = "About %s: %s\n\n(%s; item %s)" % (talk["title"], text, source, talk["item"])
+        rid = "factory.%s.talk.%s.%d" % (fac["id"], talk["item"], now)
+    done = '%s"%s"%s' % ("(voice) " if spoken else "", tidy(text, 90),
+                         ". It passes it on to the %s crew." % fac["name"] if talk["kind"] == "talk" else "")
+    return {"request_id": rid, "body": body, "done": done}
+
+
+def steer_note(fac: Dict[str, Any], who: str, now: int) -> Dict[str, Any]:
+    """The note `s` sends when who steers a factory changes to <who>, `you` or `Starship`."""
+    return {
+        "request_id": "factory.%s.steer.%d" % (fac["id"], now),
+        "body": ("I steer %s myself from now on." if who == "you" else "Starship steers %s again.") % fac["name"]
+                + "\n\n(from the Factory pane; who steers is recorded in state/factory/steer.log)",
+        "done": ("You steer %s now." if who == "you" else "Starship steers %s again.") % fac["name"]}
+
+
+def ask_settled(home: str, fac: Dict[str, Any], need: Dict[str, Any]) -> Tuple[str, str]:
+    """File a reconcile request for a held call and wake Starship to re-check it.
+
+    The outcome is `already` when Starship is already checking it and nothing
+    was filed or sent, `refused` when the request could not be filed, `unsent`
+    when the wake note did not go, or `asked`; the second value is the words
+    that say so.
+    """
+    if need.get("checking"):
+        pending = reconcile_pending(home).get(need["id"])
+        sent = {note.get("request_id") for note in inbox_receipts(home)}
+        if pending is not None and settled_request_id(fac["id"], need, pending) in sent:
+            return "already", "Starship is already checking this."
+    requested, why = file_reconcile(home, need["id"])
+    if requested is None:
+        return "refused", "Not asked: %s" % why
+    body = ("Already settled? %s\n\n"
+            "The owner thinks this held call is already settled, all or in part, in conversation. "
+            "Re-read the conversation now and record it in this turn: close the call with the evidence "
+            "(fm-captain-hold.sh reconcile close), or rewrite what still stands by retitling it with "
+            "bin/fm-tasks-axi.sh update %s --title '<new title>', then holding it again with "
+            "bin/fm-captain-hold.sh hold %s --reason '<new reason>'. A rewritten call still retires its "
+            "pending request with reconcile note. The reconcile request for it is already filed; the "
+            "captain-hold-lifecycle skill owns both outcomes."
+            "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"], need["id"], need["id"]))
+    ok, why = send_note(home, settled_request_id(fac["id"], need, requested), body)
+    if not ok:
+        return "unsent", "Not sent: %s" % why
+    return "asked", "Asked Starship to check whether %s is already settled." % need["title"]
 
 
 def start_reading(home: str, sources: List[str]) -> subprocess.Popen:
@@ -3681,16 +3993,10 @@ class Pane:
     def answer(self, need: Dict[str, Any], option: Dict[str, Any]) -> Dict[str, Any]:
         """The confirmation an option key opens on a question."""
         fac = self.view.factory(need["factory"])
-        return {
-            "item": need["id"], "asked": asking(need), "option": option["key"],
-            "what": "answer %s" % option["key"], "title": "Your answer · %s" % need["title"],
-            "prompt": "%s  %s" % (option["key"], option["label"]),
-            "request_id": "factory.%s.answer.%s.%s.%s" % (fac["id"], need["id"], asking(need), option["key"]),
-            "body": "Answer for %s: %s %s\n\n(from the Factory pane; item %s%s)" % (
-                need["title"], option["key"], option["label"], need["id"],
-                ", key " + need["key"] if need.get("key") else ""),
-            "done": "answer %s, %s (%s)" % (option["key"], option["label"], need["title"]),
-            "mark": {"item": need["id"], "key": option["key"]}}
+        return dict(answer_note(fac, need, option),
+                    item=need["id"], asked=asking(need), option=option["key"],
+                    what="answer %s" % option["key"], title="Your answer · %s" % need["title"],
+                    prompt="%s  %s" % (option["key"], option["label"]))
 
     def confirm_key(self, key: str) -> bool:
         """A key while a confirmation is open: only enter or esc does anything."""
@@ -3788,21 +4094,8 @@ class Pane:
         """Send what the talk box holds; the box closes once it went, and keeps its words when it did not."""
         view, talk, now = self.view, self.view.talking, now_epoch()
         text = talk["text"].strip()
-        fac = view.factory(talk["factory"])
-        source = "spoken into the Factory pane" if spoken else "from the Factory pane"
-        if talk["kind"] == "talk":
-            body = "To the %s crew: %s\n\n(%s)" % (fac["name"], text, source)
-            rid = "factory.%s.talk.%d" % (fac["id"], now)
-        elif talk["kind"] == "change":
-            body = "Changes for %s: %s\n\n(%s; item %s%s)" % (
-                talk["title"], text, source, talk["item"], ", " + talk["pr"] if talk.get("pr") else "")
-            rid = "factory.%s.change.%s.%d" % (fac["id"], talk["item"], now)
-        else:
-            body = "About %s: %s\n\n(%s; item %s)" % (talk["title"], text, source, talk["item"])
-            rid = "factory.%s.talk.%s.%d" % (fac["id"], talk["item"], now)
-        said = '%s"%s"%s' % ("(voice) " if spoken else "", tidy(text, 90),
-                             ". It passes it on to the %s crew." % fac["name"] if talk["kind"] == "talk" else "")
-        if self.send(rid, body, said):
+        note = talk_note(view.factory(talk["factory"]), talk, text, spoken, now)
+        if self.send(note["request_id"], note["body"], note["done"]):
             view.talking = None
 
     def talk_key(self, key: str) -> bool:
@@ -3844,34 +4137,14 @@ class Pane:
 
     def settled(self, need: Dict[str, Any]) -> None:
         """File a reconcile request for a held call and wake Starship to re-check it."""
-        fac = self.view.factory(need["factory"])
-        if need.get("checking"):
-            pending = reconcile_pending(self.home).get(need["id"])
-            sent = {note.get("request_id") for note in inbox_receipts(self.home)}
-            if pending is not None and settled_request_id(fac["id"], need, pending) in sent:
-                self.say("Starship is already checking this.", "amber")
-                return
         asked_at = time.time()
-        requested, why = file_reconcile(self.home, need["id"])
-        if requested is None:
-            self.say("Not asked: %s" % why, "red", 12)
-            return
-        body = ("Already settled? %s\n\n"
-                "The owner thinks this held call is already settled, all or in part, in conversation. "
-                "Re-read the conversation now and record it in this turn: close the call with the evidence "
-                "(fm-captain-hold.sh reconcile close), or rewrite what still stands by retitling it with "
-                "bin/fm-tasks-axi.sh update %s --title '<new title>', then holding it again with "
-                "bin/fm-captain-hold.sh hold %s --reason '<new reason>'. A rewritten call still retires its "
-                "pending request with reconcile note. The reconcile request for it is already filed; the "
-                "captain-hold-lifecycle skill owns both outcomes."
-                "\n\n(from the Factory pane; item %s)" % (need["title"], need["id"], need["id"], need["id"]))
-        ok, why = send_note(self.home, settled_request_id(fac["id"], need, requested), body)
-        if not ok:
-            self.say("Not sent: %s" % why, "red", 12)
+        outcome, words = ask_settled(self.home, self.view.factory(need["factory"]), need)
+        if outcome != "asked":
+            self.say(words, *(("amber",) if outcome == "already" else ("red", 12)))
             return
         need["checking"] = True
         self.asked[need["id"]] = (need.get("since"), asked_at)
-        self.say("Asked Starship to check whether %s is already settled." % need["title"], "green")
+        self.say(words, "green")
         refresh_in_background(self.home)
 
     def key(self, key: str) -> bool:
@@ -3943,17 +4216,10 @@ class Pane:
             view.confirm = self.answer(need, next(o for o in need["options"] if o["key"].lower() == lower))
             view.follow = True
         elif need and need["kind"] == "finished work" and lower == "k":
-            fac = view.factory(need["factory"])
-            view.confirm = {
-                "item": need["id"], "asked": asking(need), "what": "keep it",
-                "title": "Keep it · %s" % need["title"],
-                "prompt": "Keep %s and ask Starship to land it." % need["title"],
-                "request_id": "factory.%s.keep.%s.%s" % (fac["id"], need["id"], asking(need)),
-                "body": "Keep %s: please land it.\n\n(from the Factory pane; item %s%s)" % (
-                    need["title"], need["id"],
-                    ", " + need["pr"] if need.get("pr") else ""),
-                "done": "keep %s and land it" % need["title"],
-                "mark": {"item": need["id"], "key": None}}
+            view.confirm = dict(keep_note(view.factory(need["factory"]), need),
+                                item=need["id"], asked=asking(need), what="keep it",
+                                title="Keep it · %s" % need["title"],
+                                prompt="Keep %s and ask Starship to land it." % need["title"])
             view.follow = True
         elif need and need["kind"] == "finished work" and lower == "c":
             self.open_talk({"kind": "change", "factory": need["factory"], "item": need["id"],
@@ -3977,19 +4243,15 @@ class Pane:
             if fid:
                 fac = view.factory(fid)
                 who = "Starship" if fac["steered_by"] == "you" else "you"
-                ok, why = send_note(self.home, "factory.%s.steer.%d" % (fid, now),
-                                    ("I steer %s myself from now on." if who == "you" else
-                                     "Starship steers %s again.") % fac["name"]
-                                    + "\n\n(from the Factory pane; who steers is recorded in state/factory/steer.log)")
+                note = steer_note(fac, who, now)
+                ok, why = send_note(self.home, note["request_id"], note["body"])
                 if ok:
                     record_steer(self.home, fid, who, now)
                     fac["steered_by"] = who
                     view.record["feed"].insert(0, {
                         "at": now, "date": None, "actor": "you", "factory": fid, "job": None,
-                        "word": "took the helm" if who == "you" else "handed back",
-                        "text": ("You steer %s now." if who == "you" else "Starship steers %s again.") % fac["name"]})
-                    self.say("You steer %s now." % fac["name"] if who == "you"
-                             else "Starship steers %s again." % fac["name"], "cyan")
+                        "word": "took the helm" if who == "you" else "handed back", "text": note["done"]})
+                    self.say(note["done"], "cyan")
                     refresh_in_background(self.home)
                 else:
                     self.say("Who steers did not change: %s" % why, "red", 12)
@@ -4243,9 +4505,14 @@ def open_tab(home: str, fid: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def tab_workers(factory: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The jobs of <factory> its tab shows a live worker beside: the started ones at work (MIRROR_STATES), up to MIRROR_CAP."""
+    return [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
+
+
 def split_workers(home: str, factory: Dict[str, Any], page: str) -> Tuple[bool, str]:
     """Split a live copy of each worker at work (MIRROR_STATES) of <factory> beside its page pane <page>, stacked on the right."""
-    workers = [j for j in factory["jobs"] if j["started"] and j["state"] in MIRROR_STATES][:MIRROR_CAP]
+    workers = tab_workers(factory)
     above = None
     for index, job in enumerate(workers):
         target, direction = (page, "right") if index == 0 else (above, "down")
@@ -4337,10 +4604,11 @@ def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(prog="fm-factory.py", add_help=True,
                                      description="The Factory pane. See the header of this file.")
     parser.add_argument("command", nargs="?", choices=["view", "follow", "open-tab", "workers", "refresh", "refresh-calls",
-                                                          "profile"])
+                                                          "profile", "act"])
     parser.add_argument("target", nargs="?")
     parser.add_argument("--data", action="store_true")
     parser.add_argument("--plain", action="store_true")
+    parser.add_argument("--screen", action="store_true")
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--factory")
     parser.add_argument("--width", type=int, default=92)
@@ -4355,6 +4623,24 @@ def main(argv: List[str]) -> int:
         return 2 if stop.code else 0
     home = home_dir()
     try:
+        if args.screen:
+            if args.command or args.data or args.plain:
+                parser.print_usage(sys.stderr)
+                return 2
+            fresh = args.fresh or bool(os.environ.get("FM_FACTORY_SNAPSHOT"))
+            record = current_record(home, True) if fresh else kept_record(home)
+            print(json.dumps(screen(View(record, voice=voice_ready(home))), ensure_ascii=False))
+            return 0
+        if args.command == "act":
+            try:
+                ask = json.loads(sys.stdin.read())
+                if not isinstance(ask, dict):
+                    raise ValueError("the action is not an object")
+                print(json.dumps(act(home, ask), ensure_ascii=False))
+            except (ValueError, KeyError, TypeError) as error:
+                print("fm-factory: act: %s" % error, file=sys.stderr)
+                return 2
+            return 0
         if args.data or args.plain:
             if args.command:
                 parser.print_usage(sys.stderr)

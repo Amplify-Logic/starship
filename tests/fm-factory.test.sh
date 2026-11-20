@@ -1407,11 +1407,13 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   reset_case
   write_registry
   write_world
+  local pressed
   drive_keys 2 ENTER
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
     "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" \
     "the answer acts on the highlighted question"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "Answer for Harvest chart: 2 this season" "answer body"
+  pressed=$(jq -c '{request_id, body}' "$FM_FACTORY_TEST_NOTES")
   : > "$FM_FACTORY_TEST_NOTES"
   drive_keys A ESC
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a letter for another question sends nothing; esc cancels"
@@ -1419,7 +1421,151 @@ test_writing_keys_go_through_the_inbox_and_act_on_the_highlighted_row() {
   assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
     "factory.garden-journal.keep.garden-share.$((NOW - 109 * 60))" "keep names the item and when it became ready"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "https://example.invalid/g/pull/12" "keep names the change"
+  pressed="$pressed"$'\n'"$(jq -c '{request_id, body}' "$FM_FACTORY_TEST_NOTES")"
+  # A button on a second screen is the key: act sends the same two notes, so
+  # a click and a key press on one question are one answer.
+  : > "$FM_FACTORY_TEST_NOTES"
+  act '{"action":"answer","item":"garden-chart","asking":"'"$((NOW - 3 * 3600))"'","option":"2"}' >/dev/null \
+    || fail "act could not answer"
+  act '{"action":"keep","item":"garden-share"}' >/dev/null || fail "act could not keep"
+  assert_equals "$(jq -c '{request_id, body}' "$FM_FACTORY_TEST_NOTES")" "$pressed" \
+    "an answer and a keep from a second screen are the notes the keys send, id and body"
   pass "factory pane: answer and keep go to Starship's inbox for the highlighted row only, after enter"
+}
+
+# A second screen, such as the web page, draws the pane from --screen instead of
+# reading the pane's text: the same calls, jobs, counts and words, as data.
+test_the_screen_as_data_says_what_the_plain_screen_shows() {
+  reset_case
+  write_registry
+  write_world
+  local screen="$TMP_ROOT/case$CASE/screen.json" plain
+  python3 "$FACTORY" --screen > "$screen" || fail "--screen failed"
+  s() { jq -r "$1" "$screen"; }
+  plain=$(python3 "$FACTORY" --plain --width 100) || fail "--plain failed"
+  assert_equals "$(s .schema)" "fm-factory-screen.v1" "schema"
+  assert_contains "$plain" "$(s '[.count_words[].words] | join("  ·  ")')" "the count line is the plain screen's"
+  assert_equals "$(s '[.count_words[].colour] | join(" ")')" "amber red green faint" "each count says what its colour means"
+  has_line "$plain" " $(s '.queue | join(" · ")')" "the queue line is the plain screen's"
+  assert_equals "$(s '[.needs[] | "\(.id)|\(.kind)|\(.factory_name)|\(.waited)"] | join(" ")')" \
+    "garden-chart|question|Garden Journal|waiting 3 h shop-provider|question|Sample Shop|waiting 9 h garden-share|finished work|Garden Journal|ready 1 h 49 min" \
+    "the owner's calls, in the pane's order, with how long each has waited"
+  has_line "$plain" " ▸ ● $(s '.needs[0].ask') $(s '.needs[0].factory_name') · $(s '.needs[0].waited')" \
+    "a call's head is the plain screen's"
+  assert_equals "$(s '.needs[0] | "\(.asking) \(.why)"')" \
+    "$((NOW - 3 * 3600)) The harvest chart can open on this week or this season." "a call names its asking and its why"
+  assert_equals "$(s '.needs[0].options | map("\(.key) \(.label) \(.suggested)") | join("; ")')" \
+    "1 this week true; 2 this season false; 3 both side by side false" "a question's answers, with the suggested one"
+  assert_equals "$(s '.needs[1].recommendation')" "Stay with the current one until the holidays are over." \
+    "a recommendation that is no option"
+  assert_equals "$(s '.needs[2] | "\(.ask)|\(.pr)"')" \
+    "Share a garden page as a picture is ready to merge|https://example.invalid/g/pull/12" "finished work names its change"
+  assert_equals "$(s '[.factories[] | "\(.name): \(.queue), \(.steered_by) steers"] | join("; ")')" \
+    "Sample Shop: 5 queued · 2 in line, Starship steers; Garden Journal: 1 queued · none in line, Starship steers; Recipe Box: idle since 06:00 · nothing queued, Starship steers" \
+    "each factory's row"
+  assert_equals "$(s '.factories[0].jobs | map("\(.title)=\(.words)/\(.elapsed)/\(.step)") | join("; ")')" \
+    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=needs a look//1; Gift cards at checkout=needs a look//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
+    "the overview's jobs: what a busy one is doing, how long, on which step; else its state"
+  assert_equals "$(s '.steps | join(", ")')" "planning, building, checking, ready to merge" "the four steps"
+  assert_equals "$(s '.factories[0].next | "\(.title) then \(.then)"')" "Gift wrap at checkout then 2" "next in line"
+  assert_equals "$(s '.feed.title')" "LAST 12 HOURS" "the feed's heading"
+  assert_equals "$(s '.feed.events[-1] | "\(.when) \(.actor) \(.word) \(.text)"')" \
+    "07:20 Garden Journal failed Garden reminders failed; Starship is on it." "the feed's rows, oldest first, with their times"
+  has_line "$plain" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "that row on the plain screen"
+  # A factory's page: its whole queue, the jobs it shows and folds, its rules.
+  local page='.factories[0].page'
+  plain=$(python3 "$FACTORY" --plain --width 100 --factory sample-shop) || fail "--plain --factory failed"
+  has_line "$plain" " · $(s "$page.folded | map(.words) | join(\" · \")")" "the folded counts are the page's"
+  assert_equals "$(s "$page.folded | map(.jobs[].title) | join(\", \")")" "Discount codes, Charge tax abroad" \
+    "a folded count names the jobs it stands for"
+  assert_equals "$(s "$page.needs | join(\" \")")" "shop-provider" "the page's own calls"
+  has_line "$plain" " $(s '.factories[0].about | join(" · ")')" "the line under the page's name is the page's"
+  assert_equals "$(s "$page.workers | map(.title) | join(\", \")")" \
+    "Search that forgives typos, Pay with a saved card, Sharper cup photos, Gift cards at checkout" \
+    "the jobs whose workers the factory tab shows"
+  assert_equals "$(s "$page.rules | join(\" \")")" "English only. Anything that touches payments waits for your yes." "rules"
+  assert_equals "$(s "$page.learned[0] | \"\(.when) \(.what)\"")" \
+    "12 Nov Search results read better with the price on the first line." "a lesson"
+  assert_equals "$(printf '{}' | python3 "$FACTORY" --screen --data >/dev/null 2>&1; echo $?)" "2" "--screen stands alone"
+  pass "factory screen: --screen is the plain screen's selection and words, as data"
+}
+
+# act <json>: one action from a second screen; prints its answer.
+act() { printf '%s' "$1" | python3 "$FACTORY" act; }
+
+# The owner answers from the web page with a button. Each button is one of the
+# pane's writing keys (the key-press test above compares an answer and a keep
+# note for note); here are the words act says, what it refuses, and the keys
+# that need no highlighted row.
+test_an_action_from_a_second_screen_says_what_went_and_refuses_what_cannot() {
+  reset_case
+  write_registry
+  write_world
+  local out
+  # Opening a second screen is no look; only a button pressed on it is one.
+  printf '{"action":"look"}' | python3 "$FACTORY" act >/dev/null 2>&1
+  assert_equals "$?" "2" "a bare look from a second screen is refused"
+  assert_absent "$HOME_FIX/state/factory/last-look" "a second screen recorded a look without a button pressed"
+  act '{"action":"steer","factory":"sample-shop","who":"Starship","in_tab":true}' >/dev/null || fail "act could not steer from a tab"
+  assert_absent "$HOME_FIX/state/factory/last-look" "a button on a factory's tab recorded a look"
+  out=$(act '{"action":"answer","item":"garden-chart","asking":"'"$((NOW - 3 * 3600))"'","option":"2"}') || fail "act failed"
+  assert_equals "$out" '{"ok": true, "said": "✓ SENT to Starship: answer 2, this season (Harvest chart)"}' "what act says"
+  assert_equals "$(head -n 1 "$HOME_FIX/state/factory/last-look" 2>/dev/null)" "$NOW" "a button pressed is a look"
+  : > "$FM_FACTORY_TEST_NOTES"
+
+  # Nothing is sent for a call that was asked again since the screen drew it,
+  # an answer the question does not have, or the wrong kind of call.
+  assert_equals "$(act '{"action":"answer","item":"garden-chart","asking":"1","option":"2"}')" \
+    '{"ok": false, "said": "Not sent: this was settled elsewhere."}' "a call asked again since"
+  assert_contains "$(act '{"action":"answer","item":"garden-chart","option":"9"}')" '"ok": false' "an answer it does not have"
+  assert_contains "$(act '{"action":"keep","item":"garden-chart"}')" '"ok": false' "keeping a question"
+  assert_contains "$(act '{"action":"answer","item":"gone","option":"1"}')" '"ok": false' "a call that is gone"
+  assert_contains "$(act '{"action":"talk","factory":"sample-shop","text":"  "}')" '"ok": false' "a talk note with no words"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a refused action sent a note"
+  printf '{"action":"merge","item":"garden-share"}' | python3 "$FACTORY" act >/dev/null 2>&1
+  assert_equals "$?" "2" "an action the pane has no key for is refused"
+  printf 'not json' | python3 "$FACTORY" act >/dev/null 2>&1
+  assert_equals "$?" "2" "an unreadable action is refused"
+
+  # The talk box's three notes, typed.
+  act '{"action":"talk","factory":"sample-shop","text":"check the ribbon"}' >/dev/null
+  act '{"action":"change","item":"garden-share","text":"make it wider"}' >/dev/null
+  act '{"action":"discuss","item":"shop-provider","text":"what does it cost"}' >/dev/null
+  assert_equals "$(jq -r '.request_id' "$FM_FACTORY_TEST_NOTES" | tr '\n' ' ')" \
+    "factory.sample-shop.talk.$NOW factory.garden-journal.change.garden-share.$NOW factory.sample-shop.talk.shop-provider.$NOW " \
+    "the talk notes' request ids"
+  assert_equals "$(jq -r '.body | split("\n")[0]' "$FM_FACTORY_TEST_NOTES" | tr '\n' '|')" \
+    "To the Sample Shop crew: check the ribbon|Changes for Share a garden page as a picture: make it wider|About Which payment provider for the shop: what does it cost|" \
+    "the talk notes' words"
+  : > "$FM_FACTORY_TEST_NOTES"
+
+  # Already settled files the reconcile request and wakes Starship once.
+  assert_equals "$(act '{"action":"settled","item":"garden-chart"}')" \
+    '{"ok": true, "said": "Asked Starship to check whether Harvest chart is already settled."}' "already settled"
+  assert_equals "$(sed -n 2p "$HOME_FIX/captain-hold.calls")" "stdin=garden-chart" "it files the reconcile request"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" \
+    "factory.garden-journal.settled.garden-chart.$((NOW - 3600))" "the wake note is the key's"
+  assert_equals "$(act '{"action":"settled","item":"garden-chart"}')" \
+    '{"ok": true, "said": "Starship is already checking this."}' "asked again while Starship checks"
+  assert_equals "$(wc -l < "$FM_FACTORY_TEST_NOTES" | tr -d ' ')" "1" "the second ask sent a second wake"
+  : > "$FM_FACTORY_TEST_NOTES"
+
+  # Who steers: the note, the log, and the next screen.
+  assert_equals "$(act '{"action":"steer","factory":"sample-shop","who":"you"}')" \
+    '{"ok": true, "said": "You steer Sample Shop now."}' "taking the helm"
+  assert_equals "$(jq -r '.body | split("\n")[0]' "$FM_FACTORY_TEST_NOTES")" "I steer Sample Shop myself from now on." \
+    "the steer note is the key's"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "sample-shop") | .steered_by')" "you" \
+    "the next screen shows who steers"
+  act '{"action":"steer","factory":"sample-shop","who":"you"}' >/dev/null
+  assert_equals "$(wc -l < "$FM_FACTORY_TEST_NOTES" | tr -d ' ')" "1" "steering what you already steer sent a note"
+
+  # An inbox that takes nothing: the answer says so.
+  out=$(FM_FACTORY_INBOX="$BINDIR/inbox-down" act '{"action":"answer","item":"shop-provider","option":"1"}')
+  assert_equals "$out" \
+    '{"ok": false, "said": "✗ NOT SENT: fm-inbox: the inbox folder is locked. Nothing reached Starship."}' \
+    "a note the inbox refused"
+  pass "factory act: a second screen's action says what went, refuses what cannot go, and talks, re-checks and steers as the keys do"
 }
 
 # On 2026-11-15 the owner pressed an option key, did not see the one faint
@@ -3518,6 +3664,8 @@ fm_test_run \
   test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
   test_the_live_pane_repaints_when_the_theme_is_switched \
+  test_the_screen_as_data_says_what_the_plain_screen_shows \
+  test_an_action_from_a_second_screen_says_what_went_and_refuses_what_cannot \
   test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \
   test_parked_work_says_until_when_it_is_parked \

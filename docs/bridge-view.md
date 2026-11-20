@@ -19,7 +19,7 @@ The server requires Python 3.12 and uses only the standard library.
 
 Bookmark: `https://<your-mac>.<your-tailnet>.ts.net/` after Serve is pointed at the loopback port.
 
-On the Mac itself, [web.md](web.md) is the localhost chat page with this glance as its side panel.
+On the Mac itself, [web.md](web.md) is the localhost page that mirrors the terminal workspace.
 
 ## Auth
 

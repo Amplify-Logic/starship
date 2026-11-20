@@ -229,6 +229,13 @@ It also reads the overview once a second, off the drawing thread, so its count l
 The record is always built by the code on disk, so a running pane or worker copy checks before every frame whether `bin/fm-factory.py` changed, and re-runs itself in place, in the same pane, once the new file is non-empty and compiles.
 The live pane holds that reload while the talk box, a confirmation or a notice is showing, so a draft or a sent or not-sent line is never lost, and reloads on the first frame after.
 
+`bin/fm-factory.py --screen` prints what the screen shows as data, schema `fm-factory-screen.v1`, for a second screen that lays the pane out its own way, such as the web page ([web.md](web.md)).
+It is the overview and every factory's page as the pane selects and words them: the count and queue words, each call with its answers and how long it has waited, each factory's row and jobs with the step a busy one is on and what it is doing, the feed with its times, and for a factory's page its whole queue, shown and folded jobs, rules, lessons, talk and the jobs whose workers its tab shows.
+It answers from the cached record at once and keeps that record current the way a live pane does, starting a due refresh or a rebuild of the owner's calls in the background.
+`bin/fm-factory.py act` is the writing keys for such a screen: it reads one action as JSON on stdin, sends the note that key sends under the same request id, and prints whether it went and the words the pane would say.
+An action that names the asking its screen showed sends nothing once the record's differs.
+The script's header and `screen()` and `act()` own the fields and the actions.
+
 The record's schema is `fm-factory.v1`:
 
 | Field | What it holds |
@@ -304,5 +311,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

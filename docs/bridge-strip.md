@@ -72,6 +72,7 @@ The strip never steers, changes, or drains anything.
 Its only writes are its own record of the pane it runs in, kept in the plugin's Herdr config directory, and the shared fleet reading's cache that the status bar also refreshes.
 Its one action is opening the Factory pane when the owner clicks the most urgent call; the pane it opens writes nothing until the owner presses one of its keys.
 The call, the alert, and the night shift's count come from the same cached reading as the lamps, so they never disagree with them and cost the fleet nothing extra; a Mothership room's reach comes from its listener's note.
+`bin/fm-bridge-strip.sh fields` prints one such reading as `key=value` lines, the lamps' counts, the most urgent call, the alert, the night shift and the battery, for a second screen that lays the strip out its own way, such as the web page ([web.md](web.md)); the script's header owns the keys.
 
 ## Install, show, and remove
 
@@ -109,4 +110,4 @@ The most urgent call and the night shift only use the columns left over, so they
 
 ## Verification
 
-`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts, fixture Mothership reach notes and fixture battery readings and checks every row word for word and colour by colour, at every width, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, runs the strip's own loop to check that it reloads changed code within a redraw and says when it cannot read the crew, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.
+`tests/fm-bridge-strip.test.sh` renders fixture fleets, fixture night shifts, fixture Mothership reach notes and fixture battery readings and checks every row word for word and colour by colour, at every width, checks `fields` against the frame of the same reading, clicks the running strip under a pseudo-terminal, parks a held decision under the running strip and times how soon it names the next call, runs the strip's own loop to check that it reloads changed code within a redraw and says when it cannot read the crew, and checks the Herdr calls behind the click, `open`, `install`, and `remove` against a stand-in Herdr.
