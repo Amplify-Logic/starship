@@ -829,13 +829,14 @@ test_install_command_links_starship_and_keeps_a_foreign_one() {
   expect_code 1 "$status" "another starship on PATH"
   assert_contains "$out" "is already on PATH ($C/prompt/starship)" "the starship on PATH was not named"
   [ ! -e "$dir/starship" ] && [ ! -L "$dir/starship" ] || fail "install-command linked over another starship on PATH"
+  [ -L "$dir/onboard-starship" ] || fail "another starship on PATH kept onboard-starship from being linked"
   out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command) || fail "install-command failed: $out"
   [ -L "$dir/starship" ] || fail "install-command made no link"
   assert_equals "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$DESK")" \
     "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dir/starship")" "the link does not point at the desk"
   out=$(PATH="$dir:/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command) \
     || fail "a second install-command failed"
-  assert_contains "$out" "already opens the desk" "a second install-command did not see its own link"
+  assert_contains "$out" "\`starship\` is already in place" "a second install-command did not see its own link"
   rm "$dir/starship"; printf 'other\n' > "$dir/starship"
   out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" "$py" "$DESK" install-command 2>&1); status=$?
   expect_code 1 "$status" "a foreign starship"
@@ -911,8 +912,75 @@ PY
   pass "desk: a missing plugin is installed before its pane shows"
 }
 
+# onboard-starship builds the same desk a step at a time, each only after
+# Enter, and ends with a starter layout that plain `starship` then opens as is.
+test_onboard_builds_the_desk_one_step_at_a_time() {
+  new_case false
+  local out path="$FM_HOME/config/desk-layout"
+  out=$(printf '\n\n\n\n' | desk onboard) || fail "onboard failed: $out"
+  assert_contains "$out" "Step 1 of 4, Herdr and your first mate." "step 1 was not explained"
+  assert_contains "$out" "  done: start Herdr
+  done: create the workspace starship
+  done: start the first mate (cd " "step 1 did not start Herdr with the first mate"
+  assert_contains "$out" "  done: open view 1 in Terminal" "step 1 did not open a window on a Mac"
+  assert_contains "$out" "Step 2 of 4, The bridge strip." "step 2 was not explained"
+  assert_contains "$out" "  done: show the Starship bridge" "step 2 did not show the bridge"
+  assert_contains "$out" "  done: show the Factory pane" "step 3 did not show the Factory pane"
+  assert_contains "$out" "  done: wrote $path" "step 4 did not write the layout"
+  assert_contains "$(cat "$path")" "workspace = starship
+firstmate = cd $ROOT && FM_HOME=$FM_HOME bin/fm-primary.sh opus
+view =" "the starter layout is not the desk onboarding built"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "open on the starter layout failed: $out"
+  assert_contains "$out" "nothing changed" "the starter layout does not describe the desk onboarding built"
+  pass "desk: onboard builds the desk one step at a time and leaves a layout starship opens unchanged"
+}
+
+test_onboard_picks_up_where_the_person_stopped() {
+  new_case false
+  local out
+  FM_DESK_MACOS="" && export FM_DESK_MACOS
+  out=$(printf '\n' | desk onboard) || fail "the first onboard run failed: $out"
+  assert_contains "$out" "  done: start the first mate" "step 1 was not taken"
+  assert_not_contains "$out" "show the Starship bridge" "a step was taken without Enter"
+  assert_contains "$out" "Stopped. Run \`onboard-starship\` again to pick up here." "stopping did not say how to go on"
+  assert_not_contains "$out" "open view" "off macOS onboarding opened a Terminal window"
+  [ ! -e "$FM_HOME/config/desk-layout" ] || fail "a stopped onboarding wrote a layout"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(printf '\n' | desk onboard) || fail "the second onboard run failed: $out"
+  assert_contains "$out" "Step 1 of 4, Herdr and your first mate: already done." "a finished step was not skipped"
+  assert_contains "$out" "  done: show the Starship bridge" "the re-run did not go on with step 2"
+  assert_no_regex ' (workspace create|pane run) ' "$FAKE_HERDR_CALLS" "the re-run redid step 1"
+  out=$(printf '\n\n' | desk onboard) || fail "the third onboard run failed: $out"
+  assert_contains "$out" "The bridge strip: already done." "the bridge step was not skipped"
+  assert_not_contains "$(cat "$FM_HOME/config/desk-layout")" "view =" "off macOS the starter layout names a window"
+  printf 'workspace = mine\n' > "$FM_HOME/config/desk-layout"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk onboard < /dev/null) || fail "onboard with a layout failed: $out"
+  assert_contains "$out" "Your desk is already set up" "onboard did not see the existing layout"
+  assert_equals "workspace = mine" "$(cat "$FM_HOME/config/desk-layout")" "onboard changed an existing layout"
+  [ ! -s "$FAKE_HERDR_CALLS" ] || fail "onboard reached Herdr although the desk is set up"
+  unset FM_DESK_MACOS
+  pass "desk: onboard skips finished steps, stops cleanly, and never touches an existing layout"
+}
+
+test_onboard_starship_runs_onboarding_by_its_name() {
+  new_case false
+  local dir="$C/localbin" out
+  out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" python3 "$DESK" install-command) || fail "install-command failed: $out"
+  [ -L "$dir/onboard-starship" ] || fail "install-command did not link onboard-starship"
+  out=$("$dir/onboard-starship" < /dev/null) || fail "onboard-starship failed: $out"
+  assert_contains "$out" "Step 1 of 4, Herdr and your first mate." "onboard-starship did not start onboarding"
+  out=$(desk open 2>&1)
+  assert_contains "$out" "run \`onboard-starship\` to set your desk up" "a missing layout does not point at onboard-starship"
+  pass "desk: onboard-starship runs onboarding, and a missing layout points at it"
+}
+
 fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
+  test_onboard_builds_the_desk_one_step_at_a_time \
+  test_onboard_picks_up_where_the_person_stopped \
+  test_onboard_starship_runs_onboarding_by_its_name \
   test_views_open_in_cream_while_the_workspace_is_light \
   test_a_second_run_changes_nothing \
   test_every_herdr_call_names_the_default_session \

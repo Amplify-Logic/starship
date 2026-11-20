@@ -7,9 +7,23 @@ Run it again and it changes nothing, so it is safe to run whenever you sit down.
 
 ## Set it up
 
-1. Put the command on your PATH: `bin/fm-desk.py install-command` links `~/.local/bin/starship` to it; it links nothing when a `starship` already exists there or another one, such as the starship.rs shell prompt, already runs from your PATH, since the link would hide that one or be hidden by it.
-2. Write your layout: with your desk open the way you like it, `starship layout --save` reads it from the running Herdr session into `config/desk-layout`, writing the file only once the reading succeeded, then fill in the first mate's launch command, such as `firstmate claude-opus`, which a reading cannot tell.
-3. Run `starship`; it names each thing it opens and notes anything it left alone.
+`bin/fm-herdr-setup.sh`, the setup every home runs, puts two commands in `~/.local/bin` through `bin/fm-desk.py install-command`: `starship` and `onboard-starship`.
+It links neither over another command by that name, such as the starship.rs shell prompt, already in that folder or on your PATH, since the link would hide that one or be hidden by it; the setup names the one it kept and still succeeds.
+
+**New to Starship:** run `onboard-starship`.
+It sets your desk up one step at a time, says in a sentence what each step does, and waits for Enter before taking it:
+
+1. Herdr with your first mate in one pane, and on a Mac one Terminal window on it; your first mate then leads its first conversation with you.
+2. The [bridge strip](bridge-strip.md).
+3. The [Factory pane](factory-pane.md).
+4. A starter `config/desk-layout` for that desk, so plain `starship` opens it from then on.
+
+Stop whenever you like and run it again: a step already in place is skipped, and with a layout already there it changes nothing.
+
+**Already set up the way you like:** with your desk open, `starship layout --save` reads it from the running Herdr session into `config/desk-layout`, writing the file only once the reading succeeded; then fill in the first mate's launch command, such as `firstmate claude-opus`, which a reading cannot tell.
+
+Then run `starship`; it names each thing it opens and notes anything it left alone.
+Without a layout it opens nothing and points you at `onboard-starship`.
 
 ## What it opens
 

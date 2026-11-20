@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **`starship` is now part of every setup, with `onboard-starship` beside it for a guided first start.** `bin/fm-herdr-setup.sh` now adds both commands; `onboard-starship` sets a new desk up one step at a time and ends with a starter desk layout, so plain `starship` opens it from then on.
+  On a home set up earlier, run `~/starship/bin/fm-desk.py install-command` once to get both ([desk](docs/desk.md)).
 - **A Mothership card now hears when an investigation, guide or draft it asked for is finished.** Work that ends in a report rather than a change used to leave its card at "Work has started."; cleaning up its scout with the report kept now settles the card with one fixed line that it finished with a report you hold, never the report's words, and a project in `config/private-projects` still tells no room anything.
   A scout whose task is still held for your decision when it is cleaned up does not settle its card yet: that card stays at "Work has started." even after your answer closes the task.
   To give the room a link to the report, name it as `mothership-report: <https-url>` in the task's body ([configuration](docs/fork-configuration.md#mothership-monitoring-configmothership-monitor)).

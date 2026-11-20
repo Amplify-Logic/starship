@@ -73,9 +73,12 @@ cd ~/starship
 bin/fm-herdr-setup.sh
 ```
 
-It installs Herdr, adds Herdr's Claude Code integration so Herdr can show what each Claude is doing, and sets this Starship to run in Herdr.
+It installs Herdr, adds Herdr's Claude Code integration so Herdr can show what each Claude is doing, sets this Starship to run in Herdr, and adds the `starship` and `onboard-starship` commands ([docs/desk.md](docs/desk.md)).
 
 You should see: `Herdr is ready.`
+
+**Prefer a guided start?** Open a **new** Terminal window and type `onboard-starship` instead of the two steps below.
+It opens Herdr with your first mate for you, then adds the rest of your desk one step at a time, waiting for you before each; what follows about Claude Code's first launch still applies.
 
 **Open Herdr:** open a **new** Terminal window, so `herdr` is found, and type:
 
