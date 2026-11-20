@@ -17,12 +17,24 @@ Usage:
                                 once the reading succeeded. Off macOS it lists
                                 no Terminal views, since there is no Terminal
                                 to ask.
-  fm-desk.py install-command    put `starship` on PATH: ~/.local/bin/starship
-                                becomes a link to this script, unless another
-                                `starship` is there or already on PATH
+  fm-desk.py onboard            a new person's guided first start, also run as
+                                `onboard-starship`: one step at a time, each
+                                explained and taken only after Enter, it starts
+                                Herdr with the first mate in one pane (and, on
+                                a Mac, one Terminal window on it), adds the
+                                bridge strip, then the Factory pane, and ends
+                                by writing a starter config/desk-layout. A step
+                                already in place is skipped, so a re-run picks
+                                up where the person stopped; with a layout
+                                already there it changes nothing.
+  fm-desk.py install-command    put `starship` and `onboard-starship` on PATH:
+                                each in ~/.local/bin becomes a link to this
+                                script, unless another command by that name is
+                                there or already on PATH; bin/fm-herdr-setup.sh
+                                runs it on every setup
 
 The layout lives in the home's config/desk-layout. Without one, `open` stops
-and says how to write it.
+and points at `onboard-starship`.
 
 What `open` does, in this order, re-reading Herdr after every step:
   1. With `sidebar` set, makes Herdr's config start the sidebar that way, before
@@ -84,7 +96,7 @@ Test seams:
   FM_DESK_MACOS           macOS version, for the Terminal color note and
                           whether there is a Terminal to ask (default: this
                           Mac's; empty off macOS)
-  FM_DESK_COMMAND_DIR     where install-command links `starship` (default
+  FM_DESK_COMMAND_DIR     where install-command links the commands (default
                           ~/.local/bin)
   FM_DESK_WAIT            seconds to wait for a started server, a new view, or
                           the prompt of a starting shell the desk would type
@@ -109,6 +121,7 @@ from typing import Any, Dict, List, Optional, Tuple
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPT = os.path.realpath(__file__)
 ME = "starship"
+ONBOARD = "onboard-starship"
 SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu"}
 SESSION = "default"
 SINGLE_KEYS = ("workspace", "main", "sidebar", "firstmate", "terminal")
@@ -219,8 +232,8 @@ def load_layout(home: str) -> Dict[str, Any]:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
     except FileNotFoundError:
-        raise Refused("there is no desk layout at %s yet; start from `%s layout --save` "
-                      "and see docs/desk.md" % (path, ME))
+        raise Refused("there is no desk layout at %s yet; run `%s` to set your desk up one step at a "
+                      "time, or start from `%s layout --save` (docs/desk.md)" % (path, ONBOARD, ME))
     return parse_layout(text)
 
 
@@ -988,9 +1001,11 @@ LAYOUT_KINDS = {"workspace", "firstmate", "bridge", "factory", "bridge-revive", 
                 "page-revive", "factory-tab", "tab"}
 
 
-def cmd_open() -> int:
-    home = home_dir()
-    layout = load_layout(home)
+def fill(layout: Dict[str, Any], home: str, kinds: Optional[set] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Take every missing step of <layout> (only those whose step_kind is in <kinds>), one at a time.
+
+    Returns the steps taken and the notes to report.
+    """
     herdr = Herdr()
     done: List[Dict[str, Any]] = []
     taken = set()
@@ -1005,6 +1020,8 @@ def cmd_open() -> int:
     while True:
         found = survey(herdr, layout, home)
         steps, notes, starting = plan(layout, found, read_sidebar())
+        if kinds is not None:
+            steps = [item for item in steps if step_kind(item) in kinds]
         pending = [item for item in steps if item["key"] in taken]
         fresh = [item for item in steps if item["key"] not in taken]
         # A shell still running its startup shows no prompt yet, and just
@@ -1037,7 +1054,14 @@ def cmd_open() -> int:
         found = survey(herdr, layout, home)
         if found["main"]:
             herdr.call("tab", "focus", found["main"], check=False)
-    for note in dict.fromkeys(kept + notes):
+    return done, list(dict.fromkeys(kept + notes))
+
+
+def cmd_open() -> int:
+    home = home_dir()
+    layout = load_layout(home)
+    done, notes = fill(layout, home)
+    for note in notes:
         say("  note: %s" % note)
     if done:
         say("The desk is open: %d thing(s) started, everything else was already there." % len(done))
@@ -1135,42 +1159,165 @@ def cmd_layout(save: bool = False) -> int:
     if not save:
         say("\n".join(lines))
         return 0
-    # Written only now, after the reading succeeded, and swapped in whole, so a
-    # failed reading never leaves an empty or partial layout behind.
+    # Written only now, after the reading succeeded, so a failed reading never
+    # leaves an empty or partial layout behind.
     path = layout_path(home)
+    write_layout(path, "\n".join(lines) + "\n")
+    say("The desk layout is saved in %s." % path)
+    return 0
+
+
+def write_layout(path: str, text: str) -> None:
+    """Swap <text> in whole at <path>, so no reader sees a partial layout."""
     temp = path + ".desk-tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(temp, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
+            handle.write(text)
         os.replace(temp, path)
     except OSError as error:
         raise Failure("the layout could not be written to %s: %s" % (path, error))
-    say("The desk layout is saved in %s." % path)
-    return 0
 
 
 # --------------------------------------------------------------------------
 # The `starship` command
 # --------------------------------------------------------------------------
 
-def cmd_install_command() -> int:
-    folder = os.environ.get("FM_DESK_COMMAND_DIR") or os.path.expanduser("~/.local/bin")
-    link = os.path.join(folder, ME)
+def link_command(folder: str, name: str) -> str:
+    """Link <folder>/<name> to this script; the line to report. Raises Failure when another one is there."""
+    link = os.path.join(folder, name)
     if os.path.islink(link) and os.path.realpath(link) == SCRIPT:
-        say("`%s` already opens the desk (%s)." % (ME, link))
-        return 0
+        return "`%s` is already in place (%s)." % (name, link)
     if os.path.lexists(link):
         raise Failure("%s already exists and is something else; it was left as it is" % link)
-    other = shutil.which(ME)
+    other = shutil.which(name)
     if other and os.path.realpath(other) != SCRIPT:
         raise Failure("another `%s` is already on PATH (%s), such as the starship.rs shell prompt; a link at %s "
-                      "would hide it or be hidden by it, so nothing was linked" % (ME, other, link))
+                      "would hide it or be hidden by it, so nothing was linked" % (name, other, link))
     os.makedirs(folder, exist_ok=True)
     os.symlink(SCRIPT, link)
-    say("`%s` now opens the desk (%s -> %s)." % (ME, link, SCRIPT))
+    return "`%s` is now in place (%s -> %s)." % (name, link, SCRIPT)
+
+
+def cmd_install_command() -> int:
+    folder = os.environ.get("FM_DESK_COMMAND_DIR") or os.path.expanduser("~/.local/bin")
+    refused = []
+    # Each command is linked on its own, so another `starship` on PATH still
+    # leaves `onboard-starship` in place.
+    for name in (ME, ONBOARD):
+        try:
+            say(link_command(folder, name))
+        except Failure as error:
+            refused.append(str(error))
     if folder not in os.environ.get("PATH", "").split(":"):
         say("  note: %s is not on PATH in this shell" % folder)
+    if refused:
+        raise Failure("; ".join(refused))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# The `onboard-starship` command
+# --------------------------------------------------------------------------
+
+def firstmate_command(home: str) -> str:
+    """The first mate's launch command, as a new home's setup page gives it."""
+    words = "cd %s && " % shlex.quote(ROOT)
+    if os.path.realpath(home) != os.path.realpath(ROOT):
+        words += "FM_HOME=%s " % shlex.quote(home)
+    return words + "bin/fm-primary.sh opus"
+
+
+def starter_layout(home: str) -> Dict[str, Any]:
+    """The desk a new person starts with: the first mate, and one window on it on a Mac."""
+    text = "workspace = starship\nfirstmate = %s\n" % firstmate_command(home)
+    if macos_major() > 0:
+        text += "view =\n"
+    return parse_layout(text)
+
+
+def starter_text(layout: Dict[str, Any]) -> str:
+    lines = ["# Your desk, written by `%s`; `%s` opens it (docs/desk.md)." % (ONBOARD, ME),
+             "workspace = %s" % layout["workspace"], "firstmate = %s" % layout["firstmate"]]
+    lines += ["view =" for _ in layout["views"]]
+    return "\n".join(lines) + "\n"
+
+
+# Each onboarding step: its title, what it does in a sentence or two, the desk
+# steps it takes (None for writing the layout file), and what to do after it.
+ONBOARD_STEPS = [
+    ("Herdr and your first mate",
+     "Herdr is the window your first mate and its workers live in. "
+     "This starts it with your first mate in one pane, and on a Mac opens a window on it.",
+     {"start", "workspace", "firstmate", "view"},
+     "The first time, Herdr shows a short welcome; press Enter through it. "
+     "Your first mate then leads a short first conversation with you; have it, then come back here."),
+    ("The bridge strip",
+     "A slim strip across the top of your first mate's pane, showing at a glance what is busy and what needs you.",
+     {"plugin:bridge", "bridge"}, ""),
+    ("The Factory pane",
+     "A pane beside your first mate showing each part of your work and its workers at a glance; `enter` on one opens its own tab.",
+     {"plugin:factory", "factory"}, ""),
+    ("Save your desk",
+     "This writes config/desk-layout, the list of what your desk holds, "
+     "so from now on one command, `%s`, opens all of it." % ME,
+     None, ""),
+]
+
+
+def missing(layout: Dict[str, Any], home: str, kinds: set) -> List[Dict[str, Any]]:
+    """The desk steps of <kinds> still missing, read without acting."""
+    found = survey(Herdr(), layout, home)
+    steps = plan(layout, found, read_sidebar())[0]
+    return [item for item in steps if step_kind(item) in kinds]
+
+
+def step_kind(item: Dict[str, Any]) -> str:
+    return "plugin:%s" % item["plugin"] if item["kind"] == "plugin" else item["kind"]
+
+
+def wait_for_person(prompt: str) -> bool:
+    """Wait for Enter; False when the person stops (Ctrl-C, Ctrl-D, or nothing left to read)."""
+    try:
+        input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return True
+
+
+def cmd_onboard() -> int:
+    home = home_dir()
+    path = layout_path(home)
+    if os.path.exists(path):
+        say("Your desk is already set up (%s); run `%s` to open it." % (path, ME))
+        return 0
+    layout = starter_layout(home)
+    total = len(ONBOARD_STEPS)
+    say("Welcome to Starship. This sets your desk up one step at a time; stop whenever you like "
+        "and run `%s` again to pick up where you left off." % ONBOARD)
+    for number, (title, what, kinds, after) in enumerate(ONBOARD_STEPS, 1):
+        if kinds is not None and not missing(layout, home, kinds):
+            say("\nStep %d of %d, %s: already done." % (number, total, title))
+            continue
+        say("\nStep %d of %d, %s.\n  %s" % (number, total, title, what))
+        if not wait_for_person("Press Enter to do it, or Ctrl-C to stop here. "):
+            say("\nStopped. Run `%s` again to pick up here." % ONBOARD)
+            return 0
+        if kinds is None:
+            write_layout(path, starter_text(layout))
+            say("  done: wrote %s" % path)
+        else:
+            for note in fill(layout, home, kinds)[1]:
+                say("  note: %s" % note)
+            if "view" in kinds and not layout["views"]:
+                say("  Open another terminal window and type `herdr` to see your first mate.")
+        if after:
+            say("  %s" % after)
+    command = ME
+    found = shutil.which(ME)
+    if not found or os.path.realpath(found) != SCRIPT:
+        command = shlex.quote(os.path.join(ROOT, "bin", "fm-desk.py"))
+    say("\nYour desk is set up. From now on, run `%s` whenever you sit down; it opens all of it again." % command)
     return 0
 
 
@@ -1182,6 +1329,8 @@ def usage(stream: Any = sys.stderr) -> None:
 
 
 def main(argv: List[str]) -> int:
+    if os.path.basename(sys.argv[0]) == ONBOARD:
+        argv = ["onboard"] + argv
     command = argv[0] if argv else "open"
     try:
         if command in ("-h", "--help", "help"):
@@ -1193,6 +1342,8 @@ def main(argv: List[str]) -> int:
             return cmd_layout(save=len(argv) == 2)
         if command == "install-command" and len(argv) == 1:
             return cmd_install_command()
+        if command == "onboard" and len(argv) == 1:
+            return cmd_onboard()
         usage()
         return 2
     except Refused as error:

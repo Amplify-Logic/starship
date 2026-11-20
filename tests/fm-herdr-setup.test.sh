@@ -45,7 +45,7 @@ make_world() {
   fakebin=$(fm_fakebin "$dir")
   : > "$dir/calls.log"
   fm_fake_real_tool "$fakebin" bash sh env cat grep sed awk head tail mkdir mktemp \
-    chmod rm cp touch tr dirname uname ls jq || fail "a basic tool is missing on this host"
+    chmod rm cp touch tr dirname uname ls jq python3 || fail "a basic tool is missing on this host"
   cat > "$dir/install-herdr" <<'SH'
 #!/usr/bin/env bash
 printf 'install-herdr %s\n' "$*" >> "$FAKE_WORLD/calls.log"
@@ -84,7 +84,10 @@ test_fresh_home_gets_herdr_its_integration_and_the_runtime() {
   for rc in $(profile_files); do
     assert_contains "$(cat "$w/home/$rc")" '.local/bin' "new terminals find ~/.local/bin through $rc"
   done
-  assert_contains "$out" "  herdr" "the closing text opens Herdr"
+  assert_contains "$out" "  onboard-starship" "the closing text starts the guided first start"
+  [ -L "$w/home/.local/bin/starship" ] || fail "setup did not add the starship desk command"
+  [ -L "$w/home/.local/bin/onboard-starship" ] || fail "setup did not add the onboard-starship command"
+  assert_contains "$out" "type herdr" "the closing text still says how to open Herdr by hand"
   assert_contains "$out" "cd $w/fmhome && bin/fm-primary.sh opus" "the closing text starts the first mate inside it"
 
   : > "$w/calls.log"
@@ -94,6 +97,7 @@ test_fresh_home_gets_herdr_its_integration_and_the_runtime() {
   assert_not_contains "$(calls "$w")" "install-herdr" "a re-run keeps the installed Herdr"
   assert_not_contains "$(calls "$w")" "integration install" "a re-run keeps a current integration"
   assert_contains "$out" "already runs on herdr" "a re-run says the runtime was left as it is"
+  assert_contains "$out" "\`onboard-starship\` is already in place" "a re-run keeps the commands"
   for rc in $(profile_files); do
     [ "$(grep -c '.local/bin' "$w/home/$rc")" -eq 1 ] || fail "a re-run duplicated the PATH line in $rc"
   done
@@ -109,8 +113,9 @@ test_a_usable_herdr_is_kept_and_an_old_one_replaced() {
   [ "$status" -eq 0 ] || fail "setup with Herdr present should succeed, got $status: $out"
   assert_not_contains "$(calls "$w")" "install-herdr" "a Herdr that passes the version gate is kept"
   assert_contains "$out" "Herdr 0.9.5 already present" "the kept Herdr is named"
+  [ -L "$w/home/.local/bin/onboard-starship" ] || fail "setup did not add onboard-starship beside a kept Herdr"
   for rc in $(profile_files); do
-    [ ! -e "$w/home/$rc" ] || fail "a Herdr outside ~/.local/bin should not add a PATH line to $rc"
+    assert_contains "$(cat "$w/home/$rc" 2>/dev/null)" '.local/bin' "onboard-starship in ~/.local/bin is found by new terminals through $rc although Herdr lives elsewhere"
   done
 
   w=$(make_world earlier-install)
@@ -131,7 +136,7 @@ test_a_usable_herdr_is_kept_and_an_old_one_replaced() {
   [ "$status" -eq 1 ] || fail "a still-too-old herdr on PATH after install should fail, got $status: $out"
   assert_contains "$(calls "$w")" "install-herdr $w/home/.local/bin" "a Herdr below the protocol floor is replaced"
   assert_contains "$out" "does not pass the version check" "the failure says the herdr found is still too old"
-  pass "a Herdr that passes the adapter's version gate is kept, one in ~/.local/bin gets the PATH line, and one below the gate gets the pinned release"
+  pass "a Herdr that passes the adapter's version gate is kept, ~/.local/bin gets the PATH line for the linked commands or a Herdr there, and one below the gate gets the pinned release"
 }
 
 test_a_configured_home_keeps_its_runtime() {
@@ -150,6 +155,23 @@ test_a_configured_home_keeps_its_runtime() {
   [ ! -e "$w/fmhome/config/backend" ] || fail "a home that already ran on the default runtime was switched"
   assert_contains "$out" "echo herdr > $w/fmhome/config/backend" "the note says how to move it to Herdr"
   pass "a home that names a runtime, or already ran without one, is never switched"
+}
+
+# Another `starship` on PATH, such as the starship.rs prompt, is kept: the
+# desk command is not linked, the setup still succeeds, and onboard-starship
+# is still added.
+test_a_foreign_starship_is_kept_and_setup_still_succeeds() {
+  local w out status
+  w=$(make_world foreign-starship)
+  printf '#!/bin/sh\necho prompt\n' > "$w/fakebin/starship"
+  chmod +x "$w/fakebin/starship"
+  out=$(run_setup "$w")
+  status=$?
+  [ "$status" -eq 0 ] || fail "setup with another starship on PATH should succeed, got $status: $out"
+  assert_contains "$out" "another \`starship\` is already on PATH ($w/fakebin/starship)" "the kept starship is named"
+  [ ! -e "$w/home/.local/bin/starship" ] || fail "setup linked a starship that hides or is hidden by another"
+  [ -L "$w/home/.local/bin/onboard-starship" ] || fail "onboard-starship was not added beside a foreign starship"
+  pass "another starship on PATH is kept, onboard-starship is still added, and setup succeeds"
 }
 
 test_failures_and_usage() {
@@ -173,4 +195,5 @@ test_failures_and_usage() {
 test_fresh_home_gets_herdr_its_integration_and_the_runtime
 test_a_usable_herdr_is_kept_and_an_old_one_replaced
 test_a_configured_home_keeps_its_runtime
+test_a_foreign_starship_is_kept_and_setup_still_succeeds
 test_failures_and_usage

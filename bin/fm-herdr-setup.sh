@@ -3,13 +3,11 @@
 # launch, on a Mac (ONBOARDING.md step 3) or inside WSL 2 on Windows, where
 # bin/fm-linux-setup.sh runs it.
 #
-# It does three things, each kept when already done:
+# It does four things, each kept when already done:
 #   - Herdr: a herdr that passes the adapter's own version gate
 #     (bin/backends/herdr.sh fm_backend_herdr_version_check) is kept; otherwise
 #     bin/fm-install-herdr.sh installs its pinned, checksum-verified release
-#     into ~/.local/bin. Whenever the herdr in use lives in ~/.local/bin, one
-#     line in the shell profile (~/.zprofile on a Mac; ~/.profile and ~/.bashrc
-#     on Linux) puts ~/.local/bin on PATH for new terminals.
+#     into ~/.local/bin.
 #   - Herdr's Claude Code integration (`herdr integration install claude`),
 #     which lets Herdr show each Claude's working, idle and blocked state.
 #     Herdr needs ~/.claude to exist, so the folder is made first when Claude
@@ -20,6 +18,14 @@
 #     (tmux, the built-in default) is left as it is, so a configured home is
 #     never switched. docs/configuration.md "Runtime backend" owns the
 #     selection order.
+#   - The `starship` desk command and the `onboard-starship` guided first
+#     start, linked into ~/.local/bin by `bin/fm-desk.py install-command`. A
+#     link it refuses, such as when the starship.rs prompt already owns
+#     `starship`, is named in a note and does not fail the setup.
+#
+# Whenever the herdr in use or either command lives in ~/.local/bin, one line
+# in the shell profile (~/.zprofile on a Mac; ~/.profile and ~/.bashrc on
+# Linux) puts ~/.local/bin on PATH for new terminals.
 #
 # It never signs in to anything and never starts Herdr or the first mate; it
 # ends by printing how to start the first mate inside Herdr.
@@ -91,17 +97,6 @@ else
   herdr_usable || die "Herdr was installed to $LOCAL_BIN, but the herdr found on PATH is $(command -v herdr || echo none) and does not pass the version check; remove the older one, then run this again"
 fi
 
-if [ "$(command -v herdr)" = "$LOCAL_BIN/herdr" ]; then
-  # shellcheck disable=SC2016  # written for the shell to expand later
-  path_line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
-  if [ "$(uname -s)" = Darwin ]; then
-    ensure_line "$HOME/.zprofile" "$path_line"
-  else
-    ensure_line "$HOME/.profile" "$path_line"
-    ensure_line "$HOME/.bashrc" "$path_line"
-  fi
-fi
-
 # --- Herdr's Claude Code integration -----------------------------------------
 
 if herdr integration status 2>/dev/null | grep -Eq '^claude: current( |$)'; then
@@ -131,13 +126,37 @@ else
   say "This home runs its first mate and workers in Herdr ($BACKEND_FILE)"
 fi
 
+# --- the starship and onboard-starship commands ------------------------------
+
+if ! command -v python3 >/dev/null 2>&1; then
+  printf '    note: python3 is not installed, so the starship and onboard-starship commands were not added\n'
+elif desk_out=$(FM_HOME="$FM_HOME" FM_DESK_COMMAND_DIR="$LOCAL_BIN" python3 "$SCRIPT_DIR/fm-desk.py" install-command 2>&1); then
+  printf '%s\n' "$desk_out" | sed 's/^/==> /'
+else
+  printf '%s\n' "$desk_out" | sed 's/^/    /'
+fi
+
+if [ "$(command -v herdr)" = "$LOCAL_BIN/herdr" ] || [ -L "$LOCAL_BIN/starship" ] || [ -L "$LOCAL_BIN/onboard-starship" ]; then
+  # shellcheck disable=SC2016  # written for the shell to expand later
+  path_line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
+  if [ "$(uname -s)" = Darwin ]; then
+    ensure_line "$HOME/.zprofile" "$path_line"
+  else
+    ensure_line "$HOME/.profile" "$path_line"
+    ensure_line "$HOME/.bashrc" "$path_line"
+  fi
+fi
+
 [ "$QUIET" = 0 ] || exit 0
 cat <<EOF
 
-Herdr is ready. Open a NEW terminal window (so herdr is on your PATH), then:
+Herdr is ready. Open a NEW terminal window (so the new commands are on your PATH), then:
 
-  herdr
-      Opens Herdr. In the shell it shows, start your first mate:
+  onboard-starship
+      Starts Herdr with your first mate, then adds the rest of your desk
+      one step at a time.
+
+Or by hand: type herdr, and in the shell it shows, start your first mate:
 
   cd $FM_HOME && bin/fm-primary.sh opus
 
