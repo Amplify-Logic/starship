@@ -1626,6 +1626,21 @@ if [ "${1:-}" = "install-missing" ]; then
 $install_missing_pending
 EOF
   [ -n "$install_missing_pending" ] || echo "every tool this home needs is installed"
+  # An installer can exit 0 and still leave a tool short of what the home
+  # needs, as npm does when it quietly picks an older release that fits the
+  # machine's Node. Detect again, so such a tool fails here by name instead of
+  # passing on to a closing check whose rerun would only repeat it.
+  if [ -n "$install_missing_pending" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      t=$(printf '%s\n' "$line" | awk '{ print $2 }')
+      case " ${failed_installs:-} " in *" $t "*) continue ;; esac
+      echo "error: still needed after installing: $line" >&2
+      failed_installs="${failed_installs:+$failed_installs }$t"
+    done <<EOF
+$(detect_local_tools | grep -E '^(MISSING|PRESENTATION_UNAVAILABLE|OUTDATED|MISSING_MANUAL): ')
+EOF
+  fi
   bootstrap_install_report
   exit
 fi

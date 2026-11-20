@@ -153,10 +153,12 @@ case "${1:-}" in
     # A fresh Homebrew's first install reads standard input; under curl | bash
     # that is the rest of the setup script itself.
     [ "${FAKE_BREW_READS_STDIN:-}" = 1 ] && cat > /dev/null
-    for tool in node npm gh tmux jq; do
+    for tool in npm gh tmux jq; do
       printf '#!/usr/bin/env bash\necho %s-version-1\n' "$tool" > "$bin/$tool"
       chmod +x "$bin/$tool"
-    done ;;
+    done
+    printf '#!/usr/bin/env bash\necho %s\n' "${FAKE_BREW_NODE_VERSION:-v24.1.0}" > "$bin/node"
+    chmod +x "$bin/node" ;;
 esac
 SH
   chmod +x "$fakebin"/* "$dir/brew.stub"
@@ -466,6 +468,21 @@ BS
   pass "a clone from before install-missing stops the setup before any step"
 }
 
+# quota-axi asks npm for Node >=22.19 (its published engines field); on an
+# older Node npm quietly installs a release below the bootstrap's floor, so the
+# setup must stop at Node rather than at a closing check a rerun cannot clear.
+test_node_too_old_for_the_tools_stops_before_any_install() {
+  local w out status
+  w=$(make_world old-node)
+  out=$(FAKE_BREW_NODE_VERSION=v22.13.1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a Node older than 22.19 should stop the setup, got $status: $out"
+  assert_contains "$out" "Node v22.13.1 is older than 22.19" "the failure names the Node version and the floor"
+  assert_contains "$out" "run: brew upgrade node, then run this again" "the failure gives a quote-free fix"
+  assert_not_contains "$(calls "$w")" "bootstrap install-missing" "no tool install runs on an old Node"
+  pass "a Node older than the npm tools accept stops the setup before the tool install"
+}
+
 test_failed_tool_install_stops_the_setup() {
   local w out status
   w=$(make_world tools-fail)
@@ -490,3 +507,4 @@ test_wslview_without_interop_is_not_ok
 test_arm64_skips_chrome
 test_windows_claude_does_not_count_as_installed
 test_missing_tool_fails_the_closing_check
+test_node_too_old_for_the_tools_stops_before_any_install

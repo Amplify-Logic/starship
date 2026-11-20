@@ -7,9 +7,10 @@
 #   1. Prerequisites, before anything else: Homebrew (installed when absent,
 #      which needs a Mac administrator and asks for the Mac password once),
 #      then from Homebrew whichever of git node gh tmux jq is absent or does
-#      not run (a working one is left as it is). Node must answer with a
-#      version afterwards, so a broken Node is caught here rather than by
-#      the first npm install.
+#      not run (a working one is left as it is; a Node older than the npm
+#      tools accept counts as not working). Node must answer with a recent
+#      enough version afterwards, so a broken or old Node is caught here
+#      rather than by the first npm install.
 #   2. Claude Code, from npm.
 #   3. A Starship clone at ~/starship (an existing clone is left as it is).
 #   4. Herdr, its Claude Code integration, Herdr as a fresh home's runtime,
@@ -79,6 +80,25 @@ check() {  # <label> <command...>: sets missing=1 when the tool does not answer
     '') printf '  --  %-14s missing\n' "$label"; missing=1 ;;
     *) printf '  --  %-14s not working: %s\n' "$label" "$version"; missing=1 ;;
   esac
+}
+
+# The oldest Node the first mate's npm tools accept: the highest engines floor
+# among them (quota-axi asks for >=22.19). On an older Node, npm quietly
+# installs an old release that fits it instead, below the floor
+# bin/fm-bootstrap.sh checks, so the tool install could never succeed.
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=19
+
+node_recent_enough() {  # true when node runs and is at least NODE_MIN
+  local v major rest minor
+  v=$(node --version 2>/dev/null </dev/null) || return 1
+  v=${v#v}
+  major=${v%%.*}
+  rest=${v#*.}
+  minor=${rest%%.*}
+  case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ "$major" -gt "$NODE_MIN_MAJOR" ] && return 0
+  [ "$major" -eq "$NODE_MIN_MAJOR" ] && [ "$minor" -ge "$NODE_MIN_MINOR" ]
 }
 
 works() {  # <command...>: true when it runs and succeeds
@@ -159,7 +179,7 @@ main() {
   wanted=
   for pkg in $BREW_PACKAGES; do
     case "$pkg" in
-      node) works node --version && works npm --version && continue ;;
+      node) node_recent_enough && works npm --version && continue ;;
       tmux) works tmux -V && continue ;;
       *) works "$pkg" --version && continue ;;
     esac
@@ -175,6 +195,7 @@ main() {
   if ! node --version >/dev/null 2>&1 </dev/null || ! npm --version >/dev/null 2>&1 </dev/null; then
     die "Node is installed but does not run; run: brew reinstall node, then run this again"
   fi
+  node_recent_enough || die "Node $(node --version) is older than $NODE_MIN_MAJOR.$NODE_MIN_MINOR, which the first mate's tools need; run: brew upgrade node, then run this again"
 
   # --- 2. Claude Code ------------------------------------------------------------
 

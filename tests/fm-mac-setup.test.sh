@@ -114,7 +114,7 @@ case "${1:-}" in
     if [ "${FAKE_NODE_BROKEN:-}" = 1 ]; then
       printf '#!/usr/bin/env bash\nexit 1\n' > "$bin/node"
     else
-      printf '#!/usr/bin/env bash\necho v24.1.0\n' > "$bin/node"
+      printf '#!/usr/bin/env bash\necho %s\n' "${FAKE_BREW_NODE_VERSION:-v24.1.0}" > "$bin/node"
     fi
     cat > "$bin/npm" <<'NPM'
 #!/usr/bin/env bash
@@ -330,6 +330,33 @@ test_broken_node_stops_before_any_npm_install() {
   pass "a Node that does not run stops the setup before any npm install"
 }
 
+# quota-axi asks npm for Node >=22.19 (its published engines field). On an
+# older Node npm quietly installs a quota-axi below the bootstrap's floor, and
+# the closing check then fails on every rerun. So a working but older Node is
+# replaced by Homebrew's, and one that stays old stops the setup by name.
+test_node_too_old_for_the_tools_is_replaced_or_stops() {
+  local w out status
+  w=$(make_world old-node)
+  printf '#!/usr/bin/env bash\necho v22.13.1\n' > "$w/sysbin/node"
+  printf '#!/usr/bin/env bash\necho 10.9.2\n' > "$w/sysbin/npm"
+  chmod +x "$w/sysbin/node" "$w/sysbin/npm"
+  out=$(run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 0 ] || fail "setup over an old Node should finish with Homebrew's Node, got $status: $out"
+  assert_contains "$(calls "$w")" "brew install node" "an old Node is replaced from Homebrew"
+  assert_contains "$out" "Setup finished." "the setup finishes once Node is recent enough"
+
+  w=$(make_world old-node-stays)
+  out=$(FAKE_BREW_NODE_VERSION=v22.13.1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a Node that stays older than 22.19 should stop the setup, got $status: $out"
+  assert_contains "$out" "Node v22.13.1 is older than 22.19" "the failure names the Node version and the floor"
+  assert_contains "$out" "run: brew upgrade node, then run this again" "the failure gives a quote-free fix"
+  assert_not_contains "$(calls "$w")" "npm install" "nothing is installed through an old Node"
+  assert_not_contains "$(calls "$w")" "bootstrap install-missing" "no tool install runs on an old Node"
+  pass "a Node older than the npm tools accept is replaced from Homebrew, or stops the setup by name"
+}
+
 test_failed_tool_install_stops_the_setup() {
   local w out status
   w=$(make_world tools-fail)
@@ -362,3 +389,4 @@ test_closing_steps_are_safe_to_send_through_chat
 test_broken_node_stops_before_any_npm_install
 test_failed_tool_install_stops_the_setup
 test_piped_install_runs_to_the_end
+test_node_too_old_for_the_tools_is_replaced_or_stops

@@ -1060,6 +1060,9 @@ url=
 for arg in "$@"; do case "$arg" in -*) ;; *) url=$arg ;; esac; done
 printf 'curl %s\n' "$url" >> "$FAKE_CALLS"
 printf 'echo installed from %s\n' "$url"
+# The installer leaves a treehouse with lease support, as the real one does.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo "treehouse version v0.4.2 (fake)"\n[ "${1:-} ${2:-}" = "get --help" ] && echo "Usage: treehouse get [--lease]"\nexit 0\n' > "$(dirname "$0")/treehouse"
+chmod +x "$(dirname "$0")/treehouse"
 SH
   # npm installs the named tool the way a real install would, so the
   # `<tool> setup hooks` step that follows it finds the tool. It also reads
@@ -1073,10 +1076,14 @@ printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo 0.1.29\nexit 0\n' 
 chmod +x "$(dirname "$0")/$tool"
 SH
   chmod +x "$fakebin/curl" "$fakebin/npm"
+  # Its updater really updates, so the detection that follows the installs
+  # finds it current.
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
-[ "${1:-}" = --version ] && { echo "no-mistakes version v1.50.0 (fake)"; exit 0; }
+[ "${1:-}" = --version ] && { echo "no-mistakes version v${FM_FAKE_NM_VERSION:-1.50.0} (fake)"; exit 0; }
 printf 'no-mistakes %s\n' "$*" >> "$FAKE_CALLS"
+[ "${1:-}" = update ] && sed -i.bak 's/FM_FAKE_NM_VERSION:-1.50.0/FM_FAKE_NM_VERSION:-1.59.2/' "$0"
+exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
 
@@ -1125,6 +1132,38 @@ SH
   [ ! -s "$case_dir/calls.log" ] || fail "a complete home must install nothing: $(cat "$case_dir/calls.log")"
   [ ! -e "$case_dir/home/state" ] || fail "install-missing must not start a session's state in the home"
   pass "install-missing installs absent tools, upgrades outdated ones, and does nothing once the home is complete"
+}
+
+# An installer that exits 0 can still leave a tool below its floor: on a Node
+# older than quota-axi's engines field, npm quietly installs an old quota-axi
+# release. install-missing must then fail naming the tool, not exit 0 and leave
+# a closing check whose rerun repeats the same install.
+test_install_missing_fails_when_an_install_leaves_a_tool_outdated() {
+  local case_dir fakebin base out status
+  case_dir="$TMP_ROOT/install-missing-still-outdated"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  : > "$case_dir/calls.log"
+  rm -f "$fakebin/quota-axi"
+  base=$(fm_test_base_path_sans "$BASE_PATH" quota-axi)
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >> "$FAKE_CALLS"
+tool=${3:-}
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo 0.1.8\nexit 0\n' > "$(dirname "$0")/$tool"
+chmod +x "$(dirname "$0")/$tool"
+SH
+  chmod +x "$fakebin/npm"
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" install-missing 2>&1 </dev/null) || status=$?
+  assert_contains "$(cat "$case_dir/calls.log")" "npm install -g quota-axi" "the absent quota-axi is installed"
+  [ "$status" -eq 1 ] || fail "install-missing should exit 1 when a tool is still below its floor, got $status: $out"
+  assert_contains "$out" "OUTDATED: quota-axi (installed: 0.1.8; requires 0.1.51" \
+    "the failure names the tool, the version it got, and the floor"
+  assert_contains "$out" "error: not installed: quota-axi" "the summary names the tool"
+  pass "install-missing exits 1 naming a tool an installer left below its floor"
 }
 
 test_orca_backend_gates_orca_tool_only_when_selected() {
@@ -2361,6 +2400,7 @@ test_host_environment_reports
 test_host_environment_names_arm_without_chrome
 test_install_reports_failed_installers
 test_install_missing_installs_what_detection_reports
+test_install_missing_fails_when_an_install_leaves_a_tool_outdated
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux
