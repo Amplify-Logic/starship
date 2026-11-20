@@ -14,6 +14,11 @@
 #   fm-web.sh stop                 stop the background server
 #   fm-web.sh status               print running/stopped with the port
 #   fm-web.sh url                  print the sign-in URL (carries the token)
+#   fm-web.sh open [--print]       start it if needed and open it as its own app
+#                                  window (Chrome or Chromium --app, full screen),
+#                                  else in the default browser, signed in by a
+#                                  link that works once within two minutes;
+#                                  --print prints that link instead of opening it
 #   fm-web.sh serve [--port <n>]   run in the foreground
 #   fm-web.sh conversation         print this home's conversation once as JSON
 #                                  (schema fm-web-conversation.v1; bin/fm-web.py
@@ -21,8 +26,9 @@
 #   fm-web.sh --help
 #
 # The URL carries this home's token from state/web/token (owner-only). The
-# first visit swaps it for a cookie. Runtime files (pid, port, log) live in
-# state/web/.
+# first visit swaps it for a cookie. open never puts the token on a command
+# line: its link carries a one-time code (bin/fm-web.py signin-code) instead.
+# Runtime files (pid, port, log, one-time codes) live in state/web/.
 #
 # Environment:
 #   FM_HOME       private Firstmate home; defaults to this repository root
@@ -106,6 +112,51 @@ print_url() {
   printf 'http://127.0.0.1:%s/?token=%s\n' "$port" "$token"
 }
 
+# Opens <link> as an app window with no address bar: Chrome, else Chromium or
+# Edge, with --app; else the default browser.
+open_app() {  # <link>
+  local link=$1 app bin
+  if [ "$(uname)" = Darwin ]; then
+    for app in "Google Chrome" "Chromium" "Microsoft Edge"; do
+      if open -Ra "$app" 2>/dev/null; then
+        open -na "$app" --args --app="$link" --start-fullscreen
+        return 0
+      fi
+    done
+    open "$link"
+    return 0
+  fi
+  for bin in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      nohup "$bin" --app="$link" --start-fullscreen >/dev/null 2>&1 &
+      return 0
+    fi
+  done
+  command -v xdg-open >/dev/null 2>&1 || fail "no browser found; open $link yourself"
+  xdg-open "$link" >/dev/null 2>&1 &
+}
+
+command_open() {
+  local print=0 port code link
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --print) print=1; shift ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  running_pid >/dev/null || command_start >/dev/null
+  port=$(cat "$PORT_FILE" 2>/dev/null || true)
+  case "$port" in ''|*[!0-9]*) fail "not running; start it with fm-web.sh start" ;; esac
+  code=$(engine signin-code --home "$FM_HOME")
+  link="http://127.0.0.1:$port/?code=$code"
+  if [ "$print" = 1 ]; then
+    printf '%s\n' "$link"
+  else
+    open_app "$link"
+    printf 'opened Starship as its own window\n'
+  fi
+}
+
 command_start() {
   local pid n=0 line
   parse_port "$@"
@@ -168,6 +219,7 @@ case "${1:-}" in
   stop) shift; command_stop ;;
   status) shift; command_status ;;
   url) shift; running_pid >/dev/null || fail "not running; start it with fm-web.sh start"; print_url ;;
+  open) shift; command_open "$@" ;;
   serve) shift; command_serve "$@" ;;
   conversation)
     shift

@@ -1032,6 +1032,36 @@ test_a_worker_whose_checks_run_reads_checks_running() {
   pass "factory record: a live worker whose checks run reads checks running between readings; a dead one reads no reading"
 }
 
+# The overview is a cached reading that can lag the pane's own reading of a
+# worker: one read while the worker had paused, then shown while its checks run.
+# A worker the pane shows busy is busy on the count line too, on the record and
+# on the screen a second page draws, so the two never disagree.
+test_a_busy_row_is_never_left_out_of_the_count() {
+  reset_case
+  write_registry
+  write_world
+  jq '(.tasks[] | select(.id == "shop-checkout").current_state) |= (.state = "paused" | .source = "status-log"
+    | .detail = "waiting on my validation round" | .raw = "state: paused · source: status-log · waiting on my validation round")' \
+    "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.paused" || fail "could not pause the worker"
+  cp "$FM_FACTORY_SNAPSHOT" "$HOME_FIX/snapshot.checking"
+  cp "$HOME_FIX/snapshot.paused" "$FM_FACTORY_SNAPSHOT"
+  overview_cached true || fail "the overview could not be cached while the worker paused"
+  cp "$HOME_FIX/snapshot.checking" "$FM_FACTORY_SNAPSHOT"
+  FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 data \
+    > "$TMP_ROOT/case$CASE/record.json" || fail "--data failed"
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "shop-checkout") | "\(.state)|\(.step)"')" \
+    "busy|checking" "the worker whose checks run reads busy at checking"
+  assert_equals "$(q '[.factories[] | .jobs[] | select(.state == "busy")] | length')" "2" "two workers read busy"
+  assert_equals "$(q .counts.busy)" "2" "the count line left out a worker the pane shows busy"
+  assert_equals "$(q '.count_line | startswith("2 busy")')" "true" "count line words"
+  local screen
+  screen=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 python3 "$FACTORY" --screen) \
+    || fail "--screen failed"
+  assert_equals "$(jq -r '.counts.busy' <<<"$screen")" "2" "the screen's count left out a worker it shows busy"
+  assert_equals "$(jq -r '.count_words[0].words' <<<"$screen")" "2 busy" "the screen's count words"
+  pass "factory record: a worker shown busy is counted busy even while the overview reading lags"
+}
+
 # A home whose backlog is not markdown has no rows in the snapshot's markdown
 # read; its held decisions still reach NEEDS YOU through the tasks-axi adapter.
 test_held_decisions_come_through_a_non_markdown_adapter() {
@@ -3661,6 +3691,7 @@ fm_test_run \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_a_worker_whose_checks_run_reads_checks_running \
+  test_a_busy_row_is_never_left_out_of_the_count \
   test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
   test_the_live_pane_repaints_when_the_theme_is_switched \
