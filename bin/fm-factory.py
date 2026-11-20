@@ -1446,10 +1446,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             bucket = "ready"
         if bucket == "working":
             job.update(state="busy", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (not bucket and state.get("source") == "run-step" and (
-                state.get("state") == "parked" or task["id"] in unverified_alive)):
-            # A run the reader reports validating, a run-step reading parked
-            # short of a decision, or an unknown run-step reading on a worker
+        elif bucket == "validating" or task["id"] in unverified_alive:
+            # A run the fold reads validating (running, or parked short of a
+            # decision), or an unknown run-step reading on a worker
             # _fm_fleet_liveness reads alive (which the overview counts busy)
             # reads busy at checking. A dead worker's unknown reading does not.
             job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")

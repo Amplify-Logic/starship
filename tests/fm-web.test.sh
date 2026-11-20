@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Behavior tests for the localhost web page (bin/fm-web.sh, bin/fm-web.py):
 # transcript parsing into chat items (tool calls collapsed with their results,
-# hook notices as quiet notes, compaction boundaries carrying their summary,
-# escaped markdown), busy/idle/offline state, following a restarted or
-# /clear'd session,
+# hook notices and typed-in doorbells as quiet notes, pasted pictures as
+# pictures, compaction boundaries carrying their summary, escaped markdown),
+# busy/idle/offline state, following a restarted or /clear'd session,
 # the loopback bind, the token/cookie, Host, CSRF and Origin guards on every
 # POST, sends that only ever reach bin/fm-desk-voice.sh send with images saved
 # in the floater's shots folder, the mirror of the Factory pane's screen and
 # the bridge strip's fields in the page's plain words, a button's action handed
 # to bin/fm-factory.py act and nowhere else, the settings kept in the browser,
-# and the launcher's start/status/url/stop.
+# the page's own rules (the chat folded, links labelled, keys naming buttons),
+# the page shown before signing in with its public icons and manifest, the
+# one-time link open signs in with, and the launcher's start/status/url/stop.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -194,9 +196,9 @@ test_transcript_parsing_collapses_tools_and_marks_compaction() {
   assert_not_contains "$out" "sidechain"
   assert_not_contains "$out" "noise"
   assert_not_contains "$out" "hook text"
-  assert_equals "$(jq -r '.items[2] | [.name, .summary, .pending, .result] | join("|")' <<<"$out")" \
-    "Bash|List files|false|file-a
-file-b" "tool call collapsed with its result"
+  assert_equals "$(jq -r '.items[2] | [.name, .summary, .about, .pending, .result] | join("|")' <<<"$out")" \
+    "Bash|List files|List files|false|file-a
+file-b" "tool call collapsed with its result and its own description"
   assert_equals "$(jq -r '.items[4].summary' <<<"$out")" "Stop hook feedback" "hook notice is a quiet note"
   assert_equals "$(jq -r '.items[5].detail' <<<"$out")" "Summary of the earlier talk." "compaction carries its summary"
   assert_contains "$(jq -r '.items[6].html' <<<"$out")" "typed mid-turn"
@@ -577,6 +579,132 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   pass "a button's action goes to bin/fm-factory.py act, guarded like a send, and its answer comes back"
 }
 
+# What machinery types into the chat is a quiet notice, never the owner's
+# words; a picture the owner pasted or the desk voice sent is shown as a
+# picture, never as its path, while any other image path the owner typed stays
+# in the words and gets its picture too; and the page can fetch only the
+# pictures the shown conversation holds.
+test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
+  local home out port cookie shot png id status
+  home=$(make_home pictures)
+  mkdir -p "$home/state/desk-voice/shots"
+  shot="$home/state/desk-voice/shots/20261119T210000000000Z-ab12cd34.png"
+  printf '\x89PNG\r\n\x1a\nshot' > "$shot"
+  printf '\x89PNG\r\n\x1a\nshot2' > "$home/state/desk-voice/shots/20261119T210500000000Z-ef56ab78.png"
+  mkdir -p "$home/assets"
+  printf '\x89PNG\r\n\x1a\nlogo' > "$home/assets/logo.png"
+  mkdir -p "$home/My Shots"
+  printf '\x89PNG\r\n\x1a\ndragged' > "$home/My Shots/Screen shot.png"
+  png=$(printf '\x89PNG\r\n\x1a\npasted' | base64 | tr -d '\n')
+  {
+    jq -nc '{type:"user",uuid:"n1",origin:{kind:"human"},message:{role:"user",content:"[firstmate desk-voice] a desk voice message is waiting in the mailbox. Run bin/fm-wake-drain.sh now to pick it up."}}'
+    jq -nc '{type:"user",uuid:"n2",origin:{kind:"human"},message:{role:"user",content:"[firstmate inbox] captain inbox note 7 is queued. Run bin/fm-wake-drain.sh now."}}'
+    jq -nc '{type:"attachment",uuid:"n3",attachment:{type:"queued_command",prompt:"⁣: Firstmate operational input waiting: read the note",origin:{kind:"human"}}}'
+    jq -nc --arg shot "$shot" '{type:"user",uuid:"u1",origin:{kind:"human"},message:{role:"user",content:("This is the chart on my phone Screenshots: " + $shot)}}'
+    jq -nc '{type:"user",uuid:"u2",origin:{kind:"human"},message:{role:"user",content:"See /no/such/folder/gone.png please"}}'
+    jq -nc --arg png "$png" '{type:"user",uuid:"u3",origin:{kind:"human"},message:{role:"user",content:[{type:"text",text:"[Image #1] the new icon"},{type:"image",source:{type:"base64",media_type:"image/png",data:$png}}]}}'
+    jq -nc --arg p "${home// /\\ }/My\\ Shots/Screen\\ shot.png" --arg q "$home/My Shots/Screen shot.png" \
+      '{type:"user",uuid:"u4",origin:{kind:"human"},message:{role:"user",content:("Dragged " + $p + " and quoted \u0027" + $q + "\u0027")}}'
+    jq -nc --arg p "$home/state/desk-voice/shots/20261119T210500000000Z-ef56ab78.png" \
+      '{type:"user",uuid:"u5",origin:{kind:"human"},message:{role:"user",content:("and this one " + $p)}}'
+    jq -nc --arg p "$home/assets/logo.png" '{type:"user",uuid:"u6",origin:{kind:"human"},message:{role:"user",content:("please make " + $p + " bigger")}}'
+  } > "$(transcript "$home")"
+  serve_home "$home"
+  out=$(conversation "$home") || fail "conversation read failed"
+  assert_equals "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "event,event,event,user,user,user,user,user,user" \
+    "doorbells and operational input are notices, the owner's messages are messages"
+  assert_equals "$(jq -r '[.items[0:3][].summary] | join("|")' <<<"$out")" \
+    "A message waited in the mailbox|A note waited in the inbox|A notice for the first mate" "what each notice says"
+  assert_equals "$(jq -r '.items[3].html' <<<"$out")" "<p>This is the chart on my phone</p>" \
+    "the screenshot's path and its label are taken out of the words"
+  assert_equals "$(jq -r '.items[3].pictures | length' <<<"$out")" "1" "the screenshot is one picture"
+  assert_contains "$(jq -r '.items[4].html' <<<"$out")" "/no/such/folder/gone.png" "a path to nothing stays as written"
+  assert_equals "$(jq -r '.items[4].pictures | length' <<<"$out")" "0" "a path to nothing is no picture"
+  assert_equals "$(jq -r '.items[5] | "\(.html)|\(.images)|\(.pictures | length)"' <<<"$out")" "<p>the new icon</p>|1|1" \
+    "a pasted image drops its placeholder and is one picture"
+  assert_contains "$(jq -r '.items[6].html' <<<"$out")" "Shots/Screen\\ shot.png and quoted" \
+    "a dragged path outside the shots folder stays in the words as written"
+  assert_equals "$(jq -r '.items[6].pictures | length' <<<"$out")" "1" \
+    "a dragged path with escaped spaces, and the same path quoted, are one picture"
+  assert_equals "$(jq -r '.items[7] | "\(.html)|\(.pictures | length)"' <<<"$out")" "<p>and this one</p>|1" \
+    "a screenshot from the shots folder leaves the words without its label"
+  assert_contains "$(jq -r '.items[8].html' <<<"$out")" "please make $home/assets/logo.png bigger" \
+    "an image path the owner typed in a sentence stays in the words"
+  assert_equals "$(jq -r '.items[8].pictures | length' <<<"$out")" "1" "and still shows as a picture"
+  port=$(cat "$home/web.test-port")
+  cookie=$(cat "$home/web.test-cookie")
+  id=$(jq -r '.items[3].pictures[0]' <<<"$out")
+  assert_equals "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$id" | od -An -c | tr -s ' ' | head -1)" \
+    "$(od -An -c < "$shot" | tr -s ' ' | head -1)" "the screenshot's own bytes come back"
+  assert_equals "$(curl -sS -o /dev/null -w '%{content_type}' --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$id")" "image/png" "as a PNG"
+  id=$(jq -r '.items[5].pictures[0]' <<<"$out")
+  assert_equals "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$id" | tail -c 6)" "pasted" "the pasted image's bytes come back"
+  assert_equals "$(status_of "http://127.0.0.1:$port/api/picture/$id")" "403" "a picture needs the cookie"
+  status=$(status_of --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$(printf '0%.0s' $(seq 1 24))")
+  assert_equals "$status" "404" "an id the conversation did not hand out is not found"
+  assert_equals "$(status_of --cookie "$cookie" "http://127.0.0.1:$port/api/picture/..%2f..%2fetc")" "404" "a path is not an id"
+  pass "notices fold away, pasted pictures show as pictures, and only the shown ones can be fetched"
+}
+
+# Opening the address without signing in shows what this is and how to get in;
+# the look, the icons and the manifest load for anyone on this Mac, nothing else does.
+test_the_address_without_a_sign_in_explains_itself() {
+  local home root port page manifest size
+  home=$(make_home gate)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  page=$(curl -sS "http://127.0.0.1:$port/")
+  assert_equals "$(status_of "http://127.0.0.1:$port/")" "403" "the page itself stays shut"
+  assert_contains "$page" "How to get in"
+  assert_contains "$page" "bin/fm-web.sh open"
+  assert_contains "$page" "/settings.js"
+  assert_not_contains "$page" "data-csrf"
+  assert_not_contains "$page" "expired"
+  assert_contains "$(curl -sS "http://127.0.0.1:$port/?token=wrong")" "expired" "a wrong link says it no longer works"
+  manifest=$(curl -sS "http://127.0.0.1:$port/manifest.webmanifest")
+  assert_equals "$(jq -r '"\(.name)|\(.display)|\(.start_url)|\([.icons[].sizes] | join(","))"' <<<"$manifest")" \
+    "Starship|standalone|/|any,192x192,512x512" "the manifest makes it installable as its own app"
+  for size in 32 180 192 512; do
+    assert_equals "$(curl -sS "http://127.0.0.1:$port/icon-$size.png" | python3 -c 'import sys; d=sys.stdin.buffer.read(); print(d[:8] == b"\x89PNG\r\n\x1a\n", int.from_bytes(d[16:20], "big"), int.from_bytes(d[20:24], "big"))')" \
+      "True $size $size" "the $size pixel icon"
+  done
+  assert_contains "$(curl -sS "http://127.0.0.1:$port/icon.svg")" "<svg"
+  assert_equals "$(status_of "http://127.0.0.1:$port/view.js")" "200" "the page's rules load without a sign-in"
+  assert_equals "$(status_of "http://127.0.0.1:$port/api/mirror")" "403" "the projects do not"
+  assert_equals "$(status_of -H "Host: evil.example:$port" "http://127.0.0.1:$port/manifest.webmanifest")" "403" "nor anything on a rebound Host"
+  pass "the address without a sign-in explains itself, and only the look, icons and manifest load"
+}
+
+# open signs a browser in with a link that works once, within two minutes, and
+# never carries the token.
+test_open_signs_in_once_with_a_link_that_is_not_the_token() {
+  local home link token hdr code
+  home=$(make_home openlink)
+  link=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" open --print --port 0 2>&1) \
+    && fail "open took a flag it does not have: $link"
+  link=$(FM_WEB_PORT=0 FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" open --print) \
+    || fail "open --print failed: $link"
+  WEB_PIDS+=("$(cat "$home/state/web/web.pid")")
+  case "$link" in http://127.0.0.1:[0-9]*/\?code=*) ;; *) fail "open did not print a one-time loopback link: $link" ;; esac
+  token=$(head -n 1 "$home/state/web/token")
+  assert_not_contains "$link" "$token" "the link carries no token"
+  assert_equals "$(if [ "$(uname)" = Darwin ]; then stat -f '%Lp' "$home/state/web/codes"; else stat -c '%a' "$home/state/web/codes"; fi)" "700" "codes are kept owner-only"
+  hdr=$home/open.hdr
+  curl -sS -o /dev/null -D "$hdr" "$link"
+  assert_contains "$(cat "$hdr")" "303" "the link signs in"
+  assert_contains "$(tr -d '\r' < "$hdr")" "Location: /" "and drops the code from the address"
+  assert_grep "Set-Cookie: fm_web_" "$hdr"
+  assert_equals "$(status_of "$link")" "403" "a second visit with the same link is refused"
+  assert_contains "$(curl -sS "$link")" "expired" "and says so"
+  link=$(FM_HOME="$home" "$LAUNCHER" open --print) || fail "a second open --print failed"
+  code=${link##*code=}
+  for f in "$home/state/web/codes"/*; do printf '%s\n' 1000 > "$f"; done
+  assert_equals "$(status_of "$link")" "403" "a link past its two minutes is refused"
+  assert_equals "$(FM_HOME="$home" "$LAUNCHER" stop)" "stopped"
+  [ -n "$code" ] || fail "no code in the link"
+  pass "open signs in once, within two minutes, with a link that is not the token"
+}
+
 # The settings script is the page's own, fetched as the browser fetches it and
 # run against a stand-in for the browser's storage.
 test_settings_are_kept_in_the_browser() {
@@ -589,31 +717,100 @@ test_settings_are_kept_in_the_browser() {
 const S = require(process.argv[2]);
 const kept = {};
 const storage = { getItem: k => (k in kept ? kept[k] : null), setItem: (k, v) => { kept[k] = String(v); } };
-const page = () => ({ style: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+const page = () => ({ style: { props: {}, setProperty(k, v) { this.props[k] = v; } }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
 const out = [];
 out.push('first visit: ' + JSON.stringify(S.load(storage)));
-S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less' });
+kept['fm-web-settings'] = JSON.stringify({ text: 0, style: 'lively', theme: 'dark', motion: 'less' });
+out.push('after the first version: ' + JSON.stringify(S.load(storage)));
+S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less', keys: 'hide', split: 0.4, splitTab: 0.7, splitStack: 0.3 });
 out.push('next visit: ' + JSON.stringify(S.load(storage)));
 const el = page();
 S.apply(el, S.load(storage));
-out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(el.attrs));
-S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less' });
+out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(el.style.props) + ' ' + JSON.stringify(el.attrs));
+S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less', keys: 'maybe', split: 5, splitTab: 'wide', splitStack: 0.05 });
 out.push('a bad value: ' + JSON.stringify(S.load(storage)));
 kept[S.KEY] = '{not json';
 out.push('unreadable: ' + JSON.stringify(S.load(storage)));
-out.push('no storage: ' + JSON.stringify(S.load(null)) + ' ' + JSON.stringify(S.save(null, { text: 0 })));
-out.push('sizes: ' + S.TEXT_STEPS.join(' ') + ' | ' + S.TEXT_NAMES.join(' '));
+out.push('no storage: ' + JSON.stringify(S.load(null)) + ' ' + JSON.stringify(S.save(null, { text: 0 }).text));
+out.push('sizes: ' + S.TEXT_STEPS.join(' ') + ' | ' + S.TEXT_NAMES.join(' ') + ' | starts on ' + S.TEXT_NAMES[S.DEFAULTS.text]);
 console.log(out.join('\n'));
 JS
 ) || fail "the settings script did not run: $out"
-  assert_equals "$out" 'first visit: {"text":1,"style":"calm","theme":"auto","motion":"auto"}
-next visit: {"text":3,"style":"lively","theme":"dark","motion":"less"}
-on the page: 125% {"data-style":"lively","data-theme":"dark","data-motion":"less"}
-a bad value: {"text":1,"style":"calm","theme":"dark","motion":"less"}
-unreadable: {"text":1,"style":"calm","theme":"auto","motion":"auto"}
-no storage: {"text":1,"style":"calm","theme":"auto","motion":"auto"} {"text":0,"style":"calm","theme":"auto","motion":"auto"}
-sizes: 87.5 100 112.5 125 150 | Small Normal Large Larger Largest' "the settings a browser keeps and what they put on the page"
-  pass "settings default to calm and normal, come back on the next visit, and survive a browser with no storage"
+  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
+after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
+next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"splitTab":0.7,"splitStack":0.3}
+on the page: 120% {"--split":"0.4","--split-tab":"0.7","--split-stack":"0.3"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
+a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"splitTab":0.62,"splitStack":0.2}
+unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
+no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5} 0
+sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal' "the settings a browser keeps and what they put on the page"
+  pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel sizes"
+}
+
+# The page's rules, fetched as the browser fetches them and run without a page:
+# the chat folded into messages and one quiet line per run of steps, links as
+# short labels, and every key naming the button it stands for, so a key sends
+# the note that button sends, with no look from a project's tab.
+test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes() {
+  command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
+  local home root port out
+  home=$(make_home view)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  curl -sS "http://127.0.0.1:$port/view.js" > "$home/view.js"
+  out=$(node - "$home/view.js" <<'JS'
+const V = require(process.argv[2]);
+const out = [];
+const rows = V.foldChat([
+  { kind: 'user', id: 'u1' },
+  { kind: 'tool', id: 't1', name: 'Bash', summary: 'ls -la', about: 'List files' },
+  { kind: 'tool', id: 't2', name: 'Read', summary: '/home/demo/notes.md' },
+  { kind: 'event', id: 'e1', summary: 'A message waited in the mailbox' },
+  { kind: 'tool', id: 't3', name: 'Bash', summary: 'git status', error: true },
+  { kind: 'assistant', id: 'a1' },
+  { kind: 'tool', id: 't4', name: 'mcp__mail__send', summary: 'x', pending: true },
+]);
+out.push('rows: ' + rows.map(r => r.kind === 'quiet' ? V.quietLabel(r) + (r.error ? ' (one failed)' : '') : r.kind).join(' / '));
+out.push('steps: ' + rows[1].steps.map(s => s.text).join('; '));
+out.push('links: ' + V.plainText('https://github.com/example/garden/pull/42 is ready to merge') + ' | '
+  + V.plainText('See https://gitlab.example/x/-/merge_requests/9, https://github.com/a/b/issues/3 and https://www.example.org/docs.'));
+out.push('link parts: ' + JSON.stringify(V.linkParts('Open https://github.com/a/b/pull/7.')));
+const ask = { id: 'garden-chart', asking: '1794632400', question: true, project: 'garden', read: true,
+  options: [{ key: '1' }, { key: '2' }] };
+const done = { id: 'garden-share', asking: '1794636660', question: false, project: 'garden' };
+const garden = { id: 'garden', you_steer: false, jobs: [{ id: 'g1', read: true }] };
+const on = (hl, extra) => Object.assign({ hl, tab: 'home', projectOf: id => (id === 'garden' ? garden : null) }, extra || {});
+const keys = (ctx, list) => list.map(k => k + '=' + JSON.stringify(V.keyAction(k, ctx))).join(' ');
+out.push('on a question: ' + keys(on({ kind: 'call', call: ask }), ['2', '7', 'x', 't', 'r', 's', 'k', 'Enter']));
+out.push('on finished work: ' + keys(on({ kind: 'call', call: done }), ['k', 'c', 'x', '1']));
+out.push('on a project: ' + keys(on({ kind: 'project', project: garden }), ['Enter', 't', 'r', 's']));
+out.push('while confirming: ' + keys(on(null, { confirming: true }), ['Enter', 'Escape', 'x', 'Tab', 'Shift', 'ArrowDown', 'End', ' ']));
+out.push('anywhere: ' + keys(on(null), ['ArrowDown', 'ArrowUp', '?', 'Escape', 'q']));
+out.push('notes: ' + JSON.stringify([
+  V.noteFor({ act: 'answer', option: '2' }, ask), V.noteFor({ act: 'keep' }, done), V.noteFor({ act: 'settled' }, ask),
+  V.noteFor({ act: 'steer', factory: 'garden', who: 'you' }), V.noteFor({ act: 'read', id: 'garden-chart' }),
+  V.noteFor({ act: 'talk', kind: 'discuss', id: 'garden-chart', text: 'why?' }, ask),
+  V.noteFor({ act: 'talk', kind: 'talk', factory: 'garden', text: 'hello' })]));
+out.push('look: ' + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'home')) + ' '
+  + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'garden')));
+out.push('strip: ' + V.keyStrip({}).map(k => k.join(' ')).join(', ') + ' | ' + V.keyStrip({ confirming: true }).map(k => k.join(' ')).join(', '));
+console.log(out.join('\n'));
+JS
+) || fail "the page's rules did not run: $out"
+  assert_equals "$out" 'rows: user / Looked at 4 things (one failed) / assistant / Looking at 1 thing…
+steps: List files; Read notes.md; A message waited in the mailbox; Ran a command
+links: the pull request is ready to merge | See the merge request, the issue and example.org.
+link parts: [{"text":"Open "},{"text":"the pull request","url":"https://github.com/a/b/pull/7"},{"text":"."}]
+on a question: 2={"act":"pick","id":"garden-chart","option":"2"} 7=null x={"act":"settled","id":"garden-chart"} t={"act":"talk","kind":"discuss","id":"garden-chart"} r={"act":"read","id":"garden-chart"} s={"act":"steer","factory":"garden","who":"you"} k=null Enter={"act":"open","id":"garden-chart"}
+on finished work: k={"act":"keep","id":"garden-share"} c={"act":"talk","kind":"change","id":"garden-share"} x=null 1=null
+on a project: Enter={"act":"tab","id":"garden"} t={"act":"talk","kind":"talk","factory":"garden"} r={"act":"read","factory":"garden","job":"g1"} s={"act":"steer","factory":"garden","who":"you"}
+while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","text":"Press enter to send it to Starship, or esc to cancel."} Tab=null Shift=null ArrowDown=null End=null  =null
+anywhere: ArrowDown={"act":"move","step":1} ArrowUp={"act":"move","step":-1} ?={"act":"keys"} Escape={"act":"back"} q=null
+notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"},{"action":"keep","item":"garden-share","asking":"1794636660"},{"action":"settled","item":"garden-chart","asking":"1794632400"},{"action":"steer","factory":"garden","who":"you"},{"action":"read","item":"garden-chart"},{"action":"discuss","item":"garden-chart","asking":"1794632400","text":"why?"},{"action":"talk","factory":"garden","text":"hello"}]
+look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}
+strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel' \
+    "how the page folds the chat, labels links, and what each key sends"
+  pass "the chat folds into messages and quiet lines, links read as short labels, and keys send the buttons' notes"
 }
 
 test_launcher_start_status_url_stop() {
@@ -642,7 +839,11 @@ test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice
 test_send_uses_desk_voice_with_saved_images
 test_send_reports_typed
+test_notices_fold_away_and_pasted_pictures_show_as_pictures
+test_the_address_without_a_sign_in_explains_itself
+test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
+test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_launcher_start_status_url_stop
