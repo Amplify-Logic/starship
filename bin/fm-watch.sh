@@ -78,7 +78,9 @@
 #                          deferred to the same long recheck cadence
 #                          (wedge_defer_validating), while a parked, terminal,
 #                          ci-monitoring, absent or unreadable run, or a home
-#                          without that flag, escalates unchanged.
+#                          without that flag, escalates unchanged - except a
+#                          lane whose own `paused:` wait has elapsed, which is
+#                          consulted without the flag (wedge_defer_validating).
 #                          A pane whose recorded endpoint holds no agent at all is
 #                          not a wedge and is reported ONCE instead of escalating
 #                          on that cadence forever (wedge_dead_record); only the
@@ -1899,11 +1901,17 @@ clear_write_tracking() {  # <window-key>
 # with nothing executing it still re-surfaces once every PAUSE_RESURFACE_SECS
 # through resurface_absorbed. A different run id starts a new chain.
 # The escalation counter is left alone, as the other deferrals leave it.
-# OFF unless the home creates config/wedge-defer-validating: absent the flag the
-# crew state is never read here and the ladder is byte-identical.
+# OFF unless the home creates config/wedge-defer-validating, with one exception:
+# a worker whose own newest declared wait is a `paused:` line reaches here only
+# once that wait's clearing time has passed (wedge_wait_evidence defers an
+# unelapsed one), and a run still executing is exactly what such a worker waits
+# on, so that lane is consulted without the flag. Every other lane in an
+# unflagged home never reads the crew state here and keeps an identical ladder.
 wedge_defer_validating() {  # <window> <since-file> <triage-label> <idle-age> <task>
   local win=$1 since_file=$2 label=$3 age=$4 task=$5 verdict run step key vsf vage
-  [ -e "$CONFIG/wedge-defer-validating" ] || return 1
+  [ -e "$CONFIG/wedge-defer-validating" ] \
+    || { [ -n "$task" ] && status_is_paused "$(status_declared_wait_line "$STATE/$task.status")"; } \
+    || return 1
   verdict=$(crew_run_is_validating "$task") || return 1
   run=${verdict%% *}; step=${verdict#* }
   key=$(window_key "$win")

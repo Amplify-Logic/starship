@@ -968,6 +968,50 @@ test_wedge_threshold_validating_run_is_off_until_armed() {
   pass "with config/wedge-defer-validating absent a running validation keeps the unchanged ladder, wording and reads"
 }
 
+# A worker that declared its own wait for its validation run is waiting on that
+# run, so once its stated clearing time passes while the run still executes, the
+# quiet pane is still the healthy lane its declaration described rather than a
+# wedge, even in a home that never armed config/wedge-defer-validating.
+# The deferral keeps its bounded recheck, and a run that is no longer executing
+# keeps the unchanged ladder.
+test_wedge_threshold_elapsed_pause_defers_to_an_executing_validation_run() {
+  local dir state fakebin out capture window key n past
+  local verdict='state: working · source: run-step · validating (running) · run: 01RUNLIVE'
+  window="test:fm-wedge"; key=$(watch_window_key "$window")
+  past=$(iso_utc_at "$(( $(date +%s) - 600 ))")
+  dir=$(wedge_threshold_fixture validating-elapsed-pause \
+    "paused: waiting on my no-mistakes run until $past" 0)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  [ ! -e "$dir/config/wedge-defer-validating" ] \
+    || fail "the elapsed-pause fixture armed the flag, so it proves nothing"
+  n=1
+  while [ "$n" -le 3 ]; do
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$verdict" absorb \
+      || fail "an elapsed pause over a running validation wedge-escalated at threshold $n: $(cat "$out")"
+    n=$((n + 1))
+  done
+  [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
+    || fail "an elapsed pause over a running validation queued a stale wake: $(cat "$state/.wake-queue")"
+  grep -F 'possible wedge' "$out" >/dev/null \
+    && fail "an elapsed pause over a running validation was reported as a possible wedge: $(cat "$out")"
+  [ "$(cat "$state/.validating-since-$key" 2>/dev/null || true)" = 01RUNLIVE ] \
+    || fail "the elapsed-pause deferral chain was not bound to its run"
+
+  # The same elapsed pause over a run whose round is no longer executing keeps
+  # the ladder.
+  dir=$(wedge_threshold_fixture validating-elapsed-pause-ci \
+    "paused: waiting on my no-mistakes run until $past" 0)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" \
+    'state: working · source: run-step · ci running · run: 01RUNLIVE' exit \
+    || fail "an elapsed pause over a ci-monitoring run stayed silent: $(cat "$out")"
+  grep -F 'possible wedge, escalation 1' "$out" >/dev/null \
+    || fail "an elapsed pause over a ci-monitoring run did not keep the unchanged wording: $(cat "$out")"
+  [ ! -e "$state/.validating-since-$key" ] \
+    || fail "an elapsed pause over a ci-monitoring run started a validating deferral chain"
+  pass "an elapsed declared pause over a running validation is deferred without the flag, while a run no longer executing keeps the ladder"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit 0
@@ -986,4 +1030,5 @@ fm_test_run \
   test_wedge_defer_refuses_a_half_filled_wait_record \
   test_wedge_threshold_defers_to_an_executing_validation_run \
   test_wedge_threshold_escalates_when_no_run_is_executing \
-  test_wedge_threshold_validating_run_is_off_until_armed
+  test_wedge_threshold_validating_run_is_off_until_armed \
+  test_wedge_threshold_elapsed_pause_defers_to_an_executing_validation_run
