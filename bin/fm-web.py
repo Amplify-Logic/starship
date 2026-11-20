@@ -36,6 +36,16 @@ saved into state/desk-voice/shots/, goes through
 `bin/fm-desk-voice.sh send --source web`, which types into the primary's own
 chat only when that is safe and otherwise uses the durable mailbox.
 
+While the first mate is ready, the conversation reading also carries the
+suggested next prompt Claude shows in its empty chat box, read in the
+background by `bin/fm-desk-voice.sh suggestion` (suggestion_reader), which types
+nothing; the page shows it in its own empty message box and Tab fills it in.
+The status row under that box is `bin/fm-status-bar.sh --replay --own`.
+
+The server restarts itself in place when its own code on disk changes
+(watch_code), so an update reaches a running page; every conversation reading
+carries the code it runs as `build`, and the page reloads on a new one.
+
 `fm-web.py conversation --home <home>` prints the same reading as one JSON
 document (schema fm-web-conversation.v1), for another page that shows a
 home's conversation without this server: the Deck reads every local crew home
@@ -104,6 +114,12 @@ MIRROR_TTL_SECONDS = 2.0
 MIRROR_TIMEOUT_SECONDS = 150
 STRIP_TIMEOUT_SECONDS = 20
 STATUS_ROW_TIMEOUT_SECONDS = 20
+SUGGESTION_TTL_SECONDS = 2.0
+SUGGESTION_TIMEOUT_SECONDS = 20
+SUGGESTION_MAX = 2000
+# The server's own code: a change on disk restarts it in place (watch_code).
+CODE_PATH = Path(__file__).resolve()
+CODE_CHECK_SECONDS = float(os.environ.get("FM_WEB_CODE_CHECK_SECONDS") or 2.0)
 ANSI_RE = re.compile(r"\x1b\[([0-9;]*)m")
 # The status bar's colours as the page's tones (docs/status-bar.md owns what
 # each colour means); anything else is plain.
@@ -1256,12 +1272,13 @@ def status_segments(row: str) -> List[Dict[str, str]]:
 
 
 def read_status_row(home: Path, root: Path) -> List[Dict[str, str]]:
-    """The terminal's status bar row, drawn again by bin/fm-status-bar.sh
-    --replay from the figures its last render saved; an empty list when it
-    cannot be read, so the page simply leaves the row out."""
+    """The primary's own groups of the terminal's status bar row (model and
+    effort, usage, cost), drawn again by bin/fm-status-bar.sh --replay --own
+    from the figures its last render saved; the header already shows the
+    fleet. An empty list when it cannot be read, so the page leaves it out."""
     try:
         proc = subprocess.run(
-            ["bash", str(root / "bin" / "fm-status-bar.sh"), "--replay"],
+            ["bash", str(root / "bin" / "fm-status-bar.sh"), "--replay", "--own"],
             env=child_env(home, root),
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -1272,6 +1289,50 @@ def read_status_row(home: Path, root: Path) -> List[Dict[str, str]]:
         return []
     row = proc.stdout.strip().splitlines()[0] if proc.returncode == 0 and proc.stdout.strip() else ""
     return status_segments(row)
+
+
+def read_suggestion(home: Path, root: Path) -> str:
+    """The suggested next prompt Claude shows in the primary's empty chat box,
+    read by bin/fm-desk-voice.sh suggestion; empty when there is none."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-desk-voice.sh"), "suggestion"],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=SUGGESTION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = proc.stdout.strip().splitlines() if proc.returncode == 0 else []
+    return lines[0].strip()[:SUGGESTION_MAX] if lines else ""
+
+
+def suggestion_reader(home: Path, root: Path) -> Any:
+    """Claude's suggested next prompt for every open page, as a function of
+    whether the first mate is ready. It is read in the background, at most
+    every SUGGESTION_TTL_SECONDS and only while the first mate is ready, so a
+    poll never waits on the screen read; while it works there is none."""
+    lock = threading.Lock()
+    held = {"value": "", "at": 0.0, "reading": False}
+
+    def read() -> None:
+        value = read_suggestion(home, root)
+        with lock:
+            held.update(value=value, at=time.monotonic(), reading=False)
+
+    def get(ready: bool) -> str:
+        with lock:
+            if not ready:
+                held.update(value="", at=0.0)
+                return ""
+            if not held["reading"] and time.monotonic() - held["at"] >= SUGGESTION_TTL_SECONDS:
+                held["reading"] = True
+                threading.Thread(target=read, daemon=True).start()
+            return held["value"]
+
+    return get
 
 
 class FleetCache:
@@ -1705,6 +1766,7 @@ class WebState:
         self.csrf = derive(token, "csrf")
         self.transcript = TranscriptCache(home)
         self.mirror = FleetCache(home, root)
+        self.suggestion = suggestion_reader(home, root)
         self.send_lock = threading.Lock()
         self.act_lock = threading.Lock()
 
@@ -1857,10 +1919,13 @@ class WebHandler(BaseHTTPRequestHandler):
                 payload = STATE.transcript.get()
             except OSError as exc:
                 payload = {"state": "offline", "items": [], "note": f"cannot read the conversation: {exc}", "version": "error"}
+            payload["suggestion"] = STATE.suggestion(payload.get("state") == "idle")
+            payload["build"] = BUILD
             since = query.get("since", [""])[0]
             if since and since == payload.get("version"):
                 self._json(200, {"version": since, "unchanged": True, "state": payload.get("state"),
-                                 "since": payload.get("since")})
+                                 "since": payload.get("since"), "suggestion": payload["suggestion"],
+                                 "build": BUILD})
             else:
                 self._json(200, payload)
         elif parsed.path == "/api/mirror":
@@ -1933,39 +1998,41 @@ class WebHandler(BaseHTTPRequestHandler):
 PAGE_CSS = r"""
 :root{
 --font:system-ui,-apple-system,"Segoe UI",sans-serif;
---bg:#F1EBDF;--surface:#FBF8F1;--surface-2:#F4EFE5;--ink:#262624;--ink-2:#63605A;--line:#E2DACB;--edge:#C2B8A5;
---hull:#FBF8F1;--hull-ink:#262624;--hull-2:#63605A;--hull-line:#E2DACB;--hull-soft:#F4EFE5;
+--bg:#ECE8E1;--surface:#FCFAF6;--surface-2:#F4F0E9;--ink:#2A2A28;--ink-2:#66625C;--line:#E2DBCF;--edge:#C9BFAE;
+--hull:#FCFAF6;--hull-ink:#2A2A28;--hull-2:#66625C;--hull-line:#E2DBCF;--hull-soft:#F1EDE5;
 --plate:#34373A;--plate-ink:#EDEBE6;--mic:#5B8496;
---here:#3E6577;--here-bg:#E4EAE8;--on-here:#FFFFFF;
---work:#7A6233;--work-bg:#F3EAD3;--work-lamp:#CDA963;
---done:#44705A;--done-bg:#E4EDE3;--done-lamp:#7FB497;
---you:#9C5548;--you-bg:#F5E6E0;--you-lamp:#D08A7A;
---code:#EFE9DD;--shadow:0 1px 2px rgba(38,38,36,.04),0 6px 18px rgba(38,38,36,.05);
+--here:#47707F;--here-bg:#E1ECF0;--on-here:#FFFFFF;
+--work:#7E6431;--work-bg:#F6ECD4;--work-lamp:#DDBB79;
+--done:#46735E;--done-bg:#DFEEE4;--done-lamp:#8CC2A2;
+--you:#9F5749;--you-bg:#F7E2DC;--you-lamp:#DF9989;
+--code:#EFEAE0;--shadow:0 1px 2px rgba(38,38,36,.05),0 4px 14px rgba(38,38,36,.06);
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
---bg:#14181A;--surface:#1B2023;--surface-2:#22282B;--ink:#E4E8EA;--ink-2:#9AA4A9;--line:#2E3538;--edge:#4A5458;
---hull:#1B2023;--hull-ink:#E4E8EA;--hull-2:#9AA4A9;--hull-line:#2E3538;--hull-soft:#22282B;
+--bg:#13171A;--surface:#1C2226;--surface-2:#232A2F;--ink:#E6E9EB;--ink-2:#A0A9AE;--line:#2F373C;--edge:#4B565C;
+--hull:#1C2226;--hull-ink:#E6E9EB;--hull-2:#A0A9AE;--hull-line:#2F373C;--hull-soft:#252D32;
 --plate:#2A3236;--plate-ink:#E9EDEF;--mic:#5B8496;
---here:#8DB4C4;--here-bg:#223038;--on-here:#10191D;
---work:#D3BC8A;--work-bg:#2C281E;--work-lamp:#BFA36A;
---done:#9CC4AD;--done-bg:#1F2B25;--done-lamp:#7FAE94;
---you:#DDA596;--you-bg:#33231F;--you-lamp:#C98778;
---code:#262C2F;--shadow:0 1px 2px rgba(0,0,0,.2),0 6px 18px rgba(0,0,0,.2);
+--here:#9DC3D2;--here-bg:#21333B;--on-here:#10191D;
+--work:#DDC796;--work-bg:#2F2A1F;--work-lamp:#CFB27A;
+--done:#A8CFB8;--done-bg:#1F2F27;--done-lamp:#8DBCA1;
+--you:#E5B0A2;--you-bg:#372623;--you-lamp:#D79686;
+--code:#262D31;--shadow:0 1px 2px rgba(0,0,0,.22),0 4px 14px rgba(0,0,0,.2);
 }}
 :root[data-theme="dark"]{
---bg:#14181A;--surface:#1B2023;--surface-2:#22282B;--ink:#E4E8EA;--ink-2:#9AA4A9;--line:#2E3538;--edge:#4A5458;
---hull:#1B2023;--hull-ink:#E4E8EA;--hull-2:#9AA4A9;--hull-line:#2E3538;--hull-soft:#22282B;
+--bg:#13171A;--surface:#1C2226;--surface-2:#232A2F;--ink:#E6E9EB;--ink-2:#A0A9AE;--line:#2F373C;--edge:#4B565C;
+--hull:#1C2226;--hull-ink:#E6E9EB;--hull-2:#A0A9AE;--hull-line:#2F373C;--hull-soft:#252D32;
 --plate:#2A3236;--plate-ink:#E9EDEF;--mic:#5B8496;
---here:#8DB4C4;--here-bg:#223038;--on-here:#10191D;
---work:#D3BC8A;--work-bg:#2C281E;--work-lamp:#BFA36A;
---done:#9CC4AD;--done-bg:#1F2B25;--done-lamp:#7FAE94;
---you:#DDA596;--you-bg:#33231F;--you-lamp:#C98778;
---code:#262C2F;--shadow:0 1px 2px rgba(0,0,0,.2),0 6px 18px rgba(0,0,0,.2);
+--here:#9DC3D2;--here-bg:#21333B;--on-here:#10191D;
+--work:#DDC796;--work-bg:#2F2A1F;--work-lamp:#CFB27A;
+--done:#A8CFB8;--done-bg:#1F2F27;--done-lamp:#8DBCA1;
+--you:#E5B0A2;--you-bg:#372623;--you-lamp:#D79686;
+--code:#262D31;--shadow:0 1px 2px rgba(0,0,0,.22),0 4px 14px rgba(0,0,0,.2);
 }
-/* Lively: the same page with stronger colours. Calm is the default. */
+/* Lively: the same page with stronger colours. Calm is the default. In light, the header is
+   light too, as in Calm; --mark, --avatar, --good, --low, --critical and --alert-* are its accents. */
 :root[data-style="lively"]{
 --bg:#F1EBDF;--surface:#FDFAF4;--surface-2:#F6F1E7;--ink:#14232D;--ink-2:#4C5F6B;--line:#DDD5C5;--edge:#B9AE9B;
---hull:#143242;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#2C4C5D;--hull-soft:rgba(255,255,255,.07);
+--hull:#FDFAF4;--hull-ink:#14232D;--hull-2:#4C5F6B;--hull-line:#DDD5C5;--hull-soft:#F6F1E7;
+--mark:#0B6B88;--avatar:#143242;--good:#1F6F45;--low:#8F5C0B;--critical:#B5371F;--alert-bg:#FBE8E3;--alert-ink:#B5371F;
 --plate:#143242;--plate-ink:#EAF2F5;--mic:#2F7FE0;
 --here:#0B6B88;--here-bg:#DDEEF2;--on-here:#FFFFFF;
 --work:#8F5C0B;--work-bg:#FBF0D9;--work-lamp:#E6A93A;
@@ -1976,6 +2043,7 @@ PAGE_CSS = r"""
 @media (prefers-color-scheme:dark){:root[data-style="lively"]:not([data-theme="light"]){
 --bg:#0E181E;--surface:#15232B;--surface-2:#1A2B35;--ink:#E7EEF2;--ink-2:#9FB2BE;--line:#2A3D49;--edge:#3D5564;
 --hull:#1B3442;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#345566;--hull-soft:rgba(255,255,255,.07);
+--mark:#8FD6EA;--avatar:#1B3442;--good:#8EDCAF;--low:#F0C36C;--critical:#FFB3A3;--alert-bg:#5A2118;--alert-ink:#FFD9CF;
 --plate:#1B3442;--plate-ink:#EAF2F5;--mic:#2F7FE0;
 --here:#62C6E2;--here-bg:#12333F;--on-here:#06222B;
 --work:#E7B95F;--work-bg:#33290F;--work-lamp:#E6A93A;
@@ -1986,6 +2054,7 @@ PAGE_CSS = r"""
 :root[data-style="lively"][data-theme="dark"]{
 --bg:#0E181E;--surface:#15232B;--surface-2:#1A2B35;--ink:#E7EEF2;--ink-2:#9FB2BE;--line:#2A3D49;--edge:#3D5564;
 --hull:#1B3442;--hull-ink:#EAF2F5;--hull-2:#9FB6C2;--hull-line:#345566;--hull-soft:rgba(255,255,255,.07);
+--mark:#8FD6EA;--avatar:#1B3442;--good:#8EDCAF;--low:#F0C36C;--critical:#FFB3A3;--alert-bg:#5A2118;--alert-ink:#FFD9CF;
 --plate:#1B3442;--plate-ink:#EAF2F5;--mic:#2F7FE0;
 --here:#62C6E2;--here-bg:#12333F;--on-here:#06222B;
 --work:#E7B95F;--work-bg:#33290F;--work-lamp:#E6A93A;
@@ -2123,12 +2192,14 @@ details.quiet.err summary{color:var(--you)}
 #row{display:flex;gap:.5rem;align-items:flex-end}
 #input{flex:1;min-width:0;resize:none;min-height:2.5rem;max-height:12.5rem;padding:.5rem .75rem;border-radius:.625rem;border:1px solid var(--line);background:var(--bg);outline:none}
 #input:focus{border-color:var(--here)}
+#input.suggested::placeholder{color:var(--ink-2);opacity:.85}
 #thumbs{display:flex;gap:.375rem;flex-wrap:wrap}
 #thumbs:empty{display:none}
 .thumb{position:relative}
 .thumb img{height:3.25rem;border-radius:.5rem;border:1px solid var(--line)}
 .thumb button{position:absolute;top:-.375rem;right:-.375rem;border:none;border-radius:50%;width:1.25rem;height:1.25rem;background:var(--ink);color:var(--bg);font-size:.75rem;line-height:1.25rem;padding:0}
-#result{font-size:.78rem;color:var(--ink-2);min-height:1em}
+#foot{display:flex;gap:.25rem 1rem;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
+#result{font-size:.78rem;color:var(--ink-2);min-height:1em;margin-left:auto;text-align:right}
 #result.failed{color:var(--you)}
 body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 
@@ -2266,12 +2337,12 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .worker .doing{margin-top:.375rem;font-size:.875rem}
 .worker .doing.quiet{color:var(--work);font-weight:500}
 
-/* The terminal's status bar row, word for word, under the header. */
-.statusrow{padding:.2rem .875rem;font-size:.78rem;color:var(--hull-2);background:var(--hull);border-bottom:1px solid var(--hull-line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+/* The primary's own part of the terminal's status bar row, word for word, under the message box. */
+.statusrow{min-width:0;font-size:.78rem;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .statusrow[hidden]{display:none}
 .statusrow .t-green{color:var(--done)}.statusrow .t-yellow{color:var(--work)}
 .statusrow .t-red,.statusrow .t-magenta{color:var(--you)}.statusrow .t-alarm{color:var(--you);font-weight:700}
-.statusrow .t-cyan{color:var(--here)}.statusrow .t-dim{opacity:.7}.statusrow .t-bold{color:var(--hull-ink);font-weight:600}
+.statusrow .t-cyan{color:var(--here)}.statusrow .t-dim{opacity:.7}.statusrow .t-bold{color:var(--ink);font-weight:600}
 .keystrip{display:flex;gap:.2rem 1rem;flex-wrap:wrap;align-items:center;padding:.125rem .875rem .375rem;font-size:.75rem;color:var(--ink-2);min-height:1.5rem}
 .keystrip span{display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
 .keystrip.confirming{color:var(--here);font-weight:600}
@@ -2300,18 +2371,33 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .switch input{width:1.06rem;height:1.06rem;accent-color:var(--here)}
 .set .btn{margin-top:.45rem}
 
+/* Calm: pastel tints and gentle contrast, with the same clear grouping Lively
+   has: each section of a panel is its own soft card, and the counts, the open
+   call and the section badges carry their pastel colour. Lively is untouched. */
+:root:not([data-style="lively"]) .top{box-shadow:var(--shadow)}
+:root:not([data-style="lively"]) .sec{background:var(--surface-2);border:1px solid var(--line);border-radius:.8rem;padding:.6rem .7rem .7rem}
+:root:not([data-style="lively"]) .sec+.sec{margin-top:.75rem}
+:root:not([data-style="lively"]) .sec .job{background:var(--surface);border:1px solid var(--line)}
+:root:not([data-style="lively"]) .sum .c-work{color:var(--work)}
+:root:not([data-style="lively"]) .sum .c-you{color:var(--you)}
+:root:not([data-style="lively"]) .sum .c-done{color:var(--done)}
+:root:not([data-style="lively"]) .sec>h3 .n{background:var(--you-bg);color:var(--you);border-color:transparent}
+:root:not([data-style="lively"]) .call.open{border-color:var(--you-lamp);box-shadow:0 0 0 3px var(--you-bg)}
+:root:not([data-style="lively"]) .call.fin.open{border-color:var(--done-lamp);box-shadow:0 0 0 3px var(--done-bg)}
+:root:not([data-style="lively"]) .worker.sel{border-color:var(--here);box-shadow:0 0 0 3px var(--here-bg)}
+
 /* Lively's stronger marks */
 [data-style="lively"] .top{border-bottom-color:transparent;box-shadow:var(--shadow)}
-[data-style="lively"] .brand svg{color:#8FD6EA}
+[data-style="lively"] .brand svg{color:var(--mark)}
 [data-style="lively"] .lamp.work.lit i{box-shadow:0 0 0 .2rem rgba(230,169,58,.22)}
 [data-style="lively"] .lamp.you.lit i{box-shadow:0 0 0 .2rem rgba(238,100,71,.24)}
 [data-style="lively"] .lamp.done.lit i{box-shadow:0 0 0 .2rem rgba(73,182,120,.24)}
-[data-style="lively"] .alert{background:#5A2118;color:#FFD9CF}
-[data-style="lively"] .aside.good{color:#8EDCAF}
-[data-style="lively"] .aside.low{color:#F0C36C}
-[data-style="lively"] .aside.critical{color:#FFB3A3}
-[data-style="lively"] .tab[aria-selected="true"]{box-shadow:inset 0 -2px 0 #8FD6EA}
-[data-style="lively"] .av{background:var(--hull);color:#8FD6EA;border-color:transparent}
+[data-style="lively"] .alert{background:var(--alert-bg);color:var(--alert-ink)}
+[data-style="lively"] .aside.good{color:var(--good)}
+[data-style="lively"] .aside.low{color:var(--low)}
+[data-style="lively"] .aside.critical{color:var(--critical)}
+[data-style="lively"] .tab[aria-selected="true"]{box-shadow:inset 0 -2px 0 var(--mark)}
+[data-style="lively"] .av{background:var(--avatar);color:#8FD6EA;border-color:transparent}
 [data-style="lively"] .sum .c-work{color:var(--work)}
 [data-style="lively"] .sum .c-you{color:var(--you)}
 [data-style="lively"] .sum .c-done{color:var(--done)}
@@ -2680,11 +2766,13 @@ VIEW_JS = r"""
 PAGE_JS = r"""
 (function(){
 'use strict';
-const CSRF=document.body.dataset.csrf;
+const CSRF=document.body.dataset.csrf,BUILD=document.body.dataset.build||'';
 const V=window.FMView,FS=window.FMSettings;
 const $=id=>document.getElementById(id);
 const log=$('log'),wrap=$('items'),input=$('input'),sendBtn=$('send'),thumbs=$('thumbs'),result=$('result'),stateEl=$('state');
 let version='',images=[],sending=false;
+/* Claude's suggested next prompt, shown in the empty message box; Tab takes it. */
+const PLACEHOLDER=input.placeholder;let suggestion='';
 /* The live line: the last items, the turn's start, and when this page first saw it working. */
 let shown=[],since=null,working=false,seenAt=0;
 const KEY_NAMES={Enter:'↵',Escape:'esc'};
@@ -2787,10 +2875,20 @@ async function poll(){
         $('older').hidden=!data.older;
       }
       setState(data.state||'offline',data.since);drawLive();
+      suggest(data.suggestion||'');
+      if(data.build&&BUILD&&data.build!==BUILD)reloadWhenFree();
     }
   }catch(e){setState('offline');drawLive();}
   setTimeout(poll,document.hidden?6000:1500);
 }
+function suggest(text){
+  suggestion=text;
+  input.placeholder=text||PLACEHOLDER;
+  input.classList.toggle('suggested',!!text);
+}
+/* The server now runs newer code (a Starship update restarted it): load the
+   new page, but never over words or pictures waiting in the message box. */
+function reloadWhenFree(){if(!sending&&!input.value&&!images.length)location.reload();}
 function addImage(file){
   if(!file||!/^image\/(png|jpeg|gif|webp)$/.test(file.type))return;
   const reader=new FileReader();
@@ -2818,7 +2916,11 @@ async function send(){
 }
 function autosize(){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
 input.addEventListener('input',autosize);
-input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}});
+input.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();return;}
+  if(e.key==='Tab'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.isComposing&&suggestion&&!input.value){
+    e.preventDefault();input.value=suggestion;autosize();input.setSelectionRange(input.value.length,input.value.length);}
+});
 sendBtn.addEventListener('click',send);
 input.addEventListener('paste',e=>{for(const item of (e.clipboardData||{}).items||[]){
   if(item.kind==='file'){const f=item.getAsFile();if(f&&f.type.startsWith('image/')){e.preventDefault();addImage(f);}}}});
@@ -3379,7 +3481,7 @@ def signin_html(nonce: str, stale: bool) -> str:
 def page_html(nonce: str, csrf: str) -> str:
     return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script>
 </head>
-<body data-csrf="{html.escape(csrf, quote=True)}">{ship_symbol()}
+<body data-csrf="{html.escape(csrf, quote=True)}" data-build="{html.escape(BUILD, quote=True)}">{ship_symbol()}
 <div class="app">
 <header class="top" id="top">
 <div class="brand"><span>Starship</span></div>
@@ -3388,7 +3490,6 @@ def page_html(nonce: str, csrf: str) -> str:
 <div class="tools"><button class="qbtn" id="keysBtn" type="button" aria-expanded="false" aria-controls="keysSheet" aria-label="Keyboard keys" title="Keyboard keys (?)">?</button>
 <button class="gear" id="gear" type="button" aria-expanded="false" aria-controls="settings"><span>Settings</span></button></div>
 </header>
-<div class="statusrow" id="statusrow" aria-label="Status bar" hidden></div>
 <div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">Firstmate</button>
 <button type="button" data-side="projects">Factories</button></div>
 <main class="main" id="home" data-side="projects">
@@ -3405,7 +3506,8 @@ def page_html(nonce: str, csrf: str) -> str:
 <div id="thumbs"></div>
 <div id="row"><textarea id="input" rows="1" placeholder="Message firstmate" aria-label="Message"></textarea>
 <button id="send" class="btn primary" type="button">Send</button></div>
-<div id="result" role="status"></div>
+<div id="foot"><div class="statusrow" id="statusrow" aria-label="Status bar" hidden></div>
+<div id="result" role="status"></div></div>
 </div></div>
 </section>
 <div class="divider" id="divHome" role="separator" tabindex="0" aria-label="Move the line between firstmate and Factories" aria-valuemin="25" aria-valuemax="75" title="Drag to resize; double-click to reset"></div>
@@ -3463,16 +3565,82 @@ def page_html(nonce: str, csrf: str) -> str:
 # --- commands ----------------------------------------------------------------
 
 
+def code_digest() -> Optional[str]:
+    try:
+        return hashlib.sha256(CODE_PATH.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+# The code this process runs. The page carries it, and reloads itself once a
+# reading says the server now runs other code.
+BUILD = code_digest() or "unknown"
+
+
+def restart_argv(port: int) -> List[str]:
+    """This process's command line, with the port it bound, so a server
+    started on port 0 keeps its port across a restart."""
+    args = list(sys.argv[1:])
+    for i, arg in enumerate(args):
+        if arg == "--port" and i + 1 < len(args):
+            args[i + 1] = str(port)
+            break
+        if arg.startswith("--port="):
+            args[i] = f"--port={port}"
+            break
+    else:
+        args += ["--port", str(port)]
+    return [sys.executable, sys.argv[0]] + args
+
+
+def watch_code(port: int) -> None:
+    """Restart this server in place once its own code on disk has changed, so
+    a Starship update shows on the page without anyone restarting it.
+
+    The new code must read the same on two checks in a row, so a file still
+    being written is never run, and must compile, so a broken update leaves
+    the running server as it is. The restart replaces this process with the
+    same command line, keeping its pid for bin/fm-web.sh; the listening socket
+    closes with it and the new code binds the same port again, retrying for a
+    few seconds (FM_WEB_RESTARTED)."""
+    seen = BUILD
+    refused = None
+    while True:
+        time.sleep(CODE_CHECK_SECONDS)
+        now = code_digest()
+        if now is None or now == BUILD or now != seen or now == refused:
+            seen = now
+            continue
+        try:
+            compile(CODE_PATH.read_bytes(), str(CODE_PATH), "exec")
+        except Exception as exc:  # any compile failure keeps the running code
+            refused = now
+            print(f"not restarting: the changed {CODE_PATH.name} does not compile: {exc}", file=sys.stderr, flush=True)
+            continue
+        print(f"{CODE_PATH.name} changed on disk; restarting", flush=True)
+        sys.stderr.flush()
+        os.environ["FM_WEB_RESTARTED"] = "1"
+        argv = restart_argv(port)
+        os.execv(argv[0], argv)
+
+
 def command_serve(home: Path, root: Path, port: int) -> None:
     token = load_or_create_token(home)
-    try:
-        server = ThreadingHTTPServer((LOOPBACK, port), WebHandler)
-    except OSError as exc:
-        fail(f"could not bind {LOOPBACK}:{port}: {exc}")
+    tries = 50 if os.environ.pop("FM_WEB_RESTARTED", "") else 1
+    while True:
+        try:
+            server = ThreadingHTTPServer((LOOPBACK, port), WebHandler)
+            break
+        except OSError as exc:
+            tries -= 1
+            if tries <= 0:
+                fail(f"could not bind {LOOPBACK}:{port}: {exc}")
+            time.sleep(0.1)
     bound = server.server_address[1]
     global STATE
     STATE = WebState(home, root, bound, token)
     print(f"listening on {LOOPBACK}:{bound}", flush=True)
+    threading.Thread(target=watch_code, args=(bound,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

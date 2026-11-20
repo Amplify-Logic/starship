@@ -58,7 +58,8 @@ transcript() {  # <home> [<session>]
 }
 
 # A root with the real server linked in and stand-ins for what it runs:
-# fm-desk-voice.sh records its arguments; fm-factory.py prints the home's
+# fm-desk-voice.sh records its arguments, and for suggestion prints the home's
+# suggestion file; fm-factory.py prints the home's
 # screen.json for --screen (and fails when there is none) and, for act, records
 # the action it was handed in act.asks and answers with the home's act.answer;
 # fm-bridge-strip.sh prints the home's strip.fields, or fails without one.
@@ -95,12 +96,17 @@ cat "$FM_HOME/strip.fields" 2>/dev/null
 SH
   cat > "$root/bin/fm-status-bar.sh" <<'SH'
 #!/usr/bin/env bash
-[ "$*" = --replay ] || { echo "stand-in fm-status-bar.sh: unexpected arguments: $*" >&2; exit 2; }
+[ "$*" = "--replay --own" ] || { echo "stand-in fm-status-bar.sh: unexpected arguments: $*" >&2; exit 2; }
 cat "$FM_HOME/status.row" 2>/dev/null
 SH
   chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
+if [ "\$*" = suggestion ]; then
+  printf 'suggestion\n' >> "$home/suggestion.reads"
+  cat "$home/suggestion" 2>/dev/null
+  exit 0
+fi
 printf '%s\n' "\$@" > "$home/desk-voice.args"
 printf 'FM_HOME=%s\n' "\$FM_HOME" >> "$home/desk-voice.args"
 printf '%s\n' "$2"
@@ -609,14 +615,22 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   pass "the mirror is the pane's screen and the strip's fields, with only the pane's own jargon reworded"
 }
 
-# The terminal's status bar row, drawn again by bin/fm-status-bar.sh --replay,
-# reaches the page word for word with each colour as a tone.
+# The primary's own part of the terminal's status bar row, drawn again by
+# bin/fm-status-bar.sh --replay --own, reaches the page word for word with each
+# colour as a tone, and sits under the message box, not under the header.
 test_the_mirror_shows_the_terminal_status_row() {
-  local home out
+  local home out page
   home=$(make_home statusrow)
   write_screen "$home"
   printf '\033[1m⚓ Opus\033[0m\033[2m·\033[0mhigh \033[2m│\033[0m \033[92m🧠35%%\033[0m \033[91;1m👁 not watching\033[0m \033[95m1 ready to merge\033[0m\n' > "$home/status.row"
   serve_home "$home"
+  page=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/")
+  python3 - "$page" <<'PY' || fail "the status row should sit under the message box, after it and not in the header"
+import sys
+page = sys.argv[1]
+row, box, header = page.find('id="statusrow"'), page.find('id="input"'), page.find('</header>')
+sys.exit(0 if header < box < row else 1)
+PY
   out=$(mirror "$home")
   assert_equals "$(jq -r '[.model.status[] | .text] | join("")' <<<"$out")" \
     "⚓ Opus·high │ 🧠35% 👁 not watching 1 ready to merge" "the row's words are the terminal's"
@@ -626,6 +640,84 @@ test_the_mirror_shows_the_terminal_status_row() {
   sleep 2.2   # the server keeps one reading for two seconds
   assert_equals "$(mirror "$home" | jq -c '.model.status')" "[]" "no row leaves the status bar out"
   pass "the mirror shows the terminal's status bar row word for word"
+}
+
+# Claude's suggested next prompt reaches the page while the first mate is
+# ready, read through bin/fm-desk-voice.sh suggestion; while it works there is
+# none and the screen is not read.
+test_the_suggested_prompt_reaches_the_page_only_while_ready() {
+  local home out n=0 reads
+  home=$(make_home suggestion)
+  write_basic_transcript "$(transcript "$home")"
+  printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s9"}' >> "$(transcript "$home")"
+  printf 'yes, ship both changes\n' > "$home/suggestion"
+  serve_home "$home"
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.suggestion' <<<"$out")" = "yes, ship both changes" ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.state' <<<"$out")" "idle" "the turn has ended"
+  assert_equals "$(jq -r '.suggestion' <<<"$out")" "yes, ship both changes" "the suggestion reaches the page"
+  out=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" \
+    "http://127.0.0.1:$(cat "$home/web.test-port")/api/conversation?since=$(jq -r '.version' <<<"$out")")
+  assert_equals "$(jq -r '.unchanged' <<<"$out")" "true" "an unchanged reading"
+  assert_equals "$(jq -r '.suggestion' <<<"$out")" "yes, ship both changes" "an unchanged reading still carries the suggestion"
+  printf '%s\n' '{"type":"user","uuid":"u9","origin":{"kind":"human"},"message":{"role":"user","content":"go on"}}' >> "$(transcript "$home")"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.state' <<<"$out")" "busy" "a new turn is under way"
+  assert_equals "$(jq -r '.suggestion' <<<"$out")" "" "no suggestion while it works"
+  reads=$(wc -l < "$home/suggestion.reads")
+  sleep 2.5
+  conversation "$home" >/dev/null
+  assert_equals "$(wc -l < "$home/suggestion.reads")" "$reads" "the screen is not read while it works"
+  [ ! -e "$home/desk-voice.args" ] || fail "reading the suggestion must never send anything"
+  pass "the suggested prompt reaches the page only while firstmate is ready"
+}
+
+# The server restarts itself in place when its own code on disk changes, so an
+# update shows without restarting it by hand, and the page learns it runs
+# newer code; code that does not compile leaves the running server alone.
+test_the_server_restarts_itself_when_its_code_changes() {
+  local home root code port cookie pid build page_build n=0 next out
+  home=$(make_home restart)
+  root=$(make_root "$home" "sent: tmux %1")
+  code=$home/code/fm-web.py
+  mkdir -p "$home/code"
+  cp "$ENGINE" "$code"
+  : > "$home/web-serve.log"
+  HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" FM_WEB_CODE_CHECK_SECONDS=0.2 \
+    python3 "$code" serve --home "$home" --root "$root" --port 0 >"$home/web-serve.log" 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" >> "$WEB_PID_FILE"
+  while [ "$n" -lt 50 ] && ! grep -qE '^listening on' "$home/web-serve.log"; do sleep 0.1; n=$((n + 1)); done
+  port=$(sed -n 's/^listening on 127\.0\.0\.1:\([0-9]*\)$/\1/p' "$home/web-serve.log" | head -n 1)
+  [ -n "$port" ] || fail "the server did not start: $(cat "$home/web-serve.log")"
+  cookie=$(sign_in "$home" "$port")
+  build=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/conversation" | jq -r '.build')
+  page_build=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/" | sed -n 's/.*data-build="\([0-9a-f]*\)".*/\1/p')
+  [ -n "$build" ] && [ "$build" != null ] || fail "a reading should name the code the server runs"
+  assert_equals "$page_build" "$build" "the page carries the code it was served by"
+  printf '\ndef broken(:\n' >> "$code"
+  sleep 1.5
+  assert_equals "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/conversation" | jq -r '.build')" "$build" \
+    "code that does not compile leaves the running server as it was"
+  assert_contains "$(cat "$home/web-serve.log")" "does not compile" "the refusal is logged"
+  cp "$ENGINE" "$code"
+  printf '\n# a newer version\n' >> "$code"
+  n=0
+  while [ "$n" -lt 50 ]; do
+    next=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/conversation" 2>/dev/null | jq -r '.build' 2>/dev/null)
+    [ -n "$next" ] && [ "$next" != null ] && [ "$next" != "$build" ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  [ -n "$next" ] && [ "$next" != "$build" ] || fail "the server did not restart on its new code: $(cat "$home/web-serve.log")"
+  kill -0 "$pid" 2>/dev/null || fail "the restarted server must keep its process id"
+  out=$(ps -o args= -p "$pid")
+  assert_contains "$out" "serve --home $home --root $root --port $port" "it keeps its command line and its port"
+  pass "the server restarts itself in place when its code changes, and keeps running on code that does not compile"
 }
 
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
@@ -976,6 +1068,8 @@ test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words
 test_the_mirror_shows_the_terminal_status_row
+test_the_suggested_prompt_reaches_the_page_only_while_ready
+test_the_server_restarts_itself_when_its_code_changes
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes

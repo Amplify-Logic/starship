@@ -15,6 +15,7 @@
 #   fm-desk-voice.sh retry [<saved-recording>...]
 #   fm-desk-voice.sh pending
 #   fm-desk-voice.sh drain [--print]
+#   fm-desk-voice.sh suggestion
 #   fm-desk-voice.sh --help
 #
 # WHY: the floater is mouth/ears only. Transcripts meant for Firstmate must not
@@ -200,6 +201,11 @@
 #   busy TAB <path>                       another retry holds the lock
 #   gone TAB <path>                       already delivered or removed
 # Only files inside the unsent folder are retried.
+#
+# suggestion prints the suggested next prompt a Claude primary shows in its
+# otherwise-empty chat box, the dim text Tab fills in, as one line, and
+# nothing when there is none or the chat cannot be read safely. It reads the
+# pane send would type into, proven the same way, and types nothing. The web page shows it in its own message box.
 #
 # Drain moves files to state/desk-voice/processed/ and prints each transcript
 # (one JSON object per line with --print, plain text otherwise). The primary
@@ -795,6 +801,64 @@ shown_focused() {  # <backend> <target>
     | awk -v since="$since" '$1 >= since && ("," $2 ",") ~ /,focused,/ { found = 1 } END { exit !found }'
 }
 
+# Prove the lock-holding primary's own pane, in the caller's shell: the lock's
+# pid is a live harness (for [expect-home], one running for that home), the
+# pane its environment names exists, and that pane's root process is the pid
+# or one of its ancestors. Exports the pane environment and sets PANE_BACKEND,
+# PANE_TARGET, PANE_ROOT and PANE_CLAUDE (1 for a Claude primary). Returns 1
+# when the pane is not proven. Callers run it in a subshell, which scopes the
+# exported environment.
+prove_primary_pane() {  # [expect-home]
+  local lock="$STATE/.lock" pid envs kv
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
+  pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  fm_harness_holder_alive "$pid" || return 1
+  if [ -n "${1:-}" ]; then
+    holder_home_is "$pid" "$1" || return 1
+  fi
+  # Kept now: sourcing a backend resets the session-lock library's flag.
+  PANE_CLAUDE=${FM_HARNESS_IS_CLAUDE:-0}
+  envs=$(holder_pane_env "$pid")
+  [ -n "$envs" ] || return 1
+  unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND TMUX TMUX_PANE \
+    HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH
+  while IFS= read -r kv; do
+    [ -n "$kv" ] && export "${kv?}"
+  done <<EOF
+$envs
+EOF
+  PANE_TARGET=$(discover_supervisor_target) || return 1
+  PANE_BACKEND=$(discover_supervisor_backend) || return 1
+  fm_backend_target_exists "$PANE_BACKEND" "$PANE_TARGET" || return 1
+  PANE_ROOT=$(pane_root_pid "$PANE_BACKEND" "$PANE_TARGET") || return 1
+  pid_within "$pid" "$PANE_ROOT" || return 1
+}
+
+# The suggested next prompt a Claude primary shows in its empty chat box
+# (fm_composer_ghost_suggestion), on stdout; nothing when there is none, the
+# pane is not proven, the primary is not Claude, the box holds anything typed,
+# or the screen shows a dialog. A read only: it types nothing, takes no lock,
+# and needs a styled read of the screen (tmux, Herdr), so another backend
+# never shows one.
+suggestion() (
+  local screen caps
+  [ "$#" -eq 0 ] || refuse "suggestion takes no arguments"
+  prove_primary_pane || return 0
+  [ "$PANE_CLAUDE" = 1 ] || return 0
+  [ "$(fm_backend_composer_state "$PANE_BACKEND" "$PANE_TARGET" 2>/dev/null)" = empty ] || return 0
+  ! shows_selection_dialog "$PANE_BACKEND" "$PANE_TARGET" || return 0
+  fm_backend_source "$PANE_BACKEND" || return 0
+  case "$PANE_BACKEND" in
+    tmux) screen=$(fm_tmux_composer_capture "$PANE_TARGET") || return 0 ;;
+    herdr) screen=$(fm_backend_herdr_visible_capture_ansi "$PANE_TARGET" 2>/dev/null) || return 0 ;;
+    *) return 0 ;;
+  esac
+  caps=$(printf 'styled=1\ncursor=0')
+  screen=$(printf '%s\n' "$screen" | tail -n "${FM_COMPOSER_CAPTURE_LINES:-20}")
+  fm_composer_ghost_suggestion "$caps" "$screen" || true
+)
+
 # Type <line> into the lock-holding primary's own pane and submit it. Prints
 # "<verdict><TAB><backend><TAB><target>" once the pane is proven to host the
 # primary and show its chat input. Returns 1 when the pane is not proven, or
@@ -807,32 +871,11 @@ shown_focused() {  # <backend> <target>
 # PRIMARY_SUBMIT_EXPECT_HOME counts the pane proven only when the lock holder
 # runs for that home (holder_home_is). Its subshell scopes the pane environment and writer lock.
 primary_submit() (  # <line> [<app> <tty> | --focused]
-  local lock="$STATE/.lock" pid envs kv backend target root verdict draft claude composer tries
+  local backend target root verdict draft claude composer tries
   local writer_lock
   writer_lock=$(fm_pane_writer_lock_path "$STATE")
-  [ -f "$lock" ] && [ ! -L "$lock" ] || return 1
-  pid=$(head -n 1 "$lock" 2>/dev/null) || return 1
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  fm_harness_holder_alive "$pid" || return 1
-  if [ -n "${PRIMARY_SUBMIT_EXPECT_HOME:-}" ]; then
-    holder_home_is "$pid" "$PRIMARY_SUBMIT_EXPECT_HOME" || return 1
-  fi
-  # Kept now: sourcing a backend resets the session-lock library's flag.
-  claude=${FM_HARNESS_IS_CLAUDE:-0}
-  envs=$(holder_pane_env "$pid")
-  [ -n "$envs" ] || return 1
-  unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND TMUX TMUX_PANE \
-    HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH
-  while IFS= read -r kv; do
-    [ -n "$kv" ] && export "${kv?}"
-  done <<EOF
-$envs
-EOF
-  target=$(discover_supervisor_target) || return 1
-  backend=$(discover_supervisor_backend) || return 1
-  fm_backend_target_exists "$backend" "$target" || return 1
-  root=$(pane_root_pid "$backend" "$target") || return 1
-  pid_within "$pid" "$root" || return 1
+  prove_primary_pane "${PRIMARY_SUBMIT_EXPECT_HOME:-}" || return 1
+  backend=$PANE_BACKEND target=$PANE_TARGET root=$PANE_ROOT claude=$PANE_CLAUDE
   if [ "$#" -ge 3 ]; then
     shown_in_front "$backend" "$target" "$root" "$2" "$3" || return 1
   elif [ "${2:-}" = --focused ]; then
@@ -1441,6 +1484,7 @@ main() {
     retry) shift; retry "$@" ;;
     pending) shift; pending "$@" ;;
     drain) shift; drain "$@" ;;
+    suggestion) shift; suggestion "$@" ;;
     *) refuse "unknown command: $1" ;;
   esac
 }

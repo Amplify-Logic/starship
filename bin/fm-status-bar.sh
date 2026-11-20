@@ -7,7 +7,7 @@
 #     --context-used PERCENT --quota-used PERCENT --cost USD
 #   fm-status-bar.sh --adapter codex --model MODEL --effort LEVEL \
 #     --follow-pane PANE [--follow-backend tmux|herdr]
-#   fm-status-bar.sh --replay
+#   fm-status-bar.sh --replay [--own]
 #
 # Claude mode reads the native statusLine JSON payload from stdin.
 # Cursor mode reads Cursor CLI's native statusLine JSON payload from stdin.
@@ -58,6 +58,10 @@
 # fields fresh, and prints the row once. Replay is how the web mirror shows
 # this row (bin/fm-web.py); it reads no stdin, needs no FM_PRIMARY_HARNESS,
 # and never writes the context sample or the saved figures.
+# --replay --own prints only the primary's own groups (model and effort,
+# context and quota, cost) and reads no fleet, supervision or away field: the
+# web mirror shows that slim row under its message box, because its header
+# already carries the fleet.
 #
 # The complete field, threshold, color, placeholder, and adapter contract lives
 # in docs/status-bar.md.
@@ -87,6 +91,7 @@ CHROME_PANE=
 CHROME_ROLE=
 CHROME_ZOOMED=0
 REPLAY=0
+OWN=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -153,6 +158,10 @@ while [ "$#" -gt 0 ]; do
       REPLAY=1
       shift
       ;;
+    --own)
+      OWN=1
+      shift
+      ;;
     *)
       exit 0
       ;;
@@ -160,6 +169,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 METRICS_FILE=$STATE/.primary-status-metrics
+[ "$REPLAY" = 1 ] || OWN=0
 if [ "$REPLAY" = 1 ]; then
   ADAPTER=replay
   FOLLOW_PANE=
@@ -501,12 +511,19 @@ fleet_phrase() {
   fleet_part="${fleet_part:+$fleet_part${D},${X} }${2}${1} ${noun}${X}"
 }
 
+# The cost group: the session's dollars, or a dim placeholder.
+cost_words() {
+  if [ "$COST" = -- ]; then
+    printf '%s' "${D}\$--${X}"
+  else
+    printf '%s' "\$${COST}"
+  fi
+}
+
 render_once() {
   local anchor separator context_part quota_part
   local fleet_part watch_part cost_part afk_part age context_color quota_color
 
-  fleet_counts
-  age=$(supervision_age)
   separator=" ${D}│${X} "
   anchor="${BOLD}⚓ ${MODEL}${X}${D}·${X}${EFFORT}"
   [ -z "$ROLE" ] || anchor="${anchor} ${D}[${ROLE}]${X}"
@@ -536,6 +553,14 @@ render_once() {
     [ -z "$QUOTA_WINDOW" ] \
       || quota_part="${quota_color}⚡${QUOTA_USED}%${X}${D}${QUOTA_WINDOW}${X}"
   fi
+
+  if [ "$OWN" = 1 ]; then
+    printf '%s%s%s %s%s%s' "$anchor" "$separator" "$context_part" "$quota_part" \
+      "$separator" "$(cost_words)"
+    return 0
+  fi
+  fleet_counts
+  age=$(supervision_age)
 
   # The fleet and supervision fields speak plain words, because the captain
   # reads this row (AGENTS.md section 9): counts name what the workers are
@@ -577,11 +602,7 @@ render_once() {
     watch_part="${G}👁 watching${X}"
   fi
 
-  if [ "$COST" = -- ]; then
-    cost_part="${D}\$--${X}"
-  else
-    cost_part="\$${COST}"
-  fi
+  cost_part=$(cost_words)
 
   if [ -e "$STATE/.afk" ]; then
     afk_part="${C}💤AFK${X}"
