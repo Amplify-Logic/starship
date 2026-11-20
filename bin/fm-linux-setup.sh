@@ -4,9 +4,9 @@
 # (ONBOARDING-windows.md) or is a plain Linux server reached over SSH
 # (ONBOARDING-linux-server.md).
 #
-# It installs only what must exist before the first mate starts; the first
-# mate's own bootstrap (bin/fm-bootstrap.sh) installs the rest after the
-# person's consent, exactly as on a Mac (ONBOARDING.md step 4):
+# It installs everything the first mate needs before the first mate starts,
+# so nothing is left to install inside its session, exactly as
+# bin/fm-mac-setup.sh does on a Mac:
 #   - apt: build-essential procps curl file git ca-certificates (Homebrew's
 #     Linux prerequisites), plus wslu inside WSL, whose wslview opens a link in
 #     the Windows default browser
@@ -24,6 +24,10 @@
 #     home, config/backend set to herdr, so the first mate starts in Herdr
 #     from its first launch, as on a Mac (bin/fm-herdr-setup.sh owns all
 #     three; a server keeps tmux, ONBOARDING-linux-server.md step 6)
+#   - every other tool the first mate needs (treehouse, no-mistakes and the
+#     npm tools), through the clone's own `bin/fm-bootstrap.sh
+#     install-missing`, which owns the list; running this script is the
+#     consent for those installs
 #   - lines in ~/.profile and ~/.bashrc, so login shells, tmux panes, and new
 #     terminals pick these up: one `brew shellenv` line, one ~/.local/bin PATH
 #     line, `export HOMEBREW_NO_ASK=1` (Homebrew otherwise stops every install
@@ -294,6 +298,12 @@ main() {
     else
       warn "this Starship copy predates the Herdr setup; update it with 'git -C $TARGET pull', then run $TARGET/bin/fm-herdr-setup.sh"
     fi
+  fi
+
+  if [ -x "$TARGET/bin/fm-bootstrap.sh" ]; then
+    say "The first mate's tools"
+    FM_HOME="$TARGET" "$TARGET/bin/fm-bootstrap.sh" install-missing </dev/null \
+      || die "a tool above did not install; run this again in a few minutes"
   fi
 
   # shellcheck disable=SC2016  # these lines are written for the shell to expand later

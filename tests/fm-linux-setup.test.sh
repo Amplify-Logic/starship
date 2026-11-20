@@ -120,7 +120,15 @@ mkdir -p "$HOME/.local/bin"
 printf '#!/usr/bin/env bash\necho herdr 0.9.5\n' > "$HOME/.local/bin/herdr"
 chmod +x "$HOME/.local/bin/herdr"
 HS
-        chmod +x "$2/bin/fm-herdr-setup.sh" ;;
+        chmod +x "$2/bin/fm-herdr-setup.sh"
+        # The clone's own tool install: records its call the way
+        # bin/fm-bootstrap.sh install-missing would be asked.
+        cat > "$2/bin/fm-bootstrap.sh" <<'BS'
+#!/usr/bin/env bash
+printf 'bootstrap %s FM_HOME=%s\n' "$*" "${FM_HOME:-}" >> "$FAKE_WORLD/calls.log"
+[ "${FAKE_TOOLS_FAIL:-}" != 1 ] || { echo "error: not installed: treehouse" >&2; exit 1; }
+BS
+        chmod +x "$2/bin/fm-bootstrap.sh" ;;
       *)
         if [ -n "${FAKE_ADDON_CLONE_FAILS:-}" ] && [ -z "${1##*"$FAKE_ADDON_CLONE_FAILS"*}" ]; then
           echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2
@@ -250,6 +258,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$log" "google-chrome-stable_current_amd64.deb" "Chrome's package is installed with apt"
   assert_contains "$log" "git clone https://github.com/Amplify-Logic/starship $w/home/starship" \
     "Firstmate is cloned into ~/starship"
+  assert_contains "$log" "bootstrap install-missing FM_HOME=$w/home/starship" \
+    "every other tool the first mate needs is installed here, before the first mate starts"
   assert_contains "$out" "ok  jq" "the closing check finds jq"
   assert_contains "$out" "ok  chrome" "the closing check finds Chrome"
   assert_contains "$out" "ok  firstmate" "the closing check finds the clone"
@@ -431,7 +441,20 @@ test_addon_is_named_and_cloned_once_signed_in() {
   pass "--addon names the private add-on by OWNER/REPO only, clones it once the sign-in allows, and never overwrites another one"
 }
 
+test_failed_tool_install_stops_the_setup() {
+  local w out status
+  w=$(make_world tools-fail)
+  out=$(FAKE_TOOLS_FAIL=1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a failed tool install should stop the setup, got $status: $out"
+  assert_contains "$out" "a tool above did not install; run this again in a few minutes" \
+    "the failure says to run the setup again"
+  assert_not_contains "$out" "Setup finished." "a failed tool install never reports the setup finished"
+  pass "a tool that fails to install stops the setup before it reports finished"
+}
+
 test_help_and_usage_errors
+test_failed_tool_install_stops_the_setup
 test_addon_is_named_and_cloned_once_signed_in
 test_piped_install_runs_to_the_end
 test_refusals_change_nothing

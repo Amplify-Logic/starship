@@ -178,6 +178,17 @@
 #          and when treehouse or no-mistakes is among them says their GitHub
 #          release downloads fail together during a GitHub outage, so the
 #          right move is to try again in a few minutes.
+#        fm-bootstrap.sh install-missing [--check]
+#          Install every tool this home's local tool detection reports MISSING
+#          or PRESENTATION_UNAVAILABLE with its install command, and upgrade
+#          every OUTDATED one with its upgrade command, so the setup scripts
+#          (bin/fm-mac-setup.sh, bin/fm-linux-setup.sh) finish the whole
+#          toolchain in a plain terminal before the first mate starts. Running
+#          it is the person's consent. Prints "every tool this home needs is
+#          installed" when nothing is pending; exit 1 names the tools whose
+#          installer failed or that need a manual install. With --check it
+#          installs nothing: one "needs: <tool> (<install|upgrade|manual>)"
+#          line per pending tool and exit 1, or silence and exit 0.
 #        fm-bootstrap.sh lavish-compatible
 #          Exit 0 when lavish-axi meets LAVISH_AXI_BOARD_MIN, 1 otherwise,
 #          printing nothing; bin/fm-brief.sh uses it to gate scout Lavish hosting.
@@ -924,6 +935,31 @@ upgrade_cmd() {
   esac
 }
 
+# bootstrap_install_one <tool> <command>: run one install or upgrade command,
+# echoing it first; a failure is remembered for bootstrap_install_report.
+bootstrap_install_one() {
+  local tool=$1 cmd=${2%%  #*} install_status=0
+  echo "installing $tool: $cmd"
+  # pipefail inside the subshell, so a `curl ... | sh` installer whose
+  # download fails (sh then reads nothing and exits 0) still counts as failed.
+  (set -o pipefail; eval "$cmd") || install_status=$?
+  [ "$install_status" -ne 0 ] || return 0
+  echo "error: installing $tool failed (exit $install_status)" >&2
+  failed_installs="${failed_installs:+$failed_installs }$tool"
+}
+
+# bootstrap_install_report: exit status 1, naming every tool that failed, when
+# any bootstrap_install_one failed; 0 otherwise.
+bootstrap_install_report() {
+  [ -n "${failed_installs:-}" ] || return 0
+  case " $failed_installs " in
+    *' treehouse '*|*' no-mistakes '*)
+      echo "error: not installed: $failed_installs - treehouse and no-mistakes download from GitHub releases, which fail together during a GitHub outage; try again in a few minutes" >&2 ;;
+    *) echo "error: not installed: $failed_installs" >&2 ;;
+  esac
+  return 1
+}
+
 manual_install_url() {
   case "$1" in
     paseo) echo "https://paseo.sh" ;;
@@ -1483,6 +1519,46 @@ startup_memory_budget_setup() {
   fi
 }
 
+detect_local_tools() {
+  if [ "$BACKEND_VALID" -eq 0 ]; then
+    echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
+  fi
+  for t in $BACKEND_TOOLS; do
+    fm_backend_required_tool_available "$BACKEND" "$t" \
+      || missing_tool_diagnostic "$t"
+  done
+  for t in $COMMON_TOOLS; do
+    command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
+  done
+  # The treehouse lease-support upgrade check is only relevant when the resolved
+  # backend actually requires treehouse (every backend except orca, which owns its
+  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  if fm_backend_list_contains "$TOOLS" treehouse \
+    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
+    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
+  fi
+  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
+    echo "OUTDATED: no-mistakes (installed: $(tool_version no-mistakes); requires $NO_MISTAKES_MIN; upgrade: $(upgrade_cmd no-mistakes))"
+  fi
+  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
+    echo "OUTDATED: gh-axi (installed: $(tool_version gh-axi); requires $GH_AXI_MIN; upgrade: $(upgrade_cmd gh-axi))"
+  fi
+  if ! tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN"; then
+    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_BOARD_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
+  elif ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
+    echo "BOOTSTRAP_INFO: lavish-axi >=$LAVISH_AXI_MIN enables confirmed board replies; this older compatible version retains the legacy reply path, but upgrade to prevent handing back a board before its reply is accepted"
+  fi
+  if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
+    echo "OUTDATED: quota-axi (installed: $(tool_version quota-axi); requires $FM_QUOTA_AXI_MIN; upgrade: $(upgrade_cmd quota-axi))"
+  fi
+  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
+    echo "OUTDATED: tasks-axi (installed: $(tool_version tasks-axi); requires $(tasks_axi_requirement); upgrade: $(upgrade_cmd tasks-axi))"
+  fi
+  if [ -e "$CONFIG/computer-use" ] && ! "$SCRIPT_DIR/fm-computer-use.sh" check >/dev/null 2>&1; then
+    echo "MISSING: peekaboo (install: $(install_cmd peekaboo))"
+  fi
+}
+
 if [ "${1:-}" = "lavish-compatible" ]; then
   tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN"
   exit
@@ -1504,25 +1580,54 @@ if [ "${1:-}" = "install" ]; then
       echo "error: $t requires manual installation (instructions: $instructions)" >&2
       exit 1
     fi
-    cmd=${cmd%%  #*}
-    echo "installing $t: $cmd"
-    # pipefail inside the subshell, so a `curl ... | sh` installer whose
-    # download fails (sh then reads nothing and exits 0) still counts as failed.
-    install_status=0
-    (set -o pipefail; eval "$cmd") || install_status=$?
-    [ "$install_status" -ne 0 ] || continue
-    echo "error: installing $t failed (exit $install_status)" >&2
-    failed_installs="${failed_installs:+$failed_installs }$t"
+    bootstrap_install_one "$t" "$cmd"
   done
-  if [ -n "${failed_installs:-}" ]; then
-    case " $failed_installs " in
-      *' treehouse '*|*' no-mistakes '*)
-        echo "error: not installed: $failed_installs - treehouse and no-mistakes download from GitHub releases, which fail together during a GitHub outage; try again in a few minutes" >&2 ;;
-      *) echo "error: not installed: $failed_installs" >&2 ;;
-    esac
+  bootstrap_install_report
+  exit
+fi
+
+if [ "${1:-}" = "install-missing" ]; then
+  case "$#:${2:-}" in
+    1:) install_missing_check=0 ;;
+    2:--check) install_missing_check=1 ;;
+    *) echo "usage: fm-bootstrap.sh install-missing [--check]" >&2; exit 1 ;;
+  esac
+  # One tool per line as "<tool> <install|upgrade|manual>", read from the same
+  # detection a session start prints, so the two never disagree about what a
+  # home needs.
+  install_missing_pending=$(detect_local_tools | awk '
+    /^MISSING: / { print $2, "install"; next }
+    /^PRESENTATION_UNAVAILABLE: / { print $2, "install"; next }
+    /^OUTDATED: / { print $2, "upgrade"; next }
+    /^MISSING_MANUAL: / { print $2, "manual" }
+  ')
+  if [ "$install_missing_check" = 1 ]; then
+    [ -n "$install_missing_pending" ] || exit 0
+    printf '%s\n' "$install_missing_pending" | awk '{ print "needs: " $1 " (" $2 ")" }'
     exit 1
   fi
-  exit 0
+  # The list arrives on fd 3, so an installer that reads standard input
+  # cannot swallow the tools after it.
+  while read -r t action <&3; do
+    [ -n "$t" ] || continue
+    case "$action" in
+      upgrade) cmd=$(upgrade_cmd "$t") || cmd= ;;
+      install) cmd=$(install_cmd "$t") || cmd= ;;
+      *) cmd= ;;
+    esac
+    if [ -z "$cmd" ]; then
+      instructions=$(manual_install_url "$t") || instructions="no known installer"
+      echo "error: $t needs a manual install (instructions: $instructions)" >&2
+      failed_installs="${failed_installs:+$failed_installs }$t"
+      continue
+    fi
+    bootstrap_install_one "$t" "$cmd"
+  done 3<<EOF
+$install_missing_pending
+EOF
+  [ -n "$install_missing_pending" ] || echo "every tool this home needs is installed"
+  bootstrap_install_report
+  exit
 fi
 
 # This is the first mutating sweep at a locked session boundary. Detect-only
@@ -1581,46 +1686,6 @@ fi
 
 # Local detection: presence, version floors, and configuration. Nothing here
 # leaves this machine, so it stays on the session-start critical path.
-detect_local_tools() {
-  if [ "$BACKEND_VALID" -eq 0 ]; then
-    echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
-  fi
-  for t in $BACKEND_TOOLS; do
-    fm_backend_required_tool_available "$BACKEND" "$t" \
-      || missing_tool_diagnostic "$t"
-  done
-  for t in $COMMON_TOOLS; do
-    command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
-  done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
-  if fm_backend_list_contains "$TOOLS" treehouse \
-    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
-    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
-  fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
-    echo "OUTDATED: no-mistakes (installed: $(tool_version no-mistakes); requires $NO_MISTAKES_MIN; upgrade: $(upgrade_cmd no-mistakes))"
-  fi
-  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
-    echo "OUTDATED: gh-axi (installed: $(tool_version gh-axi); requires $GH_AXI_MIN; upgrade: $(upgrade_cmd gh-axi))"
-  fi
-  if ! tool_version_at_least lavish-axi "$LAVISH_AXI_BOARD_MIN"; then
-    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_BOARD_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
-  elif ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
-    echo "BOOTSTRAP_INFO: lavish-axi >=$LAVISH_AXI_MIN enables confirmed board replies; this older compatible version retains the legacy reply path, but upgrade to prevent handing back a board before its reply is accepted"
-  fi
-  if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
-    echo "OUTDATED: quota-axi (installed: $(tool_version quota-axi); requires $FM_QUOTA_AXI_MIN; upgrade: $(upgrade_cmd quota-axi))"
-  fi
-  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
-    echo "OUTDATED: tasks-axi (installed: $(tool_version tasks-axi); requires $(tasks_axi_requirement); upgrade: $(upgrade_cmd tasks-axi))"
-  fi
-  if [ -e "$CONFIG/computer-use" ] && ! "$SCRIPT_DIR/fm-computer-use.sh" check >/dev/null 2>&1; then
-    echo "MISSING: peekaboo (install: $(install_cmd peekaboo))"
-  fi
-}
-
 treehouse_pool_report() {
   local root=${TREEHOUSE_ROOT:-$HOME/.treehouse} state pool records slot repo slot_root identity created_at slot_leased lease_epoch age_days owner_live pool_has_owner pool_count=0 threshold=${FM_POOL_ORPHAN_DAYS:-30} duplicate duplicate_reported seen_pair i now
   local -a seen_repos=() seen_pools=()

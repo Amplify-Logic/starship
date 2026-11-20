@@ -6,6 +6,7 @@ Plain Windows (PowerShell or Git Bash) is not supported.
 
 This guide covers the Windows-only part, about 45 minutes, mostly waiting for installs.
 Then you finish with the shared steps of [ONBOARDING.md](ONBOARDING.md), exactly as a Mac user does.
+If someone sends you these commands over a chat app, ask for each as a code block: chat apps turn straight quotes into curly ones, which breaks a command ([why](ONBOARDING.md)).
 
 **You need:** Windows 11 (22H2 or newer is best) or Windows 10 version 2004 or newer, 16 GB of RAM or more, and admin rights once.
 If your PC is work-managed, has less memory, or you cannot get admin rights, use [a small Linux server](ONBOARDING-linux-server.md) instead, or one of the [lighter options](#not-everyone-needs-the-full-setup) at the end.
@@ -69,7 +70,7 @@ If it says `1`, run `wsl --set-version Ubuntu-24.04 2`.
 Still in PowerShell, open the WSL settings file:
 
 ```powershell
-notepad "$env:USERPROFILE\.wslconfig"
+notepad $env:USERPROFILE\.wslconfig
 ```
 
 Click **Yes** when Notepad asks to create the file, paste this, and save:
@@ -143,6 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-
 It asks for your Ubuntu password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Starship into `~/starship`.
 It also installs [Herdr](https://herdr.dev), the terminal view your first mate and its workers run in, with Herdr's Claude Code integration, and sets your Starship to run in it.
 It also makes sign-in links open in your normal Windows browser, rather than in the Linux Chrome it installs for the first mate's own checks.
+Last, it installs every other tool your first mate needs, so your first mate installs nothing itself once Herdr opens.
 About 15 minutes; a lot of text scrolls past, and it asks nothing more.
 
 You should see a list of `ok` lines and `Setup finished.`

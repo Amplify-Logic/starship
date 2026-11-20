@@ -3,6 +3,7 @@
 Use this when your own computer cannot run a first mate well: a Windows PC that is work-managed, has less than 16 GB of RAM, or has no admin rights for [WSL 2](ONBOARDING-windows.md), or any computer when you want your crew to keep working while the laptop is closed.
 You rent a small Ubuntu server, reach it over SSH, and run the same setup script a Windows PC runs inside WSL 2.
 About an hour, then the shared steps of [ONBOARDING.md](ONBOARDING.md).
+If someone sends you these commands over a chat app, ask for each as a code block: chat apps turn straight quotes into curly ones, which breaks a command ([why](ONBOARDING.md)).
 
 Your own computer only needs a terminal with `ssh` (built into macOS, Linux, and Windows 10 and 11) and a browser.
 
@@ -145,6 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-
 
 It asks for your password once, then installs the build tools, Homebrew, git, node, gh, tmux, jq, Claude Code and Chrome, and clones Starship into `~/starship`.
 Chrome runs headless here; no desktop is needed for the first mate's browser checks.
+Last, it installs every other tool your first mate needs, so your first mate installs nothing itself once it starts.
 
 First log out (`exit`) and log back in with `ssh <you>@<server-ip>`, so the new tools are on your PATH; in the old login, `gh` and `claude` are not found.
 Then do the two sign-ins it prints:

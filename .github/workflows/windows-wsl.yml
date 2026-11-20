@@ -4,8 +4,8 @@ name: Windows (WSL 2) and Linux server kit
 # (ONBOARDING-linux-server.md) path, on a fresh Ubuntu 24.04 as a teammate
 # would have it:
 #   kit on WSL 2 (windows-2025): bin/fm-linux-setup.sh --ci through a pipe, as
-#     the guides' curl | bash runs it, then the first mate's
-#     consented toolchain install, one stand-in worker spawned on Herdr (the
+#     the guides' curl | bash runs it, including the whole first-mate
+#     toolchain install, a check that nothing is left to install, one stand-in worker spawned on Herdr (the
 #     runtime the setup selects inside WSL) and its report read back, headless Chrome rendering a dev server, and a review
 #     board and an Expo-style dev server reached from the Windows side through
 #     WSL's default localhost forwarding.
@@ -184,7 +184,7 @@ jobs:
           grep -qx 'installed: yes' ~/floater-status
           bin/fm-desk-floater-windows.sh uninstall
 
-      - name: Install the first mate's toolchain as it would after consent
+      - name: Confirm the setup script installed the first mate's toolchain
         if: matrix.lane == 'kit'
         run: |
           cd ~/starship
@@ -196,7 +196,9 @@ jobs:
           else
             printf 'tmux\n' > config/backend
           fi
-          bin/fm-bootstrap.sh install treehouse no-mistakes gh-axi tasks-axi quota-axi lavish-axi chrome-devtools-axi
+          # The setup script ran bin/fm-bootstrap.sh install-missing before
+          # any first mate, so nothing is left to install here.
+          bin/fm-bootstrap.sh install-missing --check || { echo "::error::the setup script left a tool uninstalled"; exit 1; }
           out=$(bin/fm-bootstrap.sh)
           printf '%s\n' "$out"
           if printf '%s\n' "$out" | grep -E '^(MISSING|MISSING_MANUAL|HOST_ENV):'; then

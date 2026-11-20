@@ -13,6 +13,7 @@ metadata:
 Handle each printed line as below, before dispatching work that depends on it.
 The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header, or for a line a built-in bootstrap hook prints (such as `HOST_ENV`, `TOOLCHAIN_DRIFT`, `UPSTREAM`, `STACK_TOOLS`, `ACCOUNTS`, `LEAK_PREPUSH`, or `MOTHERSHIP_MONITOR`) by that hook's header under `hooks/bootstrap/` or `hooks/bootstrap-sweep/`; this playbook owns the response to actionable lines.
 The session-start rules in `session-start-recovery` still bind: detect, then consent, then install or upgrade - never change a tool the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
+During a first voyage, `first-voyage` step 0 owns the response to `MISSING:` and `OUTDATED:` lines instead: nothing is installed inside that session.
 When any diagnostic needs captain attention, report the plain consequence and requested action using `AGENTS.md` section 9's captain-facing translation contract; do not name the diagnostic label unless the captain needs to paste it into a command or issue.
 
 - `MISSING: <tool> (install: <command>)` - the tool is absent; list the missing tools to the captain with a one-line purpose each plus the printed install commands, wait for consent (one approval may cover the list), then run `bin/fm-bootstrap.sh install <approved tools...>`.
