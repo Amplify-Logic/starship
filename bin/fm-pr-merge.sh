@@ -545,7 +545,8 @@ caller_has_commit_text() {
 }
 
 # The "## What Changed" section of the PR body on stdin, without its heading
-# or surrounding blank lines. It ends at the next level-two heading or the
+# or surrounding blank lines. It ends at the next level-two heading, a line
+# holding only </details> (a PR template may fold the section), or the
 # no-mistakes attestation comment; nothing is printed when it is absent.
 # Lines inside a fenced code block (``` or ~~~, closed by a run of the same
 # character at least as long) are never read as a heading or that comment;
@@ -585,6 +586,7 @@ what_changed_section() {
     }
     /^## / { if (inside) exit; if ($0 ~ /^## What Changed[[:space:]]*$/) { inside = 1; next } }
     inside && /^<!-- no-mistakes-/ { exit }
+    inside && /^[[:space:]]*<\/details>[[:space:]]*$/ { exit }
     inside { lines[++n] = $0 }
     END {
       first = 1; last = n

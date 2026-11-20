@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **Starship's PRs now open with a short plain section.** In short, See it, You need to and Risk come first, the technical detail is folded, and the test results and pipeline history sit in one closed Validation block with raw logs kept on the machine that ran them.
+  Nothing changes for your own projects until you opt one in: copy Starship's PR template and its two `pr:` settings into that project ([configuration](docs/fork-configuration.md#pr-text)).
 - **`starship` is now part of every setup, with `onboard-starship` beside it for a guided first start.** `bin/fm-herdr-setup.sh` now adds both commands; `onboard-starship` sets a new desk up one step at a time and ends with a starter desk layout, so plain `starship` opens it from then on.
   On a home set up earlier, run `~/starship/bin/fm-desk.py install-command` once to get both ([desk](docs/desk.md)).
 - **A Mothership card now hears when an investigation, guide or draft it asked for is finished.** Work that ends in a report rather than a change used to leave its card at "Work has started."; cleaning up its scout with the report kept now settles the card with one fixed line that it finished with a report you hold, never the report's words, and a project in `config/private-projects` still tells no room anything.

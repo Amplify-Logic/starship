@@ -6018,6 +6018,25 @@ test_squash_summary_reads_crlf_bodies() {
   pass "fm-pr-merge reads the What Changed section from a CRLF PR body"
 }
 
+# A templated PR body puts a short plain section first and folds What Changed
+# in a details block; the closing tag ends the section, before the appendix.
+test_squash_summary_reads_a_folded_template_section() {
+  local case_dir body
+  case_dir=$(make_case squash-summary-folded)
+  add_gh_mocks "$case_dir" 5151515151515151515151515151515151515151
+  : > "$case_dir/home/config/pr-squash-summary"
+  body=$'# In short\n\nThe merge poll wakes once.\n\n# Risk\n\nLow.\n\n<details>\n<summary>Technical detail</summary>\n\n## What Changed\n\n- Wake the merge poll once when a ready PR degrades.\n- Add shared PR polling helpers.\n\n</details>\n\n<!-- no-mistakes-pr-appendix:v1 sha256=0 -->\n\n## Intent\n\nraw operator brief\n'
+  write_github_text "$case_dir" "$SQUASH_TITLE" "$body"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/63 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  expect_code 0 "$?" "squash-summary-folded: the merge should succeed: $(cat "$case_dir/stderr")"
+  set -e
+  [ "$(github_merge_flag_value "$case_dir" --body)" = $'- Wake the merge poll once when a ready PR degrades.\n- Add shared PR polling helpers.' ] \
+    || fail "squash-summary-folded: unexpected body: '$(github_merge_flag_value "$case_dir" --body)'"
+  pass "fm-pr-merge ends a folded What Changed section at its closing details tag"
+}
+
 # Every case where the summary must not be applied leaves today's merge line.
 test_squash_summary_falls_back_to_repository_default() {
   local case_dir label
@@ -6163,6 +6182,7 @@ test_squash_summary_ignores_headings_inside_code_fences() {
 
 test_squash_summary_uses_title_and_what_changed
 test_squash_summary_reads_crlf_bodies
+test_squash_summary_reads_a_folded_template_section
 test_squash_summary_falls_back_to_repository_default
 test_squash_summary_caller_commit_text_wins
 test_squash_summary_leaves_gitlab_and_forgejo_untouched
