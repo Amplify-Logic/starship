@@ -86,6 +86,7 @@ case "$*" in
   install-missing) [ "${FAKE_TOOLS_FAIL:-}" != 1 ] || { echo "error: not installed: treehouse" >&2; exit 1; }
     : > "$FAKE_WORLD/tools-installed" ;;
   "install-missing --check") [ -e "$FAKE_WORLD/tools-installed" ] || { echo "needs: treehouse (install)"; exit 1; } ;;
+  *) echo "usage: fm-bootstrap.sh install-missing [--check]" >&2; exit 1 ;;
 esac
 BS
     cat > "$3/bin/fm-first-hour.sh" <<'FH'
@@ -258,6 +259,39 @@ test_rerun_keeps_everything() {
   pass "a re-run keeps Homebrew, Claude Code and the clone, and writes the profile lines once"
 }
 
+# stale_clone <world>: replace the clone's bootstrap with one from before
+# install-missing existed, which ignores its arguments, runs its session-start
+# sweep and exits 0.
+stale_clone() {
+  cat > "$1/home/starship/bin/fm-bootstrap.sh" <<'BS'
+#!/usr/bin/env bash
+printf 'bootstrap sweep %s\n' "$*" >> "$FAKE_WORLD/calls.log"
+echo "MISSING: treehouse (install: brew install treehouse)"
+BS
+  chmod +x "$1/home/starship/bin/fm-bootstrap.sh"
+}
+
+test_clone_too_old_to_install_tools_stops_before_any_step() {
+  local w out status q advice
+  w=$(make_world stale-clone)
+  run_setup "$w" --ci >/dev/null || fail "the first run should succeed"
+  stale_clone "$w"
+  : > "$w/calls.log"
+  out=$(run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a clone too old to install tools should stop the setup, got $status: $out"
+  assert_contains "$out" "git -C $w/home/starship pull, then run this again" "the refusal says how to update the clone"
+  assert_not_contains "$out" "Setup finished." "an old clone never reports the setup finished"
+  [ ! -s "$w/calls.log" ] || fail "an old clone must stop the setup before any step or sweep: $(calls "$w")"
+  advice=${out#*update it by running: }
+  for q in '"' "'" $'\xe2\x80\x9c' $'\xe2\x80\x9d' $'\xe2\x80\x98' $'\xe2\x80\x99'; do
+    case "$advice" in
+      *"$q"*) fail "the update command a person types must carry no quotes: $advice" ;;
+    esac
+  done
+  pass "a clone from before install-missing stops the setup before any step, with a quote-free update command"
+}
+
 test_closing_steps_are_safe_to_send_through_chat() {
   local w out status closing
   w=$(make_world closing)
@@ -323,6 +357,7 @@ test_help_and_usage_errors
 test_refusals_change_nothing
 test_prerequisites_come_first_and_tools_finish_before_herdr_opens
 test_rerun_keeps_everything
+test_clone_too_old_to_install_tools_stops_before_any_step
 test_closing_steps_are_safe_to_send_through_chat
 test_broken_node_stops_before_any_npm_install
 test_failed_tool_install_stops_the_setup

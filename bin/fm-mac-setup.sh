@@ -33,8 +33,9 @@
 # stop at a question. sudo asks for the password on the terminal itself.
 #
 # It refuses, before changing anything, when: the host is not macOS; it runs
-# as root; ~/starship exists but is not a Starship clone; or Homebrew is
-# absent and this Mac user is not an administrator.
+# as root; ~/starship exists but is not a Starship clone, or is a clone too old
+# to have `fm-bootstrap.sh install-missing`; or Homebrew is absent and this
+# Mac user is not an administrator.
 #
 # Usage:
 #   fm-mac-setup.sh [--ci]
@@ -111,6 +112,8 @@ main() {
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     if [ -f "$TARGET/bin/fm-primary.sh" ] && git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
       CLONE_PRESENT=1
+      grep -qF 'fm-bootstrap.sh install-missing' "$TARGET/bin/fm-bootstrap.sh" 2>/dev/null \
+        || die "$TARGET is an older Starship copy that cannot install the tools the first mate needs; update it by running: git -C $TARGET pull, then run this again"
     else
       die "$TARGET exists but is not a Starship clone; move it aside, then run this again"
     fi

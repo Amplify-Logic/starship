@@ -49,7 +49,8 @@
 # (WSL's cross-filesystem bridge breaks git, file watching, and permissions);
 # the kernel is WSL 1 (Herdr, mirrored networking and systemd need WSL 2, even
 # though Claude Code alone now runs on WSL 1); apt-get is absent; or
-# ~/starship exists but is not a Firstmate clone. The WSL version is read from
+# ~/starship exists but is not a Firstmate clone, or is a clone too old to
+# have `fm-bootstrap.sh install-missing`. The WSL version is read from
 # /proc/version; FM_PROC_VERSION_OVERRIDE names another file to read instead,
 # a seam for tests/fm-linux-setup.test.sh.
 #
@@ -207,6 +208,8 @@ main() {
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     if [ -f "$TARGET/bin/fm-primary.sh" ] && git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
       CLONE_PRESENT=1
+      grep -qF 'fm-bootstrap.sh install-missing' "$TARGET/bin/fm-bootstrap.sh" 2>/dev/null \
+        || die "$TARGET is an older Starship copy that cannot install the tools the first mate needs; update it by running: git -C $TARGET pull, then run this again"
     else
       die "$TARGET exists but is not a Firstmate clone; move it aside, then run this again"
     fi
@@ -300,11 +303,9 @@ main() {
     fi
   fi
 
-  if [ -x "$TARGET/bin/fm-bootstrap.sh" ]; then
-    say "The first mate's tools"
-    FM_HOME="$TARGET" "$TARGET/bin/fm-bootstrap.sh" install-missing </dev/null \
-      || die "a tool above did not install; run this again in a few minutes"
-  fi
+  say "The first mate's tools"
+  FM_HOME="$TARGET" "$TARGET/bin/fm-bootstrap.sh" install-missing </dev/null \
+    || die "a tool above did not install; run this again in a few minutes"
 
   # shellcheck disable=SC2016  # these lines are written for the shell to expand later
   for rc in "$HOME/.profile" "$HOME/.bashrc"; do

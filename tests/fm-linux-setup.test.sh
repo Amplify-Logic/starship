@@ -126,7 +126,10 @@ HS
         cat > "$2/bin/fm-bootstrap.sh" <<'BS'
 #!/usr/bin/env bash
 printf 'bootstrap %s FM_HOME=%s\n' "$*" "${FM_HOME:-}" >> "$FAKE_WORLD/calls.log"
-[ "${FAKE_TOOLS_FAIL:-}" != 1 ] || { echo "error: not installed: treehouse" >&2; exit 1; }
+case "$*" in
+  install-missing) [ "${FAKE_TOOLS_FAIL:-}" != 1 ] || { echo "error: not installed: treehouse" >&2; exit 1; } ;;
+  *) echo "usage: fm-bootstrap.sh install-missing [--check]" >&2; exit 1 ;;
+esac
 BS
         chmod +x "$2/bin/fm-bootstrap.sh" ;;
       *)
@@ -441,6 +444,28 @@ test_addon_is_named_and_cloned_once_signed_in() {
   pass "--addon names the private add-on by OWNER/REPO only, clones it once the sign-in allows, and never overwrites another one"
 }
 
+test_clone_too_old_to_install_tools_stops_before_any_step() {
+  local w out status
+  w=$(make_world stale-clone)
+  run_setup "$w" --ci >/dev/null || fail "the first run should succeed"
+  # A bootstrap from before install-missing existed ignores its arguments,
+  # runs its session-start sweep and exits 0.
+  cat > "$w/home/starship/bin/fm-bootstrap.sh" <<'BS'
+#!/usr/bin/env bash
+printf 'bootstrap sweep %s\n' "$*" >> "$FAKE_WORLD/calls.log"
+echo "MISSING: treehouse (install: brew install treehouse)"
+BS
+  chmod +x "$w/home/starship/bin/fm-bootstrap.sh"
+  : > "$w/calls.log"
+  out=$(run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a clone too old to install tools should stop the setup, got $status: $out"
+  assert_contains "$out" "git -C $w/home/starship pull, then run this again" "the refusal says how to update the clone"
+  assert_not_contains "$out" "Setup finished" "an old clone never reports the setup finished"
+  [ ! -s "$w/calls.log" ] || fail "an old clone must stop the setup before any step or sweep: $(calls "$w")"
+  pass "a clone from before install-missing stops the setup before any step"
+}
+
 test_failed_tool_install_stops_the_setup() {
   local w out status
   w=$(make_world tools-fail)
@@ -459,6 +484,7 @@ test_addon_is_named_and_cloned_once_signed_in
 test_piped_install_runs_to_the_end
 test_refusals_change_nothing
 test_fresh_install_then_rerun_is_idempotent
+test_clone_too_old_to_install_tools_stops_before_any_step
 test_wsl_sends_sign_ins_to_the_windows_browser
 test_wslview_without_interop_is_not_ok
 test_arm64_skips_chrome
