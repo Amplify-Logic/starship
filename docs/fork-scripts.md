@@ -7,7 +7,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-linux-setup.sh`      | Take a fresh Ubuntu 24.04, inside WSL 2 or on a server, to the point where a first mate can start |
-| `fm-herdr-setup.sh`      | Make a fresh home start in Herdr: install Herdr and its Claude Code integration, and select it as the runtime |
+| `fm-herdr-setup.sh`      | Make a fresh home start in Herdr: install Herdr and its Claude Code integration, select it as the runtime, and add the `starship` and `onboard-starship` commands |
 | `fm-release.sh`          | Maintainer-only cut of the next named Starship release from a green default branch, with its CHANGELOG.md section as notes |
 | `fm-claude-reply-speak.sh` | Claude Stop `async` hook speaking the primary's final reply through desk voice-out when the turn spoke nothing (docs/fork-configuration.md "Desk voice-out"), and warning the first mate at its next turn, without blocking, when that reply used internal terms `AGENTS.md` section 9 says to translate |
 | `fm-captain-ledger.sh` | Claude UserPromptSubmit hook recording each captain prompt to the captain ledger in a home opted in through config/captain-ledger, plus the `pending` listing the session-start digest prints until `mark` records them reconciled |
@@ -38,7 +38,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm_terminal_theme.py`  | Shared terminal background detection and light/dark palettes for the Factory pane and bridge strip with the remembered workspace theme (docs/fork-configuration.md) |
 | `fm-theme.sh`            | Switch the whole workspace between cream light and dark in one go: Terminal, Herdr, the bridge strip and the Factory pane, remembered for new panes (docs/fork-configuration.md "Workspace theme") |
 | `fm-factory-pane.sh`     | Install, show, run, and remove the Factory pane, every factory at a glance in a Herdr pane (docs/factory-pane.md) |
-| `fm-desk.py`             | The `starship` desk command: open the owner's whole Herdr workspace and its Terminal or Ghostty views from `config/desk-layout`, and read a running desk back as a layout (docs/desk.md) |
+| `fm-desk.py`             | The `starship` desk command: open the owner's whole Herdr workspace and its Terminal or Ghostty views from `config/desk-layout`, read a running desk back as a layout, and, as `onboard-starship`, set a new desk up one step at a time (docs/desk.md) |
 | `fm-factory.py`          | Build the factory record (`--data`, `--plain`), print the screen as data and take a writing key for another screen (`--screen`, `act`), draw the live Factory pane, open a factory's own tab with live copies of its workers (docs/factory-pane.md), and print the factory profile `fm-brief.sh` adds to a brief (`profile`; docs/fork-configuration.md) |
 | `fm-codex-session-metrics-lib.sh` | Supply the Codex companion's real context and provider-quota figures from the exact followed session and the account owner (docs/status-bar.md) |
 | `fm-status-cache-lib.sh` | Shared status-row cache freshness, staleness bounds, and single-refresh claim ownership |
