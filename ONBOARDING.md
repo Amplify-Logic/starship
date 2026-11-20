@@ -239,7 +239,7 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | You see | Do this |
 |---|---|
 | `Invalid input. Please press 'y' to proceed` | Homebrew is asking yes or no; press `y`. |
-| `command not found: brew` | Run the two `PATH` lines Homebrew printed at the end, then open a new Terminal window. |
+| `command not found: brew` | Open a new Terminal window; step 2's setup line makes new windows find Homebrew. If it is still not found, run that line again. |
 | `command not found: npm` or `claude` | Run step 2's setup line again, then open a new Terminal window. |
 | Not sure what is left to do | `~/starship/bin/fm-first-hour.sh` lists every first-hour step, ticked or not, and says how to finish the next one. |
 | A command someone sent you over chat fails with odd quote marks | Ask them to send it as a code block; chat apps turn straight quotes into curly ones. |
