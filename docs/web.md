@@ -27,6 +27,7 @@ The chat shows the primary session's conversation as you would read it: only you
 Everything the first mate did between two messages folds into one quiet line, such as `Looked at 4 things`, that opens on a plain list of those steps.
 Notices typed into the chat by the machinery, such as the desk voice's mailbox ring, are steps in that line, never your messages.
 A picture you pasted, or a screenshot the desk voice sent, shows as a small picture you can click to see in full, never as its file path.
+Any other image path you typed stays in your words exactly as you wrote it, with the picture shown beneath the message.
 A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
 

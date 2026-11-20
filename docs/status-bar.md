@@ -59,13 +59,14 @@ So the group now leads with the agents that are actually running and gives the r
 
 `busy`, `waiting`, `ready to merge`, `needs a look` and `failed` come from `bin/fm-crew-state.sh`, the canonical current-state reader, folded by `bin/fm-fleet-status-lib.sh`; `decisions for you` reads the backlog's held decisions, through the home's configured tasks-axi adapter, in that library's `fm_owner_calls`, which owns what counts as one of the owner's calls.
 That library selects no run and re-implements no attribution; run selection stays with the canonical reader, and the fold never reads a status log's last line.
-Both halves of `busy` are the reader's `working`, told apart by its SOURCE: `working · run-step` is the pipeline carrying a task, and `working · pane` is a worker busy on one; the Factory pane shows which, as the job's `checking` or `building` step.
+Both halves of `busy` come from the reader, told apart by its SOURCE: `working · run-step`, or a `parked · run-step` gate short of a decision, is the pipeline carrying a task, and `working · pane` is a worker busy on one; the Factory pane shows which, as the job's `checking` or `building` step.
 `decisions for you` covers a captain hold that `bin/fm-fleet-snapshot.sh` classifies as `live` (its `captain_actionable`, the test the bearings Captain's Call uses), and `ready to merge` covers a `done` the captain acts on, unless that task carries any open captain hold or its work item is done.
 A `parked` task whose worker waits on an answer - a status-log needs-decision, or a gate line carrying the reader's whole `ask-user: authority decision` component - is Firstmate's to answer, so it counts in `needs a look`; on 2026-11-14 the bridge strip counted those as the captain's decisions.
 A `done` the captain acts on is a pipeline (`run-step`) verdict on a PR, or a worker's status-log `done` that `fm_dod_should_gate_ship_done` in `bin/fm-dod-lib.sh` reads as the ready report: a green PR, or a ready branch or PR in a mode whose `done` is the delivery itself.
 Any other status-log `done`, such as a scout report Firstmate reads first, is Firstmate's turn and counts in no figure, because no worker is busy on it and nothing waits on the captain: on 2026-10-25 the row counted a ship that had no PR yet as waiting for the captain.
 A no-mistakes build committed and handed off before validation reads `blocked` from the canonical reader, a handoff waiting for the pipeline trigger, so it counts under `needs a look` as Firstmate's turn and never as `ready to merge`.
-Any other `parked` gate is the worker's or Firstmate's turn and claims no figure, so it counts as `busy` or `stopped` by liveness alone; a `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
+Any other `parked · run-step` gate is the pipeline still carrying the task through its checks, so it counts as `busy` (validating) whether or not its worker lives, as the Factory pane shows it busy at `checking`: on 2026-11-19 the strip read 0 busy while the pane showed two workers parked in their checks.
+A `done` whose PR was merged or closed waits on nobody and counts in no figure at all.
 `needs a look` covers `blocked` and a worker's question, and `failed` the failures, which are the states that need Firstmate rather than time.
 
 ### Live agents and stopped records

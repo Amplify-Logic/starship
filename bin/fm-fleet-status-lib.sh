@@ -237,9 +237,10 @@ _fm_fleet_id_stream() {  # <id>...
 # FM_GATE_HUMAN_DECISION component (an ask-user review finding). Both are put to
 # firstmate, which answers them or takes them to the captain as a held decision,
 # so a `decision` is firstmate's to act on and never one of the owner's calls by
-# itself; the fold counts it under attention. Any other parked gate is the
-# worker's or firstmate's turn, so it claims no field and is read by liveness
-# alone, like any other unclaimed task.
+# itself; the fold counts it under attention. Any other parked run-step gate is
+# the pipeline still carrying the task through its checks, so it is
+# `validating`, busy like a running run: on 2026-11-19 the strip read 0 busy
+# while the Factory pane showed two workers whose checks were parked at review.
 _fm_fleet_bucket() {  # <canonical line> [<meta>]
   local line=$1 meta=${2:-} state source kind
   state=${line#*state: }
@@ -260,6 +261,7 @@ _fm_fleet_bucket() {  # <canonical line> [<meta>]
       else
         case "$line · " in
           *" · $FM_GATE_HUMAN_DECISION · "*) printf 'decision' ;;
+          *) [ "$source" != run-step ] || printf 'validating' ;;
         esac
       fi
       ;;

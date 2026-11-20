@@ -26,9 +26,10 @@ on /clear). The transcript is <claude-config>/projects/*/<id>.jsonl,
 re-resolved on every read so a restarted, cleared or compacted session is
 followed. Only the tail is parsed. Text the machinery types into the chat (a
 doorbell or operational input, NOTICE_RE) becomes a quiet notice, and the
-pictures in the owner's messages (pasted images, and image paths such as the
-desk voice's "Screenshots:" line) are taken out of the words and served by an
-opaque id at /api/picture/<id>, only while the shown conversation holds them.
+pictures in the owner's messages (pasted images, and image paths) are served by
+an opaque id at /api/picture/<id>, only while the shown conversation holds
+them. The desk voice's "Screenshots:" paths and paths under its shots folder
+are taken out of the words; any other image path stays as the owner wrote it.
 
 Sending never types anywhere itself. Every message, with any pasted images
 saved into state/desk-voice/shots/, goes through
@@ -140,11 +141,15 @@ NOTICE_RE = re.compile(r"^\s*(?:\u2063|\[firstmate ([a-z -]+)\]|: Firstmate oper
 NOTICE_WORDS = {"desk-voice": "A message waited in the mailbox", "inbox": "A note waited in the inbox"}
 # The pictures in the owner's messages: Claude Code's pasted image placeholders,
 # the desk voice's "Screenshots: <path>..." line, and any absolute image path
-# the owner pasted (a dragged file's spaces arrive escaped as "\ ").
+# the owner pasted, quoted or bare (a dragged file's spaces arrive escaped as
+# "\ "). Only the screenshots line's paths and paths under the desk voice's
+# shots folder leave the words; any other path stays as the owner wrote it.
 IMAGE_PLACEHOLDER_RE = re.compile(r"\s*\[Image #\d+\]")
-SCREENSHOTS_LABEL_RE = re.compile(r"(?:^|\s)Screenshots:(?=\s|$)")
-QUOTED_IMAGE_PATH_RE = re.compile(r"(['\"])(/[^'\"\n]+?\.(?:png|jpe?g|gif|webp))\1", re.I)
-IMAGE_PATH_RE = re.compile(r"(?<![^\s'\"(])(/(?:\\ |[^\s'\"\\])+?\.(?:png|jpe?g|gif|webp))(?=$|[\s'\").,;:!?])", re.I)
+SCREENSHOTS_LINE_RE = re.compile(r"(?:^|(?<=\s))Screenshots:[^\n]*")
+SCREENSHOTS_LEFT_RE = re.compile(r"(?:^|(?<=\s))Screenshots:[ \t]*(?=\n|$)")
+IMAGE_PATH_RE = re.compile(
+    r"(['\"])(/[^'\"\n]+?\.(?:png|jpe?g|gif|webp))\1"
+    r"|(?<![^\s'\"(])(/(?:\\ |[^\s'\"\\])+?\.(?:png|jpe?g|gif|webp))(?=$|[\s'\").,;:!?])", re.I)
 PICTURE_MAX = 20 * 1024 * 1024
 PICTURE_ID_RE = re.compile(r"^[0-9a-f]{24}$")
 PICTURE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
@@ -536,33 +541,35 @@ def picture_id(ref: str) -> str:
     return hashlib.sha256(ref.encode("utf-8", "replace")).hexdigest()[:24]
 
 
-def owner_pictures(text: str) -> Tuple[str, List[str]]:
-    """The owner's words with pasted image paths taken out, and those paths.
+def owner_pictures(text: str, shots: Optional[str] = None) -> Tuple[str, List[str]]:
+    """The owner's words, and the paths of the images they name, each once.
 
-    Only a path to a file that is there now is taken out; the desk voice's
-    "Screenshots:" label goes with its paths.
+    Only a path to a file that is there now is a picture. It leaves the words
+    when it is on the desk voice's "Screenshots:" line or under <shots>, the
+    desk voice's shots folder, and the label goes once its paths are gone; any
+    other image path stays in the words as written and is shown beneath too.
     """
     paths: List[str] = []
+    lines = [m.span() for m in SCREENSHOTS_LINE_RE.finditer(text)]
+    shots_dir = os.path.join(os.path.realpath(shots), "") if shots else None
+    taken = False
 
     def take(match: "re.Match[str]") -> str:
-        path = match.group(1).replace("\\ ", " ")
+        nonlocal taken
+        path = match.group(2) or match.group(3).replace("\\ ", " ")
         if not os.path.isfile(path):
             return match.group(0)
         if path not in paths:
             paths.append(path)
-        return ""
+        if any(a <= match.start() < b for a, b in lines) or (
+                shots_dir and os.path.realpath(path).startswith(shots_dir)):
+            taken = True
+            return ""
+        return match.group(0)
 
-    def take_quoted(match: "re.Match[str]") -> str:
-        path = match.group(2)
-        if not os.path.isfile(path):
-            return match.group(0)
-        if path not in paths:
-            paths.append(path)
-        return ""
-
-    kept = IMAGE_PATH_RE.sub(take, QUOTED_IMAGE_PATH_RE.sub(take_quoted, text))
-    if paths:
-        kept = SCREENSHOTS_LABEL_RE.sub(" ", kept)
+    kept = IMAGE_PATH_RE.sub(take, text)
+    if taken:
+        kept = SCREENSHOTS_LEFT_RE.sub("", kept)
         kept = re.sub(r"[ \t]{2,}", " ", kept).strip()
     return kept, paths
 
@@ -570,15 +577,14 @@ def owner_pictures(text: str) -> Tuple[str, List[str]]:
 def _user_item(uid: str, ts: str, text: str, images: int = 0) -> Dict[str, Any]:
     if images:
         text = IMAGE_PLACEHOLDER_RE.sub("", text).strip()
-    text, paths = owner_pictures(text)
     return {
         "id": uid,
         "kind": "user",
         "ts": ts,
-        "html": render_markdown(text) if text.strip() else "",
+        "html": "",
         "images": images,
         "pictures": [],
-        "_paths": paths,
+        "_text": text,
     }
 
 
@@ -635,7 +641,8 @@ def _starts_turn(text: str) -> bool:
 class Conversation:
     """Folds transcript entries into display items, oldest first."""
 
-    def __init__(self) -> None:
+    def __init__(self, shots: Optional[str] = None) -> None:
+        self.shots = shots
         self.items: List[Dict[str, Any]] = []
         self.tools: Dict[str, Dict[str, Any]] = {}
         self.busy = False
@@ -670,11 +677,13 @@ class Conversation:
 
     def _push(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
         if item["kind"] == "user":
+            text, paths = owner_pictures(item.pop("_text"), self.shots)
+            item["html"] = render_markdown(text) if text.strip() else ""
             for index, (media, data) in enumerate(blobs or []):
                 pid = picture_id(f"{item['id']}:{index}")
                 self.pictures[pid] = ("data", media, data)
                 item["pictures"].append(pid)
-            for path in item.pop("_paths", []):
+            for path in paths:
                 pid = picture_id("path:" + path)
                 self.pictures[pid] = ("path", path)
                 item["pictures"].append(pid)
@@ -818,8 +827,8 @@ class Conversation:
         return {pid: ref for pid, ref in self.pictures.items() if pid in wanted}
 
 
-def parse_lines(lines: Iterable[str]) -> Conversation:
-    conversation = Conversation()
+def parse_lines(lines: Iterable[str], shots: Optional[str] = None) -> Conversation:
+    conversation = Conversation(shots)
     for line in lines:
         line = line.strip()
         if not line:
@@ -832,7 +841,7 @@ def parse_lines(lines: Iterable[str]) -> Conversation:
     return conversation
 
 
-def read_tail(path: Path, want_items: int = TAIL_ITEMS) -> Tuple[Conversation, bool]:
+def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_ITEMS) -> Tuple[Conversation, bool]:
     """Parse only the end of the transcript, widening until enough items show.
 
     Returns the conversation and whether older history exists before it.
@@ -847,7 +856,7 @@ def read_tail(path: Path, want_items: int = TAIL_ITEMS) -> Tuple[Conversation, b
         lines = data.decode("utf-8", "replace").split("\n")
         if start > 0:
             lines = lines[1:]
-        conversation = parse_lines(lines)
+        conversation = parse_lines(lines, shots)
         if start == 0 or len(conversation.items) >= want_items or window >= TAIL_MAX_WINDOW:
             return conversation, start > 0
         window = min(window * 4, TAIL_MAX_WINDOW)
@@ -903,7 +912,7 @@ class TranscriptCache:
         key = (str(path), stat.st_size, stat.st_mtime_ns)
         with self.lock:
             if key != self.key or self.value is None:
-                conversation, older = read_tail(path)
+                conversation, older = read_tail(path, str(self.home / "state" / "desk-voice" / "shots"))
                 items = conversation.public_items(TAIL_ITEMS)
                 self.value = {
                     "items": items,
@@ -2473,7 +2482,8 @@ VIEW_JS = r"""
     if (ctx.confirming) {
       if (key === 'Enter') return { act: 'send' };
       if (key === 'Escape') return { act: 'cancel' };
-      return { act: 'hint', text: 'Press enter to send it to Starship, or esc to cancel.' };
+      if (key.length !== 1 || key === ' ') return null;
+      return { act: 'hint', text:'Press enter to send it to Starship, or esc to cancel.' };
     }
     if (key === 'ArrowDown') return { act: 'move', step: 1 };
     if (key === 'ArrowUp') return { act: 'move', step: -1 };

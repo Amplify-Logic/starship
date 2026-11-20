@@ -1032,34 +1032,34 @@ test_a_worker_whose_checks_run_reads_checks_running() {
   pass "factory record: a live worker whose checks run reads checks running between readings; a dead one reads no reading"
 }
 
-# The overview is a cached reading that can lag the pane's own reading of a
-# worker: one read while the worker had paused, then shown while its checks run.
-# A worker the pane shows busy is busy on the count line too, on the record and
-# on the screen a second page draws, so the two never disagree.
-test_a_busy_row_is_never_left_out_of_the_count() {
+# A worker whose checks are parked at review, short of a decision, is still in
+# its checks: the pane shows it busy at checking and the shared overview counts
+# it busy, so the count line, the screen and the bridge strip agree. On
+# 2026-11-19 the strip read 0 busy while the pane showed two such workers,
+# because the fold read the gate by liveness alone and this worker's agent is
+# gone.
+test_a_worker_parked_in_its_checks_counts_busy_everywhere() {
   reset_case
   write_registry
   write_world
-  jq '(.tasks[] | select(.id == "shop-checkout").current_state) |= (.state = "paused" | .source = "status-log"
-    | .detail = "waiting on my validation round" | .raw = "state: paused · source: status-log · waiting on my validation round")' \
-    "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.paused" || fail "could not pause the worker"
-  cp "$FM_FACTORY_SNAPSHOT" "$HOME_FIX/snapshot.checking"
-  cp "$HOME_FIX/snapshot.paused" "$FM_FACTORY_SNAPSHOT"
-  overview_cached true || fail "the overview could not be cached while the worker paused"
-  cp "$HOME_FIX/snapshot.checking" "$FM_FACTORY_SNAPSHOT"
-  FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 data \
-    > "$TMP_ROOT/case$CASE/record.json" || fail "--data failed"
+  printf 'window=tmux:fm-shop-checkout\n' >> "$HOME_FIX/state/shop-checkout.meta"
+  printf '#!/usr/bin/env bash\necho dead\n' > "$TMP_ROOT/case$CASE/probe"
+  chmod +x "$TMP_ROOT/case$CASE/probe"
+  jq '(.tasks[] | select(.id == "shop-checkout").current_state) |= (.state = "parked" | .source = "run-step"
+    | .detail = "parked at review: 2 finding(s) · run: r9"
+    | .raw = "state: parked · source: run-step · parked at review: 2 finding(s) · run: r9")' \
+    "$FM_FACTORY_SNAPSHOT" > "$HOME_FIX/snapshot.next" && mv "$HOME_FIX/snapshot.next" "$FM_FACTORY_SNAPSHOT"
+  local probe="$TMP_ROOT/case$CASE/probe" screen strip
+  FM_FLEET_STATE_PROBE=$probe overview_cached data > "$TMP_ROOT/case$CASE/record.json" || fail "--data failed"
   assert_equals "$(q '.factories[] | .jobs[] | select(.id == "shop-checkout") | "\(.state)|\(.step)"')" \
-    "busy|checking" "the worker whose checks run reads busy at checking"
+    "busy|checking" "the worker parked in its checks reads busy at checking"
   assert_equals "$(q '[.factories[] | .jobs[] | select(.state == "busy")] | length')" "2" "two workers read busy"
-  assert_equals "$(q .counts.busy)" "2" "the count line left out a worker the pane shows busy"
-  assert_equals "$(q '.count_line | startswith("2 busy")')" "true" "count line words"
-  local screen
-  screen=$(FM_FLEET_STATE_NO_CACHE=0 FM_FLEET_STATE_TTL=3600 FM_FLEET_STATE_MAX_AGE=3600 python3 "$FACTORY" --screen) \
-    || fail "--screen failed"
-  assert_equals "$(jq -r '.counts.busy' <<<"$screen")" "2" "the screen's count left out a worker it shows busy"
-  assert_equals "$(jq -r '.count_words[0].words' <<<"$screen")" "2 busy" "the screen's count words"
-  pass "factory record: a worker shown busy is counted busy even while the overview reading lags"
+  assert_equals "$(q .counts.busy)" "2" "the count line left out a worker parked in its checks"
+  screen=$(FM_FLEET_STATE_PROBE=$probe overview_cached python3 "$FACTORY" --screen) || fail "--screen failed"
+  assert_equals "$(jq -r '.counts.busy' <<<"$screen")" "2" "the screen's count left out a worker parked in its checks"
+  strip=$(FM_HOME="$HOME_FIX" FM_FLEET_STATE_PROBE=$probe overview_cached bash "$ROOT/bin/fm-bridge-strip.sh" fields) || fail "strip fields failed"
+  assert_equals "$(grep '^busy=' <<<"$strip")" "busy=2" "the bridge strip left out a worker parked in its checks"
+  pass "factory record: a worker parked in its checks is busy on the pane, the screen and the strip alike"
 }
 
 # A home whose backlog is not markdown has no rows in the snapshot's markdown
@@ -3691,7 +3691,7 @@ fm_test_run \
   test_the_light_snapshot_gives_the_pane_the_record_the_whole_one_does \
   test_the_record_words_every_state \
   test_a_worker_whose_checks_run_reads_checks_running \
-  test_a_busy_row_is_never_left_out_of_the_count \
+  test_a_worker_parked_in_its_checks_counts_busy_everywhere \
   test_a_second_mates_ready_pr_needs_you \
   test_the_plain_screen_is_the_record_as_text \
   test_the_live_pane_repaints_when_the_theme_is_switched \

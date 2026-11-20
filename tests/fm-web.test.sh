@@ -580,14 +580,19 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
 }
 
 # What machinery types into the chat is a quiet notice, never the owner's
-# words; a picture the owner pasted is shown as a picture, never as its path,
-# and the page can fetch only the pictures the shown conversation holds.
+# words; a picture the owner pasted or the desk voice sent is shown as a
+# picture, never as its path, while any other image path the owner typed stays
+# in the words and gets its picture too; and the page can fetch only the
+# pictures the shown conversation holds.
 test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
   local home out port cookie shot png id status
   home=$(make_home pictures)
   mkdir -p "$home/state/desk-voice/shots"
   shot="$home/state/desk-voice/shots/20261119T210000000000Z-ab12cd34.png"
   printf '\x89PNG\r\n\x1a\nshot' > "$shot"
+  printf '\x89PNG\r\n\x1a\nshot2' > "$home/state/desk-voice/shots/20261119T210500000000Z-ef56ab78.png"
+  mkdir -p "$home/assets"
+  printf '\x89PNG\r\n\x1a\nlogo' > "$home/assets/logo.png"
   mkdir -p "$home/My Shots"
   printf '\x89PNG\r\n\x1a\ndragged' > "$home/My Shots/Screen shot.png"
   png=$(printf '\x89PNG\r\n\x1a\npasted' | base64 | tr -d '\n')
@@ -600,10 +605,13 @@ test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
     jq -nc --arg png "$png" '{type:"user",uuid:"u3",origin:{kind:"human"},message:{role:"user",content:[{type:"text",text:"[Image #1] the new icon"},{type:"image",source:{type:"base64",media_type:"image/png",data:$png}}]}}'
     jq -nc --arg p "${home// /\\ }/My\\ Shots/Screen\\ shot.png" --arg q "$home/My Shots/Screen shot.png" \
       '{type:"user",uuid:"u4",origin:{kind:"human"},message:{role:"user",content:("Dragged " + $p + " and quoted \u0027" + $q + "\u0027")}}'
+    jq -nc --arg p "$home/state/desk-voice/shots/20261119T210500000000Z-ef56ab78.png" \
+      '{type:"user",uuid:"u5",origin:{kind:"human"},message:{role:"user",content:("and this one " + $p)}}'
+    jq -nc --arg p "$home/assets/logo.png" '{type:"user",uuid:"u6",origin:{kind:"human"},message:{role:"user",content:("please make " + $p + " bigger")}}'
   } > "$(transcript "$home")"
   serve_home "$home"
   out=$(conversation "$home") || fail "conversation read failed"
-  assert_equals "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "event,event,event,user,user,user,user" \
+  assert_equals "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "event,event,event,user,user,user,user,user,user" \
     "doorbells and operational input are notices, the owner's messages are messages"
   assert_equals "$(jq -r '[.items[0:3][].summary] | join("|")' <<<"$out")" \
     "A message waited in the mailbox|A note waited in the inbox|A notice for the first mate" "what each notice says"
@@ -614,8 +622,15 @@ test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
   assert_equals "$(jq -r '.items[4].pictures | length' <<<"$out")" "0" "a path to nothing is no picture"
   assert_equals "$(jq -r '.items[5] | "\(.html)|\(.images)|\(.pictures | length)"' <<<"$out")" "<p>the new icon</p>|1|1" \
     "a pasted image drops its placeholder and is one picture"
-  assert_equals "$(jq -r '.items[6] | "\(.html)|\(.pictures | length)"' <<<"$out")" "<p>Dragged and quoted</p>|1" \
+  assert_contains "$(jq -r '.items[6].html' <<<"$out")" "Shots/Screen\\ shot.png and quoted" \
+    "a dragged path outside the shots folder stays in the words as written"
+  assert_equals "$(jq -r '.items[6].pictures | length' <<<"$out")" "1" \
     "a dragged path with escaped spaces, and the same path quoted, are one picture"
+  assert_equals "$(jq -r '.items[7] | "\(.html)|\(.pictures | length)"' <<<"$out")" "<p>and this one</p>|1" \
+    "a screenshot from the shots folder leaves the words without its label"
+  assert_contains "$(jq -r '.items[8].html' <<<"$out")" "please make $home/assets/logo.png bigger" \
+    "an image path the owner typed in a sentence stays in the words"
+  assert_equals "$(jq -r '.items[8].pictures | length' <<<"$out")" "1" "and still shows as a picture"
   port=$(cat "$home/web.test-port")
   cookie=$(cat "$home/web.test-cookie")
   id=$(jq -r '.items[3].pictures[0]' <<<"$out")
@@ -769,7 +784,7 @@ const keys = (ctx, list) => list.map(k => k + '=' + JSON.stringify(V.keyAction(k
 out.push('on a question: ' + keys(on({ kind: 'call', call: ask }), ['2', '7', 'x', 't', 'r', 's', 'k', 'Enter']));
 out.push('on finished work: ' + keys(on({ kind: 'call', call: done }), ['k', 'c', 'x', '1']));
 out.push('on a project: ' + keys(on({ kind: 'project', project: garden }), ['Enter', 't', 'r', 's']));
-out.push('while confirming: ' + keys(on(null, { confirming: true }), ['Enter', 'Escape', 'x']));
+out.push('while confirming: ' + keys(on(null, { confirming: true }), ['Enter', 'Escape', 'x', 'Tab', 'Shift', 'ArrowDown', 'PageDown', ' ']));
 out.push('anywhere: ' + keys(on(null), ['ArrowDown', 'ArrowUp', '?', 'Escape', 'q']));
 out.push('notes: ' + JSON.stringify([
   V.noteFor({ act: 'answer', option: '2' }, ask), V.noteFor({ act: 'keep' }, done), V.noteFor({ act: 'settled' }, ask),
@@ -789,7 +804,7 @@ link parts: [{"text":"Open "},{"text":"the pull request","url":"https://github.c
 on a question: 2={"act":"pick","id":"garden-chart","option":"2"} 7=null x={"act":"settled","id":"garden-chart"} t={"act":"talk","kind":"discuss","id":"garden-chart"} r={"act":"read","id":"garden-chart"} s={"act":"steer","factory":"garden","who":"you"} k=null Enter={"act":"open","id":"garden-chart"}
 on finished work: k={"act":"keep","id":"garden-share"} c={"act":"talk","kind":"change","id":"garden-share"} x=null 1=null
 on a project: Enter={"act":"tab","id":"garden"} t={"act":"talk","kind":"talk","factory":"garden"} r={"act":"read","factory":"garden","job":"g1"} s={"act":"steer","factory":"garden","who":"you"}
-while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","text":"Press enter to send it to Starship, or esc to cancel."}
+while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","text":"Press enter to send it to Starship, or esc to cancel."} Tab=null Shift=null ArrowDown=null PageDown=null  =null
 anywhere: ArrowDown={"act":"move","step":1} ArrowUp={"act":"move","step":-1} ?={"act":"keys"} Escape={"act":"back"} q=null
 notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"},{"action":"keep","item":"garden-share","asking":"1794636660"},{"action":"settled","item":"garden-chart","asking":"1794632400"},{"action":"steer","factory":"garden","who":"you"},{"action":"read","item":"garden-chart"},{"action":"discuss","item":"garden-chart","asking":"1794632400","text":"why?"},{"action":"talk","factory":"garden","text":"hello"}]
 look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}

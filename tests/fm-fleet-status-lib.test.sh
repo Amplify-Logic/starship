@@ -129,9 +129,10 @@ test_canonical_states_fold_into_the_six_fields() {
   # records working stopped validating paused attention ready known
   # No fixture records an endpoint, so the only proof of life available is the
   # busy pane worker the canonical reader saw. The PR ready for review waits on
-  # the captain; the merged PR waits on nobody, and the parked gate no human
-  # owes is the worker's own turn, so neither claims a field.
-  [ "$out" = $'9\t1\t0\t1\t1\t2\t1\t1\t0' ] \
+  # the captain; the merged PR waits on nobody and claims no field, and the
+  # parked gate no human owes is the pipeline still carrying the task, so it is
+  # validating beside the running run.
+  [ "$out" = $'9\t1\t0\t2\t1\t2\t1\t1\t0' ] \
     || fail "canonical states did not fold into the documented fields: $(printf '%s' "$out" | tr '\t' ' ')"
   pass "fleet status: canonical states fold into records, working, stopped, validating, paused, attention and ready"
 }
@@ -602,10 +603,12 @@ test_finished_work_is_neither_working_nor_stopped() {
 # and a gate carrying the reader's whole human-decision component (an ask-user
 # review finding) are questions put to firstmate, which ask-user-authority gives
 # it to answer, so they need firstmate to act and never wait on the captain: on
-# 2026-11-14 the bridge strip counted them as his decisions. Every other gate is
-# the worker's or firstmate's turn and reads as working or stopped by liveness
-# alone. Either way a parked task is not done, so a worker lost while it waits
-# is still counted stopped.
+# 2026-11-14 the bridge strip counted them as his decisions. Every other run-step
+# gate is the pipeline still carrying the task through its checks, so it is
+# validating, busy whether or not its worker lives: on 2026-11-19 the strip read
+# 0 busy while the Factory pane showed two workers parked in their checks.
+# Either way a parked task is not done, so a worker lost while it waits is
+# still counted stopped.
 test_a_workers_question_needs_firstmate_not_the_captain() {
   local out
   reset_state
@@ -624,9 +627,9 @@ test_a_workers_question_needs_firstmate_not_the_captain() {
   out=$(FM_FLEET_STATE_NO_CACHE=1 FM_FLEET_STATE_PROBE="$BINDIR/fake-probe" \
     FM_FLEET_STATE_READER="$BINDIR/fake-crew-state" counts)
   # records working stopped validating paused attention ready known
-  [ "$out" = $'5\t2\t2\t0\t0\t2\t0\t1\t0' ] \
+  [ "$out" = $'5\t0\t2\t3\t0\t2\t0\t1\t0' ] \
     || fail "a worker's question was not counted as firstmate's to act on: $(printf '%s' "$out" | tr '\t' ' ')"
-  pass "fleet status: a worker's question or an ask-user finding needs firstmate, never the captain, and a lost parked worker is stopped"
+  pass "fleet status: a worker's question or an ask-user finding needs firstmate, never the captain, a gate in the checks is validating, and a lost parked worker is stopped"
 }
 
 # backlog_row <line>: append one row to this case's backlog, the home that owns

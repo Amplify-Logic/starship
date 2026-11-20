@@ -699,21 +699,18 @@ def overview_call_buckets(overview: Optional[Dict[str, Any]], buckets: Dict[str,
     return {ident: "ready" for ident in ready_list} if ready_list is not None else buckets
 
 
-def overview_counts(overview: Optional[Dict[str, Any]], idle: int, shown_busy: int = 0) -> Dict[str, Any]:
+def overview_counts(overview: Optional[Dict[str, Any]], idle: int) -> Dict[str, Any]:
     """The count line's figures: the overview reading's, plus the idle factories.
 
-    They are the overview's, so the count line shows the numbers the bridge
-    strip and the status bar show; NEEDS YOU is rebuilt when the overview's
-    ready work changes. The one exception is busy, which is never fewer than
-    <shown_busy>, the jobs the record itself shows busy: the overview is a
-    cached reading that can lag a worker whose checks started after it was
-    taken, and a worker shown busy is counted busy on the same screen.
+    They are only ever the overview's, so the count line never shows a number
+    the bridge strip and the status bar do not; NEEDS YOU is rebuilt when the
+    overview's ready work changes.
     """
     if not overview or not overview["known"]:
         return {"reading": "unknown", "age": 0, "busy": None, "decisions": None, "ready_to_merge": None,
                 "idle": idle}
     return {"reading": "current" if overview["known"] == 1 else "past", "age": overview["age"],
-            "busy": max(overview["busy"], shown_busy), "decisions": overview["decisions"],
+            "busy": overview["busy"], "decisions": overview["decisions"],
             "ready_to_merge": overview["ready_to_merge"], "idle": idle}
 
 
@@ -1449,10 +1446,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             bucket = "ready"
         if bucket == "working":
             job.update(state="busy", step="planning" if kind == "scout" else "building")
-        elif bucket == "validating" or (not bucket and state.get("source") == "run-step" and (
-                state.get("state") == "parked" or task["id"] in unverified_alive)):
-            # A run the reader reports validating, a run-step reading parked
-            # short of a decision, or an unknown run-step reading on a worker
+        elif bucket == "validating" or task["id"] in unverified_alive:
+            # A run the fold reads validating (running, or parked short of a
+            # decision), or an unknown run-step reading on a worker
             # _fm_fleet_liveness reads alive (which the overview counts busy)
             # reads busy at checking. A dead worker's unknown reading does not.
             job.update(state="busy", step="checking", doing=checking_sentence(detail), doing_from="checks")
@@ -1760,8 +1756,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         factories.remove(other)
     idle_total = sum(1 for f in factories if f["state"] == "idle")
     queue = queue_counts([j for f in factories for j in f["jobs"]])
-    shown_busy = sum(1 for f in factories for j in f["jobs"] if j["state"] == "busy")
-    counts = overview_counts(overview, idle_total, shown_busy)
+    counts = overview_counts(overview, idle_total)
     return {
         "schema": SCHEMA,
         "as_of": iso(now),
@@ -1773,7 +1768,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "factories_from": registry_source,
         "counts": counts,
         "count_line": count_line_text(counts),
-        "shown_busy": shown_busy,
         "ready_list": ready_list,
         "queue": queue,
         "queue_line": " · ".join(words for _key, words in queue_parts(queue)),
@@ -2255,8 +2249,7 @@ def follow_overview(record: Dict[str, Any], overview: Optional[Dict[str, Any]]) 
     """
     if overview is None:
         return True
-    counts = overview_counts(overview, int((record.get("counts") or {}).get("idle") or 0),
-                             int(record.get("shown_busy") or 0))
+    counts = overview_counts(overview, int((record.get("counts") or {}).get("idle") or 0))
     record.update(counts=counts, count_line=count_line_text(counts))
     wanted = overview.get("ready_list") if overview.get("known") else None
     return wanted is None or wanted == record.get("ready_list")
