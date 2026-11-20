@@ -352,8 +352,9 @@ test_finished_work_waiting_on_the_captain_is_not_counted_as_working() {
 
 # A worker waiting on an answer - its own needs-decision, or an ask-user review
 # finding - is firstmate's to answer, so it needs a look rather than waiting on
-# the captain. Any other gate is the worker's own turn, and a parked worker that
-# is lost is still a stopped one, whoever owes the answer.
+# the captain. Any other parked run-step gate is the pipeline still carrying the
+# task through its checks, so it counts busy, and a parked worker that is lost
+# is still a stopped one, whoever owes the answer.
 test_a_workers_question_reads_as_needs_a_look() {
   local out
   reset_fleet
@@ -369,8 +370,8 @@ test_a_workers_question_reads_as_needs_a_look() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 1 busy, 2 need a look, 2 stopped │' \
-    "parked gates were not split by who owes the answer, or a lost parked worker was hidden"
+  assert_contains "$out" '│ 2 busy, 2 need a look, 2 stopped │' \
+    "parked gates were not split by who owes the answer, parked checks were not busy, or a lost parked worker was hidden"
   pass "status bar: a worker's question needs a look rather than waiting for the captain, and a lost parked worker is stopped"
 }
 
@@ -395,8 +396,8 @@ test_task_records_are_never_counted_as_running_workers() {
 # A pipeline run carrying a task and a worker typing at one are both "working"
 # to the canonical reader; only its SOURCE separates them. The overview counts
 # both as busy, as the bridge strip's lamp does, so the two surfaces show one
-# number; the Factory pane shows which busy job is in the checks. A gate no
-# human owes is neither.
+# number; the Factory pane shows which busy job is in the checks. A run-step
+# gate no human owes is the pipeline still carrying the task, so it is busy too.
 test_validating_work_is_busy_like_the_strip() {
   local out
   reset_fleet
@@ -407,7 +408,7 @@ test_validating_work_is_busy_like_the_strip() {
   : > "$HOME_FIX/state/.last-watcher-beat"
 
   out=$(render Opus high -- -- -- | strip_ansi)
-  assert_contains "$out" '│ 3 busy │' "validating work and a busy worker were not one busy figure"
+  assert_contains "$out" '│ 4 busy │' "validating work, a parked gate in the checks and a busy worker were not one busy figure"
   assert_not_contains "$out" 'for you' "a parked gate no human owes was reported as waiting on the captain"
   assert_not_contains "$out" 'needs a look' "a parked gate no human owes was reported as needing attention"
   pass "status bar: validating work counts as busy, as on the bridge strip"
