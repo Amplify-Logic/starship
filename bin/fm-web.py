@@ -40,8 +40,9 @@ chat only when that is safe and otherwise uses the durable mailbox.
 document (schema fm-web-conversation.v1), for another page that shows a
 home's conversation without this server: the Deck reads every local crew home
 this way. Its fields are schema, home, generated_at, session, state (busy,
-idle or offline), note, older, version and items, each item exactly as the
-page receives it, so its html is already escaped and safe to insert.
+idle or offline), since (when the turn under way began, while busy), note,
+older, version and items, each item exactly as the page receives it, so its
+html is already escaped and safe to insert.
 
 Beside the conversation the page mirrors the terminal workspace: the bridge
 strip's band and the Factory pane's overview and factory pages, as tabs. It
@@ -102,6 +103,12 @@ SCREEN_SCHEMA = "fm-factory-screen.v1"
 MIRROR_TTL_SECONDS = 2.0
 MIRROR_TIMEOUT_SECONDS = 150
 STRIP_TIMEOUT_SECONDS = 20
+STATUS_ROW_TIMEOUT_SECONDS = 20
+ANSI_RE = re.compile(r"\x1b\[([0-9;]*)m")
+# The status bar's colours as the page's tones (docs/status-bar.md owns what
+# each colour means); anything else is plain.
+ANSI_TONES = {"92": "green", "93": "yellow", "91": "red", "91;1": "alarm", "95": "magenta", "96": "cyan",
+              "2": "dim", "1": "bold"}
 ACT_BODY_MAX = 32 * 1024
 ACT_TEXT_MAX = 4000
 ACT_TIMEOUT_SECONDS = 120
@@ -338,29 +345,34 @@ def render_inline(text: str) -> str:
     """Escape everything, then add code, links and emphasis.
 
     Only http and https links become anchors; every other byte reaches the
-    page escaped, so no input can open a tag or an attribute.
+    page escaped, so no input can open a tag or an attribute. Code and links
+    stand in as placeholders while emphasis is applied to the whole line, so
+    bold or italic words that hold code or a link still render.
     """
+    text = text.replace("\x00", "")
     out: List[str] = []
+    tokens: List[str] = []
     pos = 0
     for match in INLINE_TOKEN_RE.finditer(text):
-        out.append(_emphasis(html.escape(text[pos:match.start()], quote=True)))
+        out.append(html.escape(text[pos:match.start()], quote=True))
         code, link, bare = match.groups()
         if code:
-            out.append(f"<code>{html.escape(code[1:-1], quote=True)}</code>")
+            tokens.append(f"<code>{html.escape(code[1:-1], quote=True)}</code>")
         elif link:
             parts = LINK_PARTS_RE.match(link)
             label, url = (parts.group(1), parts.group(2)) if parts else (link, "")
-            out.append(_anchor(url, _emphasis(html.escape(label, quote=True))))
+            tokens.append(_anchor(url, _emphasis(html.escape(label, quote=True))))
         else:
             url = bare
             tail = ""
             while url and url[-1] in TRAILING_PUNCT:
                 tail = url[-1] + tail
                 url = url[:-1]
-            out.append(_anchor(url, html.escape(url, quote=True)) + html.escape(tail, quote=True))
+            tokens.append(_anchor(url, html.escape(url, quote=True)) + html.escape(tail, quote=True))
+        out.append(f"\x00{len(tokens) - 1}\x00")
         pos = match.end()
-    out.append(_emphasis(html.escape(text[pos:], quote=True)))
-    return "".join(out)
+    out.append(html.escape(text[pos:], quote=True))
+    return re.sub("\x00(\\d+)\x00", lambda m: tokens[int(m.group(1))], _emphasis("".join(out)))
 
 
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
@@ -593,7 +605,7 @@ def _notice_item(uid: str, ts: str, text: str) -> Optional[Dict[str, Any]]:
     notice = NOTICE_RE.match(text)
     if not notice:
         return None
-    label = NOTICE_WORDS.get(notice.group(1) or "", "A notice for the first mate")
+    label = NOTICE_WORDS.get(notice.group(1) or "", "A notice for firstmate")
     return _event_item(uid, ts, label, text.replace("\u2063", ""))
 
 
@@ -646,6 +658,9 @@ class Conversation:
         self.items: List[Dict[str, Any]] = []
         self.tools: Dict[str, Dict[str, Any]] = {}
         self.busy = False
+        # When the turn under way began: the timestamp of the entry that made
+        # the conversation busy, so the page can say how long it has worked.
+        self.turn_started: Optional[str] = None
         self.last_assistant_msg: Optional[str] = None
         self.pending_compact: Optional[Dict[str, Any]] = None
         # Each picture an owner's message shows, by its id: ("path", path) or
@@ -658,6 +673,14 @@ class Conversation:
         kind = entry.get("type")
         uid = str(entry.get("uuid") or f"x{len(self.items)}")
         ts = str(entry.get("timestamp") or "")
+        was_busy = self.busy
+        self._entry(entry, kind, uid, ts)
+        if not self.busy:
+            self.turn_started = None
+        elif not was_busy or not self.turn_started:
+            self.turn_started = ts or None
+
+    def _entry(self, entry: Dict[str, Any], kind: Any, uid: str, ts: str) -> None:
         if kind == "system":
             self._system(entry, uid, ts)
         elif kind == "user":
@@ -903,9 +926,9 @@ class TranscriptCache:
         alive = lock_pid_alive(self.home)
         if path is None:
             reason = (
-                "No first mate session is recorded for this home yet."
+                "No firstmate session is recorded for this home yet."
                 if session is None
-                else "The first mate's conversation file was not found."
+                else "Firstmate's conversation file was not found."
             )
             return {"session": session, "state": "offline", "items": [], "older": False, "note": reason, "version": f"none:{session}"}
         stat = path.stat()
@@ -918,16 +941,19 @@ class TranscriptCache:
                     "items": items,
                     "older": older,
                     "busy": conversation.busy,
+                    "since": conversation.turn_started,
                 }
                 self.pictures = conversation.shown_pictures(items)
                 self.key = key
             value = dict(self.value)
         busy = value.pop("busy")
+        since = value.pop("since")
         state = "offline" if alive is False else ("busy" if busy else "idle")
         value.update(
             {
                 "session": session,
                 "state": state,
+                "since": since if state == "busy" else None,
                 "note": "",
                 "version": f"{session}:{stat.st_size}:{stat.st_mtime_ns}:{state}",
             }
@@ -1204,6 +1230,40 @@ def read_fields(home: Path, root: Path) -> Dict[str, str]:
     return parse_fields(proc.stdout) if proc.returncode == 0 else {}
 
 
+def status_segments(row: str) -> List[Dict[str, str]]:
+    """The status bar's styled row as words, each with the tone its colour gives."""
+    segments: List[Dict[str, str]] = []
+    tone = ""
+    pos = 0
+    for match in ANSI_RE.finditer(row):
+        if match.start() > pos:
+            segments.append({"text": row[pos:match.start()], "tone": tone})
+        tone = ANSI_TONES.get(match.group(1), "")
+        pos = match.end()
+    if pos < len(row):
+        segments.append({"text": row[pos:], "tone": tone})
+    return [seg for seg in segments if seg["text"]]
+
+
+def read_status_row(home: Path, root: Path) -> List[Dict[str, str]]:
+    """The terminal's status bar row, drawn again by bin/fm-status-bar.sh
+    --replay from the figures its last render saved; an empty list when it
+    cannot be read, so the page simply leaves the row out."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-status-bar.sh"), "--replay"],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=STATUS_ROW_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    row = proc.stdout.strip().splitlines()[0] if proc.returncode == 0 and proc.stdout.strip() else ""
+    return status_segments(row)
+
+
 class FleetCache:
     """One reading of the projects for every open page, at most every
     MIRROR_TTL_SECONDS, and at once after an action."""
@@ -1226,6 +1286,7 @@ class FleetCache:
                 if self.payload is not None and time.monotonic() - self.fetched_at < MIRROR_TTL_SECONDS:
                     return self.payload
             model = mirror_model(read_screen(self.home, self.root), read_fields(self.home, self.root))
+            model["status"] = read_status_row(self.home, self.root)
             # The clock moves every minute; it is left out of the version so a
             # page redraws only when something it shows changed.
             digest = hashlib.sha256(
@@ -1349,11 +1410,11 @@ def desk_voice_send(home: Path, root: Path, text: str, images: List[Path]) -> Di
         detail = (proc.stderr or "").strip().splitlines()[-1:] or ["the message could not be delivered"]
         return {"outcome": "failed", "detail": detail[0].removeprefix("fm-desk-voice: ")}
     if outcome.startswith("sent-unconfirmed:"):
-        return {"outcome": "typed-unconfirmed", "detail": "Typed into the first mate's chat; the send was not confirmed."}
+        return {"outcome": "typed-unconfirmed", "detail": "Typed into firstmate's chat; the send was not confirmed."}
     if outcome.startswith("sent:"):
-        return {"outcome": "typed", "detail": "Typed into the first mate's chat."}
+        return {"outcome": "typed", "detail": "Typed into firstmate's chat."}
     if outcome.startswith("mailbox:"):
-        return {"outcome": "mailbox", "detail": "The chat was busy, so it went to the first mate's mailbox."}
+        return {"outcome": "mailbox", "detail": "The chat was busy, so it went to firstmate's mailbox."}
     return {"outcome": "failed", "detail": outcome}
 
 
@@ -1551,7 +1612,7 @@ def manifest_json() -> str:
     return json.dumps({
         "name": "Starship",
         "short_name": "Starship",
-        "description": "Your first mate and every project's work, in plain words.",
+        "description": "Your firstmate and every project's work, in plain words.",
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
@@ -1788,7 +1849,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 payload = {"state": "offline", "items": [], "note": f"cannot read the conversation: {exc}", "version": "error"}
             since = query.get("since", [""])[0]
             if since and since == payload.get("version"):
-                self._json(200, {"version": since, "unchanged": True, "state": payload.get("state")})
+                self._json(200, {"version": since, "unchanged": True, "state": payload.get("state"),
+                                 "since": payload.get("since")})
             else:
                 self._json(200, payload)
         elif parsed.path == "/api/mirror":
@@ -2027,6 +2089,16 @@ details.quiet summary::-webkit-details-marker{display:none}
 details.quiet summary::before{content:"\25B8";display:inline-block;width:1em;transition:transform .15s}
 details.quiet[open] summary::before{transform:rotate(90deg)}
 details.quiet.err summary{color:var(--you)}
+/* While the first mate works: a moving mark, what it is doing, and for how long. */
+.live{display:flex;align-items:center;gap:.5rem;margin:.375rem 0 .25rem 2.375rem;font-size:.84rem;color:var(--ink-2)}
+.live[hidden]{display:none}
+.live .what{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.live .took{flex:none;font-variant-numeric:tabular-nums}
+.live .dots{flex:none;display:inline-flex;gap:.2rem}
+.live .dots i{width:.38rem;height:.38rem;border-radius:50%;background:var(--work);opacity:.6;animation:live 1.2s infinite ease-in-out}
+.live .dots i:nth-child(2){animation-delay:.2s}
+.live .dots i:nth-child(3){animation-delay:.4s}
+@keyframes live{0%,80%,100%{opacity:.25;transform:scale(.75)}40%{opacity:1;transform:scale(1)}}
 .steps-list{margin:.25rem 0 .375rem 1em;padding-left:.75rem;border-left:2px solid var(--line)}
 .steps-list li{padding:.06rem 0;overflow-wrap:anywhere}
 .steps-list li.err{color:var(--you)}
@@ -2184,6 +2256,12 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .worker .doing{margin-top:.375rem;font-size:.875rem}
 .worker .doing.quiet{color:var(--work);font-weight:500}
 
+/* The terminal's status bar row, word for word, under the header. */
+.statusrow{padding:.2rem .875rem;font-size:.78rem;color:var(--hull-2);background:var(--hull);border-bottom:1px solid var(--hull-line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.statusrow[hidden]{display:none}
+.statusrow .t-green{color:var(--done)}.statusrow .t-yellow{color:var(--work)}
+.statusrow .t-red,.statusrow .t-magenta{color:var(--you)}.statusrow .t-alarm{color:var(--you);font-weight:700}
+.statusrow .t-cyan{color:var(--here)}.statusrow .t-dim{opacity:.7}.statusrow .t-bold{color:var(--hull-ink);font-weight:600}
 .keystrip{display:flex;gap:.2rem 1rem;flex-wrap:wrap;align-items:center;padding:.125rem .875rem .375rem;font-size:.75rem;color:var(--ink-2);min-height:1.5rem}
 .keystrip span{display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
 .keystrip.confirming{color:var(--here);font-weight:600}
@@ -2383,7 +2461,7 @@ VIEW_JS = r"""
 
   /* One step the first mate took, in a few plain words. */
   function stepWords(item) {
-    if (item.kind === 'event') return item.summary || 'A notice for the first mate';
+    if (item.kind === 'event') return item.summary || 'A notice for firstmate';
     var name = item.name || '', about = item.about || '', summary = item.summary || '';
     if (name === 'Read') return 'Read ' + base(summary);
     if (/^(Edit|Write|NotebookEdit)$/.test(name)) return 'Changed ' + base(summary);
@@ -2415,6 +2493,39 @@ VIEW_JS = r"""
       rows.push({ kind: item.kind, id: item.id, item: item });
     });
     return rows;
+  }
+
+  /* What the first mate is doing right now, in a few plain words, from the
+     last thing the conversation shows: the step it is waiting on, else it is
+     thinking. Its own short description of a step is used only when it holds
+     no path, command or code. */
+  function plainAbout(text) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!text || /[\/\\`{}<>$|=]|https?:/.test(text)) return '';
+    return text.length > 80 ? text.slice(0, 79).replace(/\s+\S*$/, '') + '…' : text;
+  }
+  function nowWords(items) {
+    var last = (items || [])[(items || []).length - 1];
+    if (!last || last.kind !== 'tool' || !last.pending) return 'Thinking';
+    var name = last.name || '', about = plainAbout(last.about);
+    if (name === 'Read') return 'Reading a file';
+    if (/^(Edit|Write|NotebookEdit)$/.test(name)) return 'Changing a file';
+    if (name === 'Grep' || name === 'Glob') return 'Searching the files';
+    if (name === 'WebFetch' || name === 'WebSearch') return 'Looking something up on the web';
+    if (name === 'Agent' || name === 'Task') return about ? 'Waiting on a helper: ' + about : 'Waiting on a helper';
+    if (name === 'Skill') return 'Reading its notes';
+    if (name.indexOf('mcp__') === 0) return about || 'Using a connected app';
+    if (name === 'Bash') return about || 'Running a command';
+    return about || 'Taking a step';
+  }
+
+  /* How long the turn has run: 9s, 2m 05s, 1h 03m. */
+  function took(ms) {
+    var s = Math.max(0, Math.floor((ms || 0) / 1000));
+    var two = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + two(s % 60) + 's';
+    return Math.floor(s / 3600) + 'h ' + two(Math.floor(s / 60) % 60) + 'm';
   }
 
   function quietLabel(group) {
@@ -2548,7 +2659,7 @@ VIEW_JS = r"""
     return out;
   }
 
-  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, linkLabel: linkLabel,
+  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, took: took, linkLabel: linkLabel,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
               keyAction: keyAction, noteFor: noteFor, withLook: withLook };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -2564,6 +2675,8 @@ const V=window.FMView,FS=window.FMSettings;
 const $=id=>document.getElementById(id);
 const log=$('log'),wrap=$('items'),input=$('input'),sendBtn=$('send'),thumbs=$('thumbs'),result=$('result'),stateEl=$('state');
 let version='',images=[],sending=false;
+/* The live line: the last items, the turn's start, and when this page first saw it working. */
+let shown=[],since=null,working=false,seenAt=0;
 const KEY_NAMES={Enter:'↵',Escape:'esc'};
 
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;
@@ -2635,7 +2748,19 @@ function render(items){
   wrap.replaceChildren(frag);
   if(stick)log.scrollTop=log.scrollHeight;
 }
-function setState(state){
+function drawLive(){
+  const live=$('live');
+  if(!working){if(!live.hidden)live.hidden=true;return;}
+  const stick=live.hidden&&atBottom();
+  const start=Date.parse(since||'');
+  live.querySelector('.what').textContent=V.nowWords(shown);
+  live.querySelector('.took').textContent=V.took(Date.now()-(isNaN(start)?seenAt:start));
+  if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
+}
+setInterval(drawLive,1000);
+function setState(state,started){
+  if(state==='busy'&&!working)seenAt=Date.now();
+  working=state==='busy';since=working?started||null:null;
   stateEl.className='state '+state;
   stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':'Not running';
 }
@@ -2644,15 +2769,16 @@ async function poll(){
     const r=await fetch('/api/conversation?since='+encodeURIComponent(version),{credentials:'same-origin'});
     if(r.ok){
       const data=await r.json();
-      setState(data.state||'offline');
       if(!data.unchanged){
         version=data.version||'';
-        render(data.items||[]);
+        shown=data.items||[];
+        render(shown);
         $('note').textContent=data.note||'';
         $('older').hidden=!data.older;
       }
+      setState(data.state||'offline',data.since);drawLive();
     }
-  }catch(e){setState('offline');}
+  }catch(e){setState('offline');drawLive();}
   setTimeout(poll,document.hidden?6000:1500);
 }
 function addImage(file){
@@ -2870,6 +2996,12 @@ function drawBand(){
     add(b,icon('battery'),el('span','',band.battery));parts.push(b);}
   box.replaceChildren.apply(box,parts);
 }
+function drawStatus(){
+  const row=$('statusrow'),segs=M.status||[];
+  row.hidden=!segs.length;
+  row.replaceChildren.apply(row,segs.map(s=>el('span',s.tone?'t-'+s.tone:'',s.text)));
+  row.title=segs.map(s=>s.text).join('');
+}
 function drawTop(){
   const top=$('ptop');top.replaceChildren();
   const sum=el('p','sum');
@@ -2903,7 +3035,7 @@ function drawHome(){
         p.next.then?el('span','','then '+p.next.then+' more'):null);box.appendChild(line);}
     now.appendChild(box);
   });
-  if(!M.projects.length)now.appendChild(el('p','empty','No projects yet. Ask your first mate to add one.'));
+  if(!M.projects.length)now.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
   body.replaceChildren(needs,now,feedSection(M.feed,true));
 }
 function drawProject(p){
@@ -2977,7 +3109,7 @@ function draw(){
   if(hl&&!(hl.kind==='call'?need(hl.id):project(hl.id)))hl=null;
   const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
   const caret=active?[active.selectionStart,active.selectionEnd]:null;
-  drawTabs();drawBand();
+  drawTabs();drawBand();drawStatus();
   $('home').hidden=tab!=='home';$('project').hidden=tab==='home';$('sideSwitch').hidden=tab!=='home';
   if(tab==='home')drawHome();else drawProject(project(tab));
   drawKeys();
@@ -3220,11 +3352,11 @@ def signin_html(nonce: str, stale: bool) -> str:
 <body>{ship_symbol()}
 <main class="gate"><div class="gate-card">
 <div class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ship"/></svg><span>Starship</span></div>
-<p>This is your Starship page: your first mate's chat and every project's work, in plain words. It opens only on this Mac, and only for you.</p>
+<p>This is your Starship page: your firstmate's chat and every project's work, in plain words. It opens only on this Mac, and only for you.</p>
 {note}
 <h2>How to get in</h2>
 <ol>
-<li>Ask your first mate to open the Starship page. It opens as its own app window, already signed in.</li>
+<li>Ask your firstmate to open the Starship page. It opens as its own app window, already signed in.</li>
 <li>Or, on this Mac, run <code>bin/fm-web.sh open</code> in Terminal, from your Starship folder.</li>
 </ol>
 <h2>Keep it as an app</h2>
@@ -3246,23 +3378,27 @@ def page_html(nonce: str, csrf: str) -> str:
 <div class="tools"><button class="qbtn" id="keysBtn" type="button" aria-expanded="false" aria-controls="keysSheet" aria-label="Keyboard keys" title="Keyboard keys (?)">?</button>
 <button class="gear" id="gear" type="button" aria-expanded="false" aria-controls="settings"><span>Settings</span></button></div>
 </header>
-<div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">First mate</button>
+<div class="statusrow" id="statusrow" aria-label="Status bar" hidden></div>
+<div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">Firstmate</button>
 <button type="button" data-side="projects">Factories</button></div>
 <main class="main" id="home" data-side="projects">
-<section class="pane" id="chatPane" aria-label="First mate">
-<div class="pane-head"><h2>First mate</h2>
+<section class="pane" id="chatPane" aria-label="Firstmate">
+<div class="pane-head"><h2>Firstmate</h2>
 <span id="state" class="state offline"><span class="label">Connecting</span></span></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
-<div id="items"></div><p id="note" class="note"></p></div></div>
+<div id="items"></div>
+<div id="live" class="live" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+<span class="what" role="status"></span><span class="took" aria-hidden="true"></span></div>
+<p id="note" class="note"></p></div></div>
 <div id="compose"><div class="wrap">
 <div id="thumbs"></div>
-<div id="row"><textarea id="input" rows="1" placeholder="Message the first mate" aria-label="Message"></textarea>
+<div id="row"><textarea id="input" rows="1" placeholder="Message firstmate" aria-label="Message"></textarea>
 <button id="send" class="btn primary" type="button">Send</button></div>
 <div id="result" role="status"></div>
 </div></div>
 </section>
-<div class="divider" id="divHome" role="separator" tabindex="0" aria-label="Move the line between the first mate and Factories" aria-valuemin="25" aria-valuemax="75" title="Drag to resize; double-click to reset"></div>
+<div class="divider" id="divHome" role="separator" tabindex="0" aria-label="Move the line between firstmate and Factories" aria-valuemin="25" aria-valuemax="75" title="Drag to resize; double-click to reset"></div>
 <section class="pane" id="panelPane" aria-label="Factories">
 <div class="pane-head"><h2>Factories</h2><span class="sub">Each project's work, start to finish</span><span class="when" id="clock"></span></div>
 <div class="p-top" id="ptop"><p class="sum">reading the crew</p></div>
@@ -3349,6 +3485,7 @@ def command_conversation(home: Path) -> None:
         "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "session": payload.get("session"),
         "state": payload.get("state"),
+        "since": payload.get("since"),
         "note": payload.get("note", ""),
         "older": bool(payload.get("older")),
         "version": payload.get("version"),

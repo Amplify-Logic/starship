@@ -605,6 +605,35 @@ test_claude_payload_adapter_and_primary_guard() {
   pass "status bar: Claude payload normalization is guarded to a primary launch"
 }
 
+# Replay draws the row the last adapter render drew, from the figures it saved,
+# for a surface such as the web mirror: no stdin, no primary launch needed.
+test_replay_draws_the_last_rendered_figures_again() {
+  local input out
+  rm -f "$HOME_FIX/state/.primary-status-metrics"
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_HARNESS='' FM_ACCOUNT_NAME=Team \
+    FM_STATUS_BAR_NOW=1000 "$ROOT/bin/fm-status-bar.sh" --replay </dev/null | strip_ansi)
+  assert_contains "$out" '⚓ --·-- │ 🧠-- ⚡--' "replay before any render shows placeholders"
+  assert_not_contains "$out" "[Team]" "replay guesses no account role from its own environment"
+  input='{"model":{"display_name":"Claude Fable"},"effort":{"level":"high"},"context_window":{"used_percentage":35.2},"rate_limits":{"five_hour":{"used_percentage":12.9}},"cost":{"total_cost_usd":2.345}}'
+  printf '%s' "$input" | PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_HARNESS=claude \
+    FM_STATUS_BAR_NOW=1000 "$ROOT/bin/fm-status-bar.sh" --adapter claude >/dev/null
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_HARNESS='' \
+    FM_STATUS_BAR_NOW=1000 "$ROOT/bin/fm-status-bar.sh" --replay </dev/null | strip_ansi)
+  assert_contains "$out" '⚓ Claude Fable·high │ 🧠35% ⚡12% │' "replay keeps the saved model, effort, context and quota"
+  assert_contains "$out" "\$2.35 │ 💤" "replay keeps the saved cost"
+  : > "$HOME_FIX/state/.afk"
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_STATUS_BAR_NOW=1000 \
+    "$ROOT/bin/fm-status-bar.sh" --replay </dev/null | strip_ansi)
+  rm -f "$HOME_FIX/state/.afk"
+  assert_contains "$out" '💤AFK' "replay reads away mode fresh"
+  render Opus xhigh 50 20 1.5 >/dev/null
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_STATUS_BAR_NOW=1000 \
+    "$ROOT/bin/fm-status-bar.sh" --replay </dev/null | strip_ansi)
+  assert_contains "$out" '⚓ Opus·xhigh │ 🧠50% ⚡20% │' "replay follows the latest render"
+  rm -f "$HOME_FIX/state/.primary-status-metrics"
+  pass "status bar: replay draws the last rendered figures again with fresh fleet fields"
+}
+
 test_follow_mode_exits_when_primary_pane_is_gone() {
   local out count_file="$TMP_ROOT/tmux-count"
   cat > "$FAKEBIN/tmux" <<'SH'
@@ -1858,6 +1887,7 @@ test_threshold_colors_and_placeholders
 test_not_watching_is_bright_red_when_missing_or_stale
 test_idle_home_without_records_shows_supervision_calmly
 test_claude_payload_adapter_and_primary_guard
+test_replay_draws_the_last_rendered_figures_again
 test_follow_mode_exits_when_primary_pane_is_gone
 test_cursor_payload_adapter_and_primary_guard
 test_account_role_label_is_verified_and_compact

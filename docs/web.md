@@ -12,14 +12,15 @@ It adds nothing the terminal does not show.
 | --- | --- |
 | The tabs across the top | One slim header: the Starship mark, the same tabs (Control Centre, then one per factory, called a project here), then the band |
 | The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked Most urgent |
-| The first mate's chat, left | First mate, left |
+| The status bar row ([status-bar.md](status-bar.md)) | The same row, word for word and in its colours, in a slim line under the header |
+| The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the counts, Needs you, Right now, Since you last looked |
 | A factory's own tab: its page, and its workers beside it | The project's tab: its page, and Workers at work beside it |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
 The line between two side-by-side panels can be dragged to make either one as big as you like, as in the terminal; a double-click puts it back, and with the line focused the arrow keys move it.
 Each browser remembers where you left it.
-In a narrow window the two sides stack, Control Centre gets a switch between First mate and Factories, and a project's tab can be resized between its page and its workers the same way.
+In a narrow window the two sides stack, Control Centre gets a switch between Firstmate and Factories, and a project's tab can be resized between its page and its workers the same way.
 
 ### The chat
 
@@ -30,6 +31,8 @@ A picture you pasted, or a screenshot the desk voice sent, shows as a small pict
 Any other image path you typed stays in your words exactly as you wrote it, with the picture shown beneath the message.
 A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
+While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run; it goes away when the turn ends.
+That line never shows a command, a path or code: a step description that holds one reads as the generic words for that kind of step instead.
 
 A message box at the bottom sends to the same first mate.
 Enter sends and Shift+Enter starts a new line.

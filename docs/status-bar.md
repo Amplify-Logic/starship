@@ -282,6 +282,13 @@ unattributable figure renders as the dim `--` placeholder and is never converted
 confident zero on either metric is exactly the reading that would mislead. A genuine zero still renders as
 `0%`.
 
+### Web mirror
+
+Every adapter render also saves the primary's own figures to `state/.primary-status-metrics`.
+`bin/fm-status-bar.sh --replay` draws the canonical row again from those saved figures, with the fleet, supervision and away fields read fresh, so the web mirror ([web.md](web.md)) shows this same row without a second implementation.
+Replay reads no payload, needs no guarded primary launch, takes no account role from its own environment, and never writes the context sample or the saved figures.
+Before any adapter has rendered, its model, effort, context, quota and cost show their placeholders.
+
 ### opencode and grok - unverified
 
 `bin/fm-primary.sh` lists `opencode` and `grok` as verified primary profiles, so they are carried here

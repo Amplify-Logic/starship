@@ -7,6 +7,7 @@
 #     --context-used PERCENT --quota-used PERCENT --cost USD
 #   fm-status-bar.sh --adapter codex --model MODEL --effort LEVEL \
 #     --follow-pane PANE [--follow-backend tmux|herdr]
+#   fm-status-bar.sh --replay
 #
 # Claude mode reads the native statusLine JSON payload from stdin.
 # Cursor mode reads Cursor CLI's native statusLine JSON payload from stdin.
@@ -50,6 +51,14 @@
 # owns it. An unknown account renders no label at all rather than a guess, and
 # an ID or email is never rendered.
 #
+# Every adapter render also saves the primary's own figures (model, effort,
+# context, quota and its window, cost, role) to state/.primary-status-metrics,
+# one tab-separated line, so --replay can draw the same row again for another
+# surface: it takes those saved figures, reads the fleet, supervision and away
+# fields fresh, and prints the row once. Replay is how the web mirror shows
+# this row (bin/fm-web.py); it reads no stdin, needs no FM_PRIMARY_HARNESS,
+# and never writes the context sample or the saved figures.
+#
 # The complete field, threshold, color, placeholder, and adapter contract lives
 # in docs/status-bar.md.
 # This renderer is inert unless FM_PRIMARY_HARNESS matches --adapter, so tracked
@@ -77,6 +86,7 @@ FOLLOW_BACKEND=tmux
 CHROME_PANE=
 CHROME_ROLE=
 CHROME_ZOOMED=0
+REPLAY=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -139,21 +149,32 @@ while [ "$#" -gt 0 ]; do
       CHROME_ZOOMED=1
       shift
       ;;
+    --replay)
+      REPLAY=1
+      shift
+      ;;
     *)
       exit 0
       ;;
   esac
 done
 
-case "$ADAPTER" in
-  claude|pi|codex|cursor) ;;
-  *) exit 0 ;;
-esac
-case "$FOLLOW_BACKEND" in
-  tmux|herdr) ;;
-  *) exit 0 ;;
-esac
-[ "${FM_PRIMARY_HARNESS:-}" = "$ADAPTER" ] || exit 0
+METRICS_FILE=$STATE/.primary-status-metrics
+if [ "$REPLAY" = 1 ]; then
+  ADAPTER=replay
+  FOLLOW_PANE=
+  CHROME_PANE=
+else
+  case "$ADAPTER" in
+    claude|pi|codex|cursor) ;;
+    *) exit 0 ;;
+  esac
+  case "$FOLLOW_BACKEND" in
+    tmux|herdr) ;;
+    *) exit 0 ;;
+  esac
+  [ "${FM_PRIMARY_HARNESS:-}" = "$ADAPTER" ] || exit 0
+fi
 
 sanitize_label() {
   local value=${1:---}
@@ -260,6 +281,16 @@ EOF
   fi
 fi
 
+# Replay takes the figures the last adapter render saved. Empty fields are
+# saved as "-", because read collapses adjacent tabs.
+if [ "$REPLAY" = 1 ] && [ -f "$METRICS_FILE" ]; then
+  IFS=$'\t' read -r _ MODEL EFFORT CONTEXT_USED QUOTA_USED QUOTA_WINDOW COST ROLE _ \
+    < "$METRICS_FILE" 2>/dev/null || true
+  [ "$QUOTA_WINDOW" != - ] || QUOTA_WINDOW=
+  [ "$ROLE" != - ] || ROLE=
+  QUOTA_WINDOW=$(sanitize_window_label "$QUOTA_WINDOW")
+fi
+
 MODEL=$(sanitize_label "$MODEL")
 EFFORT=$(sanitize_label "$EFFORT")
 CONTEXT_USED=$(normalize_percent "$CONTEXT_USED")
@@ -272,7 +303,7 @@ COST=$(normalize_cost "$COST")
 # a bare numeric id, a UUID or any prefix of one, punctuation, spaces, or an
 # over-long value - is dropped rather than shortened, so no ID or email, and no
 # truncated fragment of one, can reach the status row.
-[ -n "$ROLE" ] || ROLE=${FM_PRIMARY_ACCOUNT_ROLE:-${FM_ACCOUNT_NAME:-}}
+[ -n "$ROLE" ] || [ "$REPLAY" = 1 ] || ROLE=${FM_PRIMARY_ACCOUNT_ROLE:-${FM_ACCOUNT_NAME:-}}
 if [ -n "$ROLE" ]; then
   ROLE=$(sanitize_label "$ROLE")
   case "$ROLE" in
@@ -300,7 +331,7 @@ publish_context_sample() {
   return 0
 }
 
-publish_context_sample "$CONTEXT_USED"
+[ "$REPLAY" = 1 ] || publish_context_sample "$CONTEXT_USED"
 
 # The Codex companion resolves its own metrics per refresh, so it loads the
 # supplier once here rather than on every tick.
@@ -350,6 +381,14 @@ X=$'\033[0m'
 
 # shellcheck source=bin/fm-fleet-status-lib.sh
 . "$FM_ROOT/bin/fm-fleet-status-lib.sh"
+
+# save_metrics: the primary's own figures for --replay, best effort, so a
+# state directory that cannot be written never costs the render.
+save_metrics() {
+  [ "$REPLAY" = 0 ] || return 0
+  fm_status_cache_write "$METRICS_FILE" "$(printf 'fm-primary-status-metrics.v1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$MODEL" "$EFFORT" "$CONTEXT_USED" "$QUOTA_USED" "${QUOTA_WINDOW:--}" "$COST" "${ROLE:--}")"
+}
 
 # Fleet fields, from bin/fm-fleet-status-lib.sh. This used to count every meta
 # file as a running ship and fold each status log's last line into paused and
@@ -830,6 +869,7 @@ if [ -n "$FOLLOW_PANE" ]; then
     # published context sample, this tick's reading - has to run in the loop's
     # own shell. It still runs before any of the frame reaches the pane.
     refresh_codex_metrics
+    save_metrics
     # Deliberately NOT published to the primary-handoff context sample. That
     # file is the handoff supervisor's CONTEXT axis: a home that enables the
     # axis rotates its live primary once the sample crosses the threshold. The
@@ -857,4 +897,5 @@ if [ -n "$FOLLOW_PANE" ]; then
   exit 0
 fi
 
+save_metrics
 render_once
