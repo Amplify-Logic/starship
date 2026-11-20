@@ -879,7 +879,7 @@ The flag is a home-local preference and is not inherited by secondmate homes.
 
 The optional local, gitignored `config/pr-squash-summary` presence flag opts this home into writing the commit text of the GitHub squash merges `bin/fm-pr-merge.sh` performs.
 With the flag present, a squash merge whose caller passed no subject or body of its own uses the PR title plus ` (#N)` as the commit subject and the PR body's `## What Changed` section as the commit body, so the commit on the base branch describes the change rather than listing every branch commit.
-The section is copied verbatim up to the next level-two heading, which leaves out the operator intent before it and the no-mistakes appendix and attestation after it.
+The section is copied verbatim up to the next level-two heading or a line holding only `</details>` (a PR template may fold the section), which leaves out the operator intent before it and the no-mistakes appendix and attestation after it.
 A PR body without that section, a PR whose text cannot be read, a merge method other than squash, and GitLab and Forgejo merges keep the repository's own squash text.
 Only while the flag is present does it override the repository's own squash commit message setting; it is off by default, and with the file absent `bin/fm-pr-merge.sh` reads no PR text and sends the same merge command as before.
 The flag is a home-local preference, is not inherited by secondmate homes, and takes effect on the next merge.
