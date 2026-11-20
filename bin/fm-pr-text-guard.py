@@ -7,13 +7,18 @@
 # --new-names).
 #
 # Usage:
-#   fm-pr-text-guard.py hook --home DIR
+#   fm-pr-text-guard.py hook --home DIR [--gh-account LOGIN]
 #       The Claude Code PreToolUse hook on Bash that bin/fm-spawn.sh installs
 #       for every spawned Claude worker (ship or scout), and that
 #       bin/fm-pr-text-pretool-check.sh runs for a first mate or second mate
 #       session from the tracked .claude/settings.json. Reads the hook payload
 #       on stdin. On a refusal it prints the documented PreToolUse deny object
 #       on stdout; on an allow it prints nothing. It always exits 0.
+#       --gh-account is the job's own GitHub login (bin/fm-spawn.sh
+#       --gh-account): visibility is then read with GH_TOKEN from
+#       `gh auth token -u LOGIN`, never through the global gh account, which
+#       this check never switches. The hook runs in Claude's own environment,
+#       so a GH_TOKEN the worker exports in its shell never reaches it.
 #
 # docs/fork-configuration.md "Private leak words" owns the operator contract. The
 # word list, its format and where it is found belong to bin/fm-leak-guard.sh,
@@ -177,13 +182,13 @@ def deny(reason):
     }}))
 
 
-def opts(argv, names):
+def opts(argv, names, optional=()):
     found = {}
     i = 0
     while i < len(argv):
         name = argv[i][2:] if argv[i].startswith("--") else None
-        if name not in names or i + 1 >= len(argv):
-            raise SystemExit("usage: fm-pr-text-guard.py hook --home DIR (see the header)")
+        if (name not in names and name not in optional) or i + 1 >= len(argv):
+            raise SystemExit("usage: fm-pr-text-guard.py hook --home DIR [--gh-account LOGIN] (see the header)")
         found[name] = argv[i + 1]
         i += 2
     missing = [n for n in names if n not in found]
@@ -731,12 +736,27 @@ def targets(command, cwd):
     return [(r, r or "the repository this command reaches") for r in dict.fromkeys(repos)]
 
 
-def visibility(repo, cwd):
+def account_env(account):
+    """The environment for gh calls: this one, or with GH_TOKEN for the job's GitHub login."""
+    if not account:
+        return None
+    try:
+        result = subprocess.run(["gh", "auth", "token", "-u", account],
+                                capture_output=True, text=True, timeout=left())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise UnknownTarget("gh could not read a token for GitHub account %s (%s)" % (account, type(e).__name__))
+    token = result.stdout.strip()
+    if result.returncode != 0 or not token:
+        raise UnknownTarget("gh has no login for GitHub account %s; run gh auth login for it" % account)
+    return dict(os.environ, GH_TOKEN=token)
+
+
+def visibility(repo, cwd, env=None):
     """('private' or 'public' or the reason it could not be read, the owner/repo gh names or None)."""
     args = (["gh", "repo", "view"] + ([repo] if repo else [])
             + ["--json", "isPrivate,nameWithOwner", "--jq", ".isPrivate, .nameWithOwner"])
     try:
-        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=left())
+        result = subprocess.run(args, capture_output=True, text=True, cwd=cwd, timeout=left(), env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         return "gh could not run (%s)" % type(e).__name__, None
     answer = result.stdout.split()
@@ -752,7 +772,7 @@ def check_hint(home, names=False):
 def cmd_hook(argv):
     global BUDGET, DEADLINE
     start = time.monotonic()
-    o = opts(argv, ("home",))
+    o = opts(argv, ("home",), ("gh-account",))
     try:
         payload = json.load(sys.stdin)
         if payload.get("tool_name") != "Bash":
@@ -817,8 +837,14 @@ def cmd_hook(argv):
             return 0
         except UnknownTarget as e:
             reached, unknown = [], str(e)
+        env = None
+        if reached:
+            try:
+                env = account_env(o.get("gh-account"))
+            except UnknownTarget as e:
+                reached, unknown = [], str(e)
         for repo, where in reached:
-            seen, name = visibility(repo, cwd)
+            seen, name = visibility(repo, cwd, env)
             if seen == "private":
                 continue
             if seen == "public" and own and name and name.lower() not in own:
@@ -846,7 +872,7 @@ def cmd_hook(argv):
 
 def main(argv):
     if len(argv) < 2 or argv[1] != "hook":
-        print("usage: fm-pr-text-guard.py hook --home DIR (see the header)", file=sys.stderr)
+        print("usage: fm-pr-text-guard.py hook --home DIR [--gh-account LOGIN] (see the header)", file=sys.stderr)
         return 2
     return cmd_hook(argv[2:])
 
