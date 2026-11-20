@@ -40,7 +40,7 @@ chat only when that is safe and otherwise uses the durable mailbox.
 document (schema fm-web-conversation.v1), for another page that shows a
 home's conversation without this server: the Deck reads every local crew home
 this way. Its fields are schema, home, generated_at, session, state (busy,
-idle or offline), since (when the turn under way began, while busy), note,
+idle or offline), since (when the turn under way began, while busy and known), note,
 older, version and items, each item exactly as the page receives it, so its
 html is already escaped and safe to insert.
 
@@ -661,6 +661,10 @@ class Conversation:
         # When the turn under way began: the timestamp of the entry that made
         # the conversation busy, so the page can say how long it has worked.
         self.turn_started: Optional[str] = None
+        # Whether that entry started the turn: a turn whose first entry was not
+        # read began earlier, so its start is unknown.
+        self.turn_opened = False
+        self.opening = False
         self.last_assistant_msg: Optional[str] = None
         self.pending_compact: Optional[Dict[str, Any]] = None
         # Each picture an owner's message shows, by its id: ("path", path) or
@@ -674,10 +678,14 @@ class Conversation:
         uid = str(entry.get("uuid") or f"x{len(self.items)}")
         ts = str(entry.get("timestamp") or "")
         was_busy = self.busy
+        self.opening = False
         self._entry(entry, kind, uid, ts)
         if not self.busy:
             self.turn_started = None
-        elif not was_busy or not self.turn_started:
+        elif not was_busy:
+            self.turn_started = ts or None
+            self.turn_opened = self.opening
+        elif not self.turn_started:
             self.turn_started = ts or None
 
     def _entry(self, entry: Dict[str, Any], kind: Any, uid: str, ts: str) -> None:
@@ -696,7 +704,7 @@ class Conversation:
                     text = _block_text(prompt)
                     if text.strip():
                         self._push(_owner_item(uid, ts, text))
-                        self.busy = True
+                        self.busy = self.opening = True
 
     def _push(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
         if item["kind"] == "user":
@@ -740,7 +748,8 @@ class Conversation:
             item = _classify_user_string(uid, ts, content, origin_kind)
             if item is not None:
                 self._push(item)
-                self.busy = self.busy or _starts_turn(content)
+                if _starts_turn(content):
+                    self.busy = self.opening = True
             return
         if not isinstance(content, list):
             return
@@ -773,7 +782,8 @@ class Conversation:
             if item["kind"] == "user" and images:
                 item = _user_item(uid, ts, text, images)
             self._push(item, blobs)
-            self.busy = self.busy or _starts_turn(text)
+            if _starts_turn(text):
+                self.busy = self.opening = True
 
     def _tool_result(self, block: Dict[str, Any]) -> None:
         tool = self.tools.get(str(block.get("tool_use_id") or ""))
@@ -941,7 +951,7 @@ class TranscriptCache:
                     "items": items,
                     "older": older,
                     "busy": conversation.busy,
-                    "since": conversation.turn_started,
+                    "since": conversation.turn_started if conversation.turn_opened or not older else None,
                 }
                 self.pictures = conversation.shown_pictures(items)
                 self.key = key

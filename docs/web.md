@@ -31,7 +31,7 @@ A picture you pasted, or a screenshot the desk voice sent, shows as a small pict
 Any other image path you typed stays in your words exactly as you wrote it, with the picture shown beneath the message.
 A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
-While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run; it goes away when the turn ends.
+While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run (counted from when the page first saw it working, when the turn began before the part of the conversation the page reads); it goes away when the turn ends.
 That line never shows a command, a path or code: a step description that holds one reads as the generic words for that kind of step instead.
 
 A message box at the bottom sends to the same first mate.

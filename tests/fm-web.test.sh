@@ -261,6 +261,29 @@ test_a_working_turn_says_when_it_began() {
   pass "a working turn says when it began, and a finished one does not"
 }
 
+# A turn longer than the part of the transcript the page reads began before
+# that part, so it carries no start rather than the time of its first step read.
+test_a_turn_begun_before_the_read_part_carries_no_start() {
+  local home out
+  home=$(make_home longturn)
+  python3 - "$(transcript "$home")" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as fh:
+    fh.write(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-10-06T08:00:00Z",
+                         "origin": {"kind": "human"}, "message": {"role": "user", "content": "long ask"}}) + "\n")
+    for i in range(6000):
+        fh.write(json.dumps({"type": "assistant", "uuid": f"a{i}", "timestamp": f"2026-10-06T09:{i // 100 % 60:02d}:{i % 60:02d}Z",
+                             "message": {"id": f"m{i}", "role": "assistant", "content": [
+                                 {"type": "tool_use", "id": f"t{i}", "name": "Bash",
+                                  "input": {"command": "ls " + "x" * 600}}]}}) + "\n")
+PY
+  serve_home "$home"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.state, (.older | tostring), (.since | tostring)] | join(" ")' <<<"$out")" "busy true null" \
+    "a turn whose first message was not read has no start"
+  pass "a turn begun before the read part carries no start"
+}
+
 # Bold or italic words that hold code or a link still render as emphasis.
 test_emphasis_around_code_renders() {
   local home html
@@ -939,6 +962,7 @@ test_transcript_parsing_collapses_tools_and_marks_compaction
 test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
 test_a_working_turn_says_when_it_began
+test_a_turn_begun_before_the_read_part_carries_no_start
 test_emphasis_around_code_renders
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
