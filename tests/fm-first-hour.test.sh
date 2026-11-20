@@ -112,7 +112,13 @@ test_each_step_ticks_itself_off_as_its_evidence_appears() {
   assert_contains "$out" "  [x] Your private repository" "a configured private repository ticks off"
   assert_contains "$out" "  [ ] Your first project" "the private repository never counts as the first project"
 
-  mkdir -p "$w/fmhome/projects/my-work" "$w/fmhome/data/first-report"
+  git init -q "$w/fmhome/projects/my-work"
+  out=$(run_checklist "$w")
+  assert_contains "$out" "  [ ] Your first project" "a project with no commit yet cannot take a worker, so it stays open"
+  git -C "$w/fmhome/projects/my-work" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m start
+  out=$(run_checklist "$w")
+  assert_contains "$out" "  [x] Your first project" "a project with a first commit ticks off"
+  mkdir -p "$w/fmhome/data/first-report"
   : > "$w/fmhome/data/first-report/report.md"
   out=$(run_checklist "$w")
   status=$?
@@ -147,7 +153,9 @@ test_watch_redraws_until_done_and_usage() {
 
   # A finished checklist under --watch prints once and exits 0.
   : > "$w/gh-signed-in"; : > "$w/claude-signed-in"
-  mkdir -p "$w/fmhome/state" "$w/fmhome/data/r" "$w/fmhome/projects/p/.git" "$w/fmhome/projects/my-addon/.git" "$w/fmhome/config"
+  mkdir -p "$w/fmhome/state" "$w/fmhome/data/r" "$w/fmhome/projects/my-addon/.git" "$w/fmhome/config"
+  git init -q "$w/fmhome/projects/p"
+  git -C "$w/fmhome/projects/p" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m start
   : > "$w/fmhome/state/x"; : > "$w/fmhome/data/r/report.md"
   printf 'path = projects/my-addon\norigin = https://github.com/example/my-addon\n' > "$w/fmhome/config/addon"
   printf '## Address and tone\n- Call me: Sam\n## What matters\n- Reports\n## Standing rules\n- Ask first\n' > "$w/fmhome/data/captain.md"

@@ -21,8 +21,9 @@
 #    9. House rules                 data/captain.md has a bullet under
 #                                   `## Standing rules`
 #   10. Your private repository     `bin/fm-addon.sh root` succeeds
-#   11. Your first project          a folder under projects/ other than the
-#                                   private repository's checkout
+#   11. Your first project          a repository under projects/ with a first
+#                                   commit, other than the private
+#                                   repository's checkout
 #   12. First report back           any data/<task>/report.md
 #
 # Below the list, one "Next:" line says how to finish the first open step.
@@ -98,7 +99,7 @@ step_project() {
     [ -d "$clone" ] || continue
     clone=${clone%/}
     [ -n "$addon" ] && [ "$clone" -ef "$addon" ] && continue
-    return 0
+    git -C "$clone" rev-parse --verify --quiet HEAD >/dev/null 2>&1 && return 0
   done
   return 1
 }

@@ -136,6 +136,7 @@ If they name a folder of their own work, take the folder path below; for a repos
 
 **A folder of their own work.**
 Load `project-management` and create a local project for it, with no remote and no GitHub call, named for their work (for example `my-work`); `local-only` is that project's posture, so nothing in it is ever published.
+Give the new project its first commit yourself, `git -C projects/<name> commit --allow-empty -m "Start the project"`, so a worker can be dispatched into it; do not ask the owner to make it.
 Say in plain words that the report reads their folder where it is and changes nothing in it, and that nothing leaves the Mac.
 Then go on as for a repository from item 2, with the folder's absolute path written into the scout's instructions as the material to read, read-only.
 If they named no folder yet, tell them to make one, for example in Documents, put a few files in it, and give you its name; do not create or fill it for them.
