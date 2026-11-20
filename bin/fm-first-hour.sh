@@ -99,6 +99,10 @@ step_project() {
     [ -d "$clone" ] || continue
     clone=${clone%/}
     [ -n "$addon" ] && [ "$clone" -ef "$addon" ] && continue
+    # Only the folder's own repository counts: without .git here, git walks
+    # up and would answer with the home's own HEAD, since a home is itself a
+    # Starship clone.
+    [ -e "$clone/.git" ] || continue
     git -C "$clone" rev-parse --verify --quiet HEAD >/dev/null 2>&1 && return 0
   done
   return 1

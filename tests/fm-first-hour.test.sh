@@ -140,6 +140,26 @@ test_a_name_left_blank_does_not_tick() {
   pass "a Call me line with no name leaves the name step open"
 }
 
+test_a_plain_folder_in_a_cloned_home_is_not_a_project() {
+  # A real home is itself a git clone of Starship with commits, so git run
+  # inside a plain folder under projects/ walks up and finds the home's own
+  # HEAD. Only the folder's own repository, with its own first commit, may
+  # tick the first project; a folder made before `git init`, or one whose
+  # clone failed, is not a project a worker can be dispatched into.
+  local w out
+  w=$(make_world cloned-home)
+  git init -q "$w/fmhome"
+  git -C "$w/fmhome" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m home
+  mkdir -p "$w/fmhome/projects/my-work"
+  out=$(run_checklist "$w")
+  assert_contains "$out" "  [ ] Your first project" "a plain folder inside a cloned home is not a project"
+  git init -q "$w/fmhome/projects/my-work"
+  git -C "$w/fmhome/projects/my-work" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m start
+  out=$(run_checklist "$w")
+  assert_contains "$out" "  [x] Your first project" "the folder's own first commit ticks it off"
+  pass "inside a cloned home, only a project's own repository with a first commit counts as the first project"
+}
+
 test_watch_redraws_until_done_and_usage() {
   local w out status
   w=$(make_world watch)
@@ -170,3 +190,4 @@ test_blank_machine_has_nothing_ticked
 test_each_step_ticks_itself_off_as_its_evidence_appears
 test_a_name_left_blank_does_not_tick
 test_watch_redraws_until_done_and_usage
+test_a_plain_folder_in_a_cloned_home_is_not_a_project
