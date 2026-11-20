@@ -93,7 +93,12 @@ PY
 [ "$*" = fields ] || { echo "stand-in fm-bridge-strip.sh: unexpected arguments: $*" >&2; exit 2; }
 cat "$FM_HOME/strip.fields" 2>/dev/null
 SH
-  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh"
+  cat > "$root/bin/fm-status-bar.sh" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = --replay ] || { echo "stand-in fm-status-bar.sh: unexpected arguments: $*" >&2; exit 2; }
+cat "$FM_HOME/status.row" 2>/dev/null
+SH
+  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "$home/desk-voice.args"
@@ -223,6 +228,76 @@ test_numbered_lists_keep_their_numbers() {
   assert_contains "$html" '<ol start="3"><li>Abort</li></ol>'
   assert_contains "$html" '<ol start="4"><li>Tidy up</li></ol>'
   pass "numbered items split by blank lines keep their written numbers"
+}
+
+# While a turn runs the page says when it began, so its live line can show how
+# long the first mate has worked; a finished turn carries no start.
+test_a_working_turn_says_when_it_began() {
+  local home out file version
+  home=$(make_home since)
+  file=$(transcript "$home")
+  {
+    printf '%s\n' '{"type":"user","uuid":"u1","timestamp":"2026-10-06T10:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"first ask"}}'
+    printf '%s\n' '{"type":"assistant","uuid":"a1","timestamp":"2026-10-06T10:00:09Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls","description":"List files"}}]}}'
+  } > "$file"
+  serve_home "$home"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.state, .since] | join(" ")' <<<"$out")" "busy 2026-10-06T10:00:00Z" "a running turn starts at the message that began it"
+  version=$(jq -r .version <<<"$out")
+  out=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" \
+    "http://127.0.0.1:$(cat "$home/web.test-port")/api/conversation?since=$version")
+  assert_equals "$(jq -r '[.unchanged, .since] | join(" ")' <<<"$out")" "true 2026-10-06T10:00:00Z" "an unchanged read still says when the turn began"
+  {
+    printf '%s\n' '{"type":"user","uuid":"r1","timestamp":"2026-10-06T10:00:12Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a"}]}}'
+    printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s1","timestamp":"2026-10-06T10:00:20Z"}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.state, (.since | tostring)] | join(" ")' <<<"$out")" "idle null" "a finished turn carries no start"
+  printf '%s\n' '{"type":"user","uuid":"u2","timestamp":"2026-10-06T11:30:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"next ask"}}' >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.state, .since] | join(" ")' <<<"$out")" "busy 2026-10-06T11:30:00Z" "the next turn starts at its own message"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation)
+  assert_equals "$(jq -r .since <<<"$out")" "2026-10-06T11:30:00Z" "the conversation command carries the start too"
+  pass "a working turn says when it began, and a finished one does not"
+}
+
+# A turn longer than the part of the transcript the page reads began before
+# that part, so it carries no start rather than the time of its first step read.
+test_a_turn_begun_before_the_read_part_carries_no_start() {
+  local home out
+  home=$(make_home longturn)
+  python3 - "$(transcript "$home")" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as fh:
+    fh.write(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-10-06T08:00:00Z",
+                         "origin": {"kind": "human"}, "message": {"role": "user", "content": "long ask"}}) + "\n")
+    for i in range(6000):
+        fh.write(json.dumps({"type": "assistant", "uuid": f"a{i}", "timestamp": f"2026-10-06T09:{i // 100 % 60:02d}:{i % 60:02d}Z",
+                             "message": {"id": f"m{i}", "role": "assistant", "content": [
+                                 {"type": "tool_use", "id": f"t{i}", "name": "Bash",
+                                  "input": {"command": "ls " + "x" * 600}}]}}) + "\n")
+PY
+  serve_home "$home"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.state, (.older | tostring), (.since | tostring)] | join(" ")' <<<"$out")" "busy true null" \
+    "a turn whose first message was not read has no start"
+  pass "a turn begun before the read part carries no start"
+}
+
+# Bold or italic words that hold code or a link still render as emphasis.
+test_emphasis_around_code_renders() {
+  local home html
+  home=$(make_home emphasis)
+  jq -nc --arg text 'Run **the `ls -la` step** now, *see `x`*, and keep `**raw**` as code.' \
+    '{type:"assistant",uuid:"a1",message:{id:"msg_1",role:"assistant",content:[{type:"text",text:$text}]}}' \
+    > "$(transcript "$home")"
+  serve_home "$home"
+  html=$(jq -r '.items[0].html' <<<"$(conversation "$home")")
+  assert_contains "$html" '<strong>the <code>ls -la</code> step</strong>'
+  assert_contains "$html" '<em>see <code>x</code></em>'
+  assert_contains "$html" '<code>**raw**</code>'
+  assert_not_contains "$html" '**the'
+  pass "emphasis around code renders instead of showing its stars"
 }
 
 test_idle_offline_and_session_restart() {
@@ -534,6 +609,25 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   pass "the mirror is the pane's screen and the strip's fields, with only the pane's own jargon reworded"
 }
 
+# The terminal's status bar row, drawn again by bin/fm-status-bar.sh --replay,
+# reaches the page word for word with each colour as a tone.
+test_the_mirror_shows_the_terminal_status_row() {
+  local home out
+  home=$(make_home statusrow)
+  write_screen "$home"
+  printf '\033[1m⚓ Opus\033[0m\033[2m·\033[0mhigh \033[2m│\033[0m \033[92m🧠35%%\033[0m \033[91;1m👁 not watching\033[0m \033[95m1 ready to merge\033[0m\n' > "$home/status.row"
+  serve_home "$home"
+  out=$(mirror "$home")
+  assert_equals "$(jq -r '[.model.status[] | .text] | join("")' <<<"$out")" \
+    "⚓ Opus·high │ 🧠35% 👁 not watching 1 ready to merge" "the row's words are the terminal's"
+  assert_equals "$(jq -r '[.model.status[] | select(.tone != "") | "\(.tone):\(.text)"] | join("|")' <<<"$out")" \
+    "bold:⚓ Opus|dim:·|dim:│|green:🧠35%|alarm:👁 not watching|magenta:1 ready to merge" "each colour is a tone"
+  rm -f "$home/status.row"
+  sleep 2.2   # the server keeps one reading for two seconds
+  assert_equals "$(mirror "$home" | jq -c '.model.status')" "[]" "no row leaves the status bar out"
+  pass "the mirror shows the terminal's status bar row word for word"
+}
+
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   local home port cookie csrf url out
   home=$(make_home act)
@@ -614,7 +708,7 @@ test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
   assert_equals "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "event,event,event,user,user,user,user,user,user" \
     "doorbells and operational input are notices, the owner's messages are messages"
   assert_equals "$(jq -r '[.items[0:3][].summary] | join("|")' <<<"$out")" \
-    "A message waited in the mailbox|A note waited in the inbox|A notice for the first mate" "what each notice says"
+    "A message waited in the mailbox|A note waited in the inbox|A notice for firstmate" "what each notice says"
   assert_equals "$(jq -r '.items[3].html' <<<"$out")" "<p>This is the chart on my phone</p>" \
     "the screenshot's path and its label are taken out of the words"
   assert_equals "$(jq -r '.items[3].pictures | length' <<<"$out")" "1" "the screenshot is one picture"
@@ -813,6 +907,41 @@ strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read
   pass "the chat folds into messages and quiet lines, links read as short labels, and keys send the buttons' notes"
 }
 
+# The live line while the first mate works: what it is doing now in plain
+# words, never a command, path or code, and for how long.
+test_the_live_line_says_what_is_happening_in_plain_words() {
+  command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
+  local home root port out
+  home=$(make_home live)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  curl -sS "http://127.0.0.1:$port/view.js" > "$home/view.js"
+  out=$(node - "$home/view.js" <<'JS'
+const V = require(process.argv[2]);
+const pending = (name, about, summary) => [{ kind: 'user', id: 'u' }, { kind: 'tool', id: 't', name, about, summary, pending: true }];
+console.log([
+  V.nowWords([]), V.nowWords([{ kind: 'user', id: 'u' }]),
+  V.nowWords([{ kind: 'tool', id: 't', name: 'Bash', about: 'List files', pending: false }]),
+  V.nowWords(pending('Bash', 'Show the open pull requests', 'gh pr list')),
+  V.nowWords(pending('Bash', '', 'rm -rf /tmp/x')),
+  V.nowWords(pending('Bash', 'Run bin/fm-lint.sh', 'bin/fm-lint.sh')),
+  V.nowWords(pending('Bash', 'Count `rows` with $HOME', 'x')),
+  V.nowWords(pending('Read', '', '/home/demo/notes.md')),
+  V.nowWords(pending('Edit', '', '/home/demo/notes.md')),
+  V.nowWords(pending('Grep', '', 'secret.*key')),
+  V.nowWords(pending('Agent', 'Look through the web code', '')),
+  V.nowWords(pending('mcp__mail__search', '', '{"q":"x"}')),
+  V.nowWords(pending('Skill', '', 'no-mistakes')),
+  V.nowWords(pending('Bash', 'word '.repeat(30), 'x')).length <= 81,
+].join(' | '));
+console.log([0, 9400, 61000, 3599000, 3780000].map(V.took).join(' | '));
+JS
+) || fail "the live line rules did not run: $out"
+  assert_equals "$out" 'Thinking | Thinking | Thinking | Show the open pull requests | Running a command | Running a command | Running a command | Reading a file | Changing a file | Searching the files | Waiting on a helper: Look through the web code | Using a connected app | Reading its notes | true
+0s | 9s | 1m 01s | 59m 59s | 1h 03m' "the live line in plain words, and how long the turn has run"
+  pass "the live line says what is happening in plain words and for how long"
+}
+
 test_launcher_start_status_url_stop() {
   local home out port
   home=$(make_home launcher)
@@ -832,6 +961,9 @@ test_launcher_start_status_url_stop() {
 test_transcript_parsing_collapses_tools_and_marks_compaction
 test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
+test_a_working_turn_says_when_it_began
+test_a_turn_begun_before_the_read_part_carries_no_start
+test_emphasis_around_code_renders
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
 test_conversation_command_prints_versioned_json
@@ -843,7 +975,9 @@ test_notices_fold_away_and_pasted_pictures_show_as_pictures
 test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words
+test_the_mirror_shows_the_terminal_status_row
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
+test_the_live_line_says_what_is_happening_in_plain_words
 test_launcher_start_status_url_stop
