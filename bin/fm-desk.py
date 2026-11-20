@@ -1309,6 +1309,8 @@ def cmd_onboard() -> int:
         else:
             for note in fill(layout, home, kinds)[1]:
                 say("  note: %s" % note)
+            if "view" in kinds and not layout["views"]:
+                say("  Open another terminal window and type `herdr` to see your first mate.")
         if after:
             say("  %s" % after)
     command = ME

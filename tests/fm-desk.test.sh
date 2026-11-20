@@ -923,6 +923,7 @@ test_onboard_builds_the_desk_one_step_at_a_time() {
   done: create the workspace starship
   done: start the first mate (cd " "step 1 did not start Herdr with the first mate"
   assert_contains "$out" "  done: open view 1 in Terminal" "step 1 did not open a window on a Mac"
+  assert_not_contains "$out" "type \`herdr\`" "on a Mac step 1 asked for another window although it opened one"
   assert_contains "$out" "Step 2 of 4, The bridge strip." "step 2 was not explained"
   assert_contains "$out" "  done: show the Starship bridge" "step 2 did not show the bridge"
   assert_contains "$out" "  done: show the Factory pane" "step 3 did not show the Factory pane"
@@ -945,6 +946,7 @@ test_onboard_picks_up_where_the_person_stopped() {
   assert_not_contains "$out" "show the Starship bridge" "a step was taken without Enter"
   assert_contains "$out" "Stopped. Run \`onboard-starship\` again to pick up here." "stopping did not say how to go on"
   assert_not_contains "$out" "open view" "off macOS onboarding opened a Terminal window"
+  assert_contains "$out" "Open another terminal window and type \`herdr\` to see your first mate." "off macOS step 1 did not say how to see the first mate"
   [ ! -e "$FM_HOME/config/desk-layout" ] || fail "a stopped onboarding wrote a layout"
   : > "$FAKE_HERDR_CALLS"
   out=$(printf '\n' | desk onboard) || fail "the second onboard run failed: $out"

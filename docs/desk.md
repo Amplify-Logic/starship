@@ -13,7 +13,7 @@ It links neither over another command by that name, such as the starship.rs shel
 **New to Starship:** run `onboard-starship`.
 It sets your desk up one step at a time, says in a sentence what each step does, and waits for Enter before taking it:
 
-1. Herdr with your first mate in one pane, and on a Mac one Terminal window on it; your first mate then leads its first conversation with you.
+1. Herdr with your first mate in one pane, and on a Mac one Terminal window on it; elsewhere it tells you to open another terminal window and type `herdr` to see it. Your first mate then leads its first conversation with you.
 2. The [bridge strip](bridge-strip.md).
 3. The [Factory pane](factory-pane.md).
 4. A starter `config/desk-layout` for that desk, so plain `starship` opens it from then on.
