@@ -156,6 +156,18 @@ set -u
 case "${1:-} ${2:-}" in
   "api graphql")
     [ -z "${FM_FAKE_PR_READ_LOG:-}" ] || printf 'gh\n' >> "$FM_FAKE_PR_READ_LOG"
+    # The readiness read (fm_pr_github_read_ready_record) asks for the head
+    # commit; it answers from FM_FAKE_READY_*, as the real --jq would print it.
+    case "$*" in
+      *headRefOid*)
+        [ "${FM_FAKE_READY_FAIL:-0}" = 1 ] && exit 1
+        head=${FM_FAKE_READY_HEAD:-}
+        printf 'state=%s\nmerged=%s\ndraft=%s\nhead_ref=%s\nhead=%s\nchecks_head=%s\nchecks=%s\n' \
+          "${FM_FAKE_READY_STATE:-OPEN}" "${FM_FAKE_READY_MERGED:-false}" \
+          "${FM_FAKE_READY_DRAFT:-false}" "${FM_FAKE_READY_HEAD_REF:-}" "$head" \
+          "${FM_FAKE_READY_CHECKS_HEAD:-$head}" "${FM_FAKE_READY_CHECKS-SUCCESS}"
+        exit 0 ;;
+    esac
     number=1
     for arg in "$@"; do
       case "$arg" in
@@ -400,6 +412,8 @@ reset_fakes() {
   FM_FAKE_GERRIT_READ_FAIL=0
   FM_FAKE_GERRIT_READ_LOG=
   unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
+  unset FM_FAKE_READY_FAIL FM_FAKE_READY_STATE FM_FAKE_READY_MERGED FM_FAKE_READY_DRAFT
+  unset FM_FAKE_READY_HEAD_REF FM_FAKE_READY_HEAD FM_FAKE_READY_CHECKS_HEAD FM_FAKE_READY_CHECKS
   unset FM_FAKE_AXI_STATUS_RUN_01OLD FM_FAKE_AXI_STATUS_RUN_01NEW
   FM_FAKE_STATUS_APPEND_FILE=""
   FM_FAKE_STATUS_APPEND_MARKER=""
@@ -1577,6 +1591,218 @@ test_top_level_fixing_done_log_stays_working() {
   assert_contains "$out" "validating (fixing)" "top-level fixing keeps fixing detail"
   assert_not_contains "$out" "state: done" "top-level fixing must not read as stale checks-green done"
   pass "top-level fixing is not overridden by a stale done log"
+}
+
+# The bucket the overview's "ready for your OK" count and the Factory pane
+# read off one crew-state line (fm_fleet_status_bucket).
+fleet_bucket_of() {  # <line> <meta>
+  ( . "$ROOT/bin/fm-fleet-status-lib.sh" && fm_fleet_status_bucket "$1" "$2" )
+}
+
+# The 2026-11-21 PR #104 / #105 shape: the pipeline rebased and pushed a head
+# the worker copy never held, the worker reported its CI-ready line, and no
+# run was attributed to the read, so the named-head gate refused the copy's
+# own unpushed HEAD and a green PR waiting only on its merge read blocked. The
+# forge holds the PR's live head: open, not a draft, on this task's branch,
+# and green there reads ready; anything less keeps the gate's refusal.
+test_ci_ready_done_with_pipeline_rewritten_head_reads_ready() {
+  reset_fakes
+  local d sha out live=20b127ce7b65f45a75a7f2db3068f6daaf1206e0 url=https://github.com/o/r/pull/104
+  d=$(new_case rewritten-head)
+  make_repo_on_branch "$d/wt" fm/rewritten
+  git -C "$d/wt" commit -q --allow-empty -m 'the head the worker names, never pushed'
+  sha=$(git -C "$d/wt" rev-parse HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/rewritten.meta" \
+    "window=fm:fm-rewritten" "worktree=$d/wt" "project=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude" "branch=fm/rewritten"
+  printf 'done: PR %s checks green\n' "$url" > "$d/state/rewritten.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  arm_idle_record "$d/state" rewritten
+  FM_FAKE_READY_HEAD=$live FM_FAKE_READY_HEAD_REF=fm/rewritten
+  export FM_FAKE_READY_HEAD FM_FAKE_READY_HEAD_REF
+
+  out=$(FM_FAKE_READY_FAIL=1 run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked · source: status-log · named head $sha is unreachable outside the worker copy" \
+    "reproduction: an unreadable forge leaves the pipeline-rewritten head blocked"
+
+  out=$(run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: done · source: status-log · PR $url checks green" \
+    "a green open PR whose live head the pipeline pushed reads done"
+  assert_contains "$out" "checks green at its live head ${live:0:12} on the forge" \
+    "the done reading names the forge's live head"
+  assert_equals "ready" "$(fleet_bucket_of "$out" "$d/state/rewritten.meta")" \
+    "the green PR counts as ready for the merge word"
+
+  out=$(FM_FAKE_READY_CHECKS=FAILURE run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a red PR is never ready"
+  out=$(FM_FAKE_READY_CHECKS=PENDING run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a PR whose checks are still running is not ready"
+  out=$(FM_FAKE_READY_CHECKS='' run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a PR with no reported check is not ready"
+  out=$(FM_FAKE_READY_DRAFT=true run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a draft PR is never ready"
+  out=$(FM_FAKE_READY_STATE=CLOSED run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a closed PR is never ready"
+  out=$(FM_FAKE_READY_STATE=MERGED FM_FAKE_READY_MERGED=true run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a merged PR is not read as waiting for its merge word"
+  out=$(FM_FAKE_READY_HEAD_REF=fm/someone-else run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a PR on another branch is not this task's"
+  out=$(FM_FAKE_READY_CHECKS_HEAD=1111111111111111111111111111111111111111 run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "checks read off a commit other than the live head prove nothing"
+  out=$(FM_CREW_STATE_NO_FORGE=1 run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked" "a skipped forge read keeps the gate's refusal"
+
+  fm_write_meta "$d/state/rewritten.meta" \
+    "window=fm:fm-rewritten" "worktree=$d/wt" "project=$d/wt" \
+    "kind=ship" "mode=direct-PR" "harness=claude" "branch=fm/rewritten"
+  printf 'done: PR %s\n' "$url" > "$d/state/rewritten.status"
+  out=$(run_crew_state "$d" rewritten)
+  assert_contains "$out" "state: blocked · source: status-log · named head $sha" \
+    "a direct-PR worker pushes from its own copy, so its named-head gate still refuses"
+  pass "a CI-ready done whose pipeline-rewritten head lives only on the forge reads ready when the forge proves it green"
+}
+
+# The same report while the run IS attributed but its ci log cannot be read:
+# the CI-ready line reaches the gate, and the forge's live head must also be
+# the run's own head.
+test_ci_ready_done_attributed_run_needs_the_run_head_on_the_forge() {
+  reset_fakes
+  local d out live url=https://github.com/o/r/pull/2
+  d=$(new_case rewritten-attributed)
+  make_repo_on_branch "$d/wt" fm/rewritten-run
+  live=$FM_FAKE_RUN_HEAD
+  git -C "$d/wt" update-ref -d refs/remotes/origin/main
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/rwrun.meta" \
+    "window=fm:fm-rwrun" "worktree=$d/wt" "project=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'done: PR %s checks green\n' "$url" > "$d/state/rwrun.status"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/rewritten-run)"
+  FM_FAKE_CI_LOGS=""
+  FM_FAKE_READY_HEAD=$live FM_FAKE_READY_HEAD_REF=fm/rewritten-run
+  export FM_FAKE_READY_HEAD FM_FAKE_READY_HEAD_REF
+  out=$(FM_CREW_STATE_NO_FORGE=1 run_crew_state "$d" rwrun)
+  assert_contains "$out" "state: blocked" "reproduction: the unreachable named head blocks without the forge"
+  out=$(run_crew_state "$d" rwrun)
+  assert_contains "$out" "state: done · source: status-log" "the run's own head green on the forge reads done"
+  out=$(FM_FAKE_READY_HEAD=2222222222222222222222222222222222222222 \
+    FM_FAKE_READY_CHECKS_HEAD=2222222222222222222222222222222222222222 run_crew_state "$d" rwrun)
+  assert_contains "$out" "state: blocked" "a forge head other than the run's own is not this run's green"
+  pass "an attributed run's CI-ready done needs the run's own head green on the forge"
+}
+
+# The 2026-11-21 PR #101 shape (no-mistakes v1.106.1): a ci fix round found
+# nothing to change and went back to watching CI inside the same round, so the
+# run read `status: running` with the ci step `fixing` for hours after every
+# check passed, and the PR read "validating (running)" instead of ready.
+run_ci_fix_round_watching() {  # <branch> [<run-status>]
+  cat <<TOON
+run:
+  id: "01M7XA6V1ZFFR638WXVPA1XTNH"
+  branch: $1
+  status: ${2:-running}
+  head: "${FM_FAKE_RUN_HEAD:0:8}"
+  head_sha: "$FM_FAKE_RUN_HEAD"
+  pr: "https://github.com/o/r/pull/101"
+  findings: none
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,192
+    rebase,completed,0,1421
+    review,completed,0,143044
+    test,completed,2,1037506
+    document,completed,0,16221
+    lint,completed,0,142133
+    push,completed,0,11216
+    pr,completed,0,26155
+    ci,fixing,0,0
+TOON
+}
+
+CI_FIX_ROUND_GREEN_LOG=$(cat <<'LOG'
+  auto-fix round 3/3 starting after round 5 (6 findings)
+  running agent to fix CI issues...
+  "CI fixer concluded no code change is needed: every failing job stopped at a CI setup step"
+  user-fix round starting after round 6 (6 findings selected)
+  selected CI checks are missing or no longer failing; waiting for current CI observation
+  monitoring CI for PR #101 (timeout: 168h0m0s)...
+  CI checks running, waiting for results...
+  all CI checks passed - still monitoring until merged or closed
+  warning: could not check PR state: gh pr view: exit status 1
+LOG
+)
+
+test_ci_fix_round_watching_a_green_pr_reads_ready() {
+  reset_fakes
+  local d out
+  d=$(new_case ci-fix-round-green)
+  make_repo_on_branch "$d/wt" fm/fixround
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/fixround.meta" \
+    "window=fm:fm-fixround" "worktree=$d/wt" "project=$d/wt" \
+    "kind=ship" "mode=no-mistakes" "harness=claude"
+  printf 'paused: PR https://github.com/o/r/pull/101 checks green, waiting for the merge decision\n' \
+    > "$d/state/fixround.status"
+  FM_FAKE_AXI_STATUS="$(run_ci_fix_round_watching fm/fixround)"
+  FM_FAKE_CI_LOGS=$CI_FIX_ROUND_GREEN_LOG
+  FM_FAKE_READY_HEAD=$FM_FAKE_RUN_HEAD FM_FAKE_READY_HEAD_REF=fm/fixround
+  export FM_FAKE_READY_HEAD FM_FAKE_READY_HEAD_REF
+
+  out=$(FM_CREW_STATE_NO_FORGE=1 run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working · source: run-step · validating (running)" \
+    "reproduction: without the forge the fix round watching a green PR reads validating"
+
+  out=$(run_crew_state "$d" fixround)
+  assert_contains "$out" "state: done · source: run-step · checks green: PR ready for review" \
+    "a fix round watching a PR green at the run's head reads ready"
+  assert_contains "$out" "https://github.com/o/r/pull/101" "the ready reading names the run's PR"
+  assert_equals "ready" "$(fleet_bucket_of "$out" "$d/state/fixround.meta")" \
+    "the green PR counts as ready for the merge word"
+
+  out=$(FM_FAKE_READY_CHECKS=FAILURE run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a red PR stays in the pipeline"
+  out=$(FM_FAKE_READY_CHECKS=PENDING run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "running checks stay in the pipeline"
+  out=$(FM_FAKE_READY_DRAFT=true run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a draft PR is never ready"
+  out=$(FM_FAKE_READY_STATE=CLOSED run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a closed PR is never ready"
+  out=$(FM_FAKE_READY_HEAD=3333333333333333333333333333333333333333 \
+    FM_FAKE_READY_CHECKS_HEAD=3333333333333333333333333333333333333333 run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "green at a head other than the run's own is not this run's green"
+
+  FM_FAKE_CI_LOGS=$(printf '%s\n  auto-fix round 1/3 starting after round 7 (1 finding)\n' "$CI_FIX_ROUND_GREEN_LOG")
+  out=$(run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a fix round started after the green marker is not ready"
+  FM_FAKE_CI_LOGS=$(printf '%s\n  running agent to fix CI issues...\n' "$CI_FIX_ROUND_GREEN_LOG")
+  out=$(run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a fix agent run after the green marker is not ready"
+
+  FM_FAKE_CI_LOGS=$CI_FIX_ROUND_GREEN_LOG
+  FM_FAKE_AXI_STATUS="$(run_ci_fix_round_watching fm/fixround fixing)"
+  out=$(run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" "a run that is itself fixing stays in the pipeline"
+  pass "a ci fix round watching a PR green at the run's head reads ready"
+}
+
+# A fix round that starts after an earlier green reading must not be masked
+# while the ci step row still says running.
+test_ci_monitoring_green_then_fix_round_stays_working() {
+  reset_fakes
+  local d out
+  d=$(new_case ci-green-then-round)
+  make_repo_on_branch "$d/wt" fm/feat-ciround
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-ciround.meta" "window=fm:fm-feat-ciround" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-ciround)"
+  FM_FAKE_CI_LOGS=$(printf '%s\n' \
+    '  all CI checks passed - still monitoring until merged or closed' \
+    '  auto-fix round 1/3 starting after round 1 (2 findings)')
+  out=$(run_crew_state "$d" feat-ciround)
+  assert_contains "$out" "state: working" "a fix round after green is not ready"
+  assert_not_contains "$out" "checks green" "a fix round after green is not checks green"
+  pass "a fix round starting after a green marker stays working"
 }
 
 # (d) terminal run-step is authoritative
@@ -6970,6 +7196,10 @@ test_ci_ready_done_log_relapse_stays_working
 test_ci_fixing_after_green_stays_working
 test_top_level_fixing_ci_running_after_green_stays_working
 test_top_level_fixing_done_log_stays_working
+test_ci_ready_done_with_pipeline_rewritten_head_reads_ready
+test_ci_ready_done_attributed_run_needs_the_run_head_on_the_forge
+test_ci_fix_round_watching_a_green_pr_reads_ready
+test_ci_monitoring_green_then_fix_round_stays_working
 test_terminal_passed
 test_terminal_passed_with_override
 test_terminal_passed_with_skips
