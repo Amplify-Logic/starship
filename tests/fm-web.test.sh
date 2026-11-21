@@ -492,6 +492,79 @@ test_send_reports_typed() {
   pass "a message typed into the chat is reported as typed"
 }
 
+# A long paste, such as a video transcript, goes through whole; a message past
+# the limit is refused with words that say what the limit is.
+test_a_long_paste_is_sent_and_the_limit_is_named() {
+  local home root port cookie csrf long out
+  home=$(make_home longpaste)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  long=$(python3 -c 'print("word " * 7000, end="")')
+  jq -nc --arg t "$long" '{text:$t}' > "$home/long.json"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/long.json" "http://127.0.0.1:$port/api/send")
+  assert_equals "$(jq -r '.outcome' <<<"$out")" "typed" "a 35,000 character paste is sent"
+  assert_equals "$(grep -c '^word word' "$home/desk-voice.args")" "1" "the whole paste reached desk voice"
+  rm -f "$home/desk-voice.args"
+  python3 -c 'import json; print(json.dumps({"text": "x" * 200001}))' > "$home/over.json"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/over.json" "http://127.0.0.1:$port/api/send")
+  assert_equals "$(jq -r '.detail' <<<"$out")" "the message is too long: at most 200,000 characters" "the refusal names the limit"
+  assert_absent "$home/desk-voice.args"
+  pass "a long paste is sent whole, and a message past the limit is refused naming the limit"
+}
+
+# A reply that names a file under the home's data or .lavish folder links it,
+# and the link opens the file read-only in its own type; anything outside, a
+# ../ escape, a symlink out, a hidden file or a missing file stays plain text
+# and is never served.
+test_a_reply_links_files_under_the_home_and_serves_them_read_only() {
+  local home port cookie out base hdr
+  home=$(make_home files)
+  mkdir -p "$home/data/task/.hidden" "$home/.lavish" "$home/state/private"
+  printf '<h1>Knowledge</h1><script>1</script>' > "$home/data/task/knowledge.html"
+  printf '# Report\n\nfound it\n' > "$home/data/task/report.md"
+  printf '\x89PNG\r\n\x1a\nchart' > "$home/data/task/chart.png"
+  printf 'board' > "$home/.lavish/board.html"
+  printf 'secret' > "$home/data/task/.hidden/key.txt"
+  printf 'private' > "$home/state/private/notes.md"
+  printf 'outside' > "$TMP_ROOT/outside.md"
+  ln -s "$TMP_ROOT/outside.md" "$home/data/task/escape.md"
+  jq -nc --arg t "Read data/task/knowledge.html, \`data/task/report.md\` and $home/data/task/chart.png. The board is $home/.lavish/board.html: open it. Not data/task/missing.md, $TMP_ROOT/outside.md, data/task/escape.md, data/task/.hidden/key.txt, state/private/notes.md, data/../state/private/notes.md or $home/state/private/notes.md." \
+    '{type:"assistant",uuid:"a1",message:{id:"m1",role:"assistant",content:[{type:"text",text:$t}]}}' > "$(transcript "$home")"
+  serve_home "$home"
+  port=$(cat "$home/web.test-port")
+  cookie=$(cat "$home/web.test-cookie")
+  out=$(conversation "$home" | jq -r '.items[0].html')
+  assert_equals "$(grep -o 'href="/api/file/[^"]*"' <<<"$out" | tr '\n' ' ')" \
+    'href="/api/file/data/task/knowledge.html" href="/api/file/data/task/report.md" href="/api/file/data/task/chart.png" href="/api/file/.lavish/board.html" ' \
+    "only the files under the home's data and .lavish folders are links"
+  assert_contains "$out" '<a href="/api/file/data/task/report.md" target="_blank" rel="noopener noreferrer"><code>data/task/report.md</code></a>'
+  assert_contains "$out" "chart.png</a>. The board"
+  assert_contains "$out" "board.html</a>: open it"
+  assert_contains "$out" "Not data/task/missing.md, $TMP_ROOT/outside.md, data/task/escape.md,"
+  base="http://127.0.0.1:$port/api/file"
+  hdr=$home/file.hdr
+  curl -sS -D "$hdr" -o "$home/file.body" --cookie "$cookie" "$base/data/task/knowledge.html"
+  assert_contains "$(cat "$hdr")" "200"
+  assert_contains "$(tr -d '\r' < "$hdr" | grep -i '^content-type:')" "text/html"
+  assert_contains "$(tr -d '\r' < "$hdr" | grep -i '^content-security-policy:')" "sandbox"
+  assert_equals "$(cat "$home/file.body")" '<h1>Knowledge</h1><script>1</script>' "the page is served as it is"
+  assert_equals "$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --cookie "$cookie" "$base/data/task/report.md")" "200 text/plain; charset=utf-8" "Markdown is served as text"
+  assert_equals "$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --cookie "$cookie" "$base/data/task/chart.png")" "200 image/png" "a picture is served as one"
+  assert_equals "$(curl -sS -o /dev/null -w '%{http_code}' --cookie "$cookie" "$base/.lavish/board.html")" "200" "a Lavish page is served"
+  assert_equals "$(status_of "$base/data/task/report.md")" "403" "a file needs the sign-in"
+  assert_equals "$(status_of --path-as-is --cookie "$cookie" "$base/data/../state/private/notes.md")" "404" "a ../ escape is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/data/%2e%2e/state/private/notes.md")" "404" "an encoded ../ escape is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/state/private/notes.md")" "404" "the home's other folders are refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/state/web/token")" "404" "the token is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/data/task/escape.md")" "404" "a symlink out of the home is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/data/task/.hidden/key.txt")" "404" "a hidden file is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/$TMP_ROOT/outside.md")" "404" "an absolute path is refused"
+  assert_equals "$(status_of --cookie "$cookie" "$base/data/task/missing.md")" "404" "a missing file is refused"
+  pass "a reply links files under the home's data and .lavish folders, served read-only, and nothing else"
+}
+
 # What bin/fm-factory.py --screen prints for a small invented fleet, in the
 # pane's own words, and what bin/fm-bridge-strip.sh fields prints beside it.
 write_screen() {  # <home>
@@ -1022,18 +1095,20 @@ kept[S.KEY] = '{not json';
 out.push('unreadable: ' + JSON.stringify(S.load(storage)));
 out.push('no storage: ' + JSON.stringify(S.load(null)) + ' ' + JSON.stringify(S.save(null, { text: 0 }).text));
 out.push('sizes: ' + S.TEXT_STEPS.join(' ') + ' | ' + S.TEXT_NAMES.join(' ') + ' | starts on ' + S.TEXT_NAMES[S.DEFAULTS.text]);
+out.push('chat width: ' + S.TEXT_NAMES.map((name, text) => { const p = page(); S.apply(p, { text }); return name + ' ' + p.style.props['--wrap']; }).join(', '));
 console.log(out.join('\n'));
 JS
 ) || fail "the settings script did not run: $out"
   assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
 after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
 next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"splitTab":0.7,"splitStack":0.3}
-on the page: 120% {"--split":"0.4","--split-tab":"0.7","--split-stack":"0.3"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
+on the page: 120% {"--wrap":"48rem","--split":"0.4","--split-tab":"0.7","--split-stack":"0.3"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
 a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"splitTab":0.62,"splitStack":0.2}
 unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
 no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5} 0
-sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal' "the settings a browser keeps and what they put on the page"
-  pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel sizes"
+sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal
+chat width: Smaller 60rem, Small 53.33rem, Normal 48rem, Large 48rem, Largest 48rem' "the settings a browser keeps and what they put on the page"
+  pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel sizes, and smaller text widens the chat"
 }
 
 # The page's rules, fetched as the browser fetches them and run without a page:
@@ -1188,6 +1263,8 @@ test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice
 test_send_uses_desk_voice_with_saved_images
 test_send_reports_typed
+test_a_long_paste_is_sent_and_the_limit_is_named
+test_a_reply_links_files_under_the_home_and_serves_them_read_only
 test_notices_fold_away_and_pasted_pictures_show_as_pictures
 test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
