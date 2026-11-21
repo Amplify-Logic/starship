@@ -23,8 +23,17 @@ document:
     branch diff again after every documentation or lint fix.
     Your summaries, findings and evidence become this repository's public PR title, description and comments: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
 
-# The PR step has no instructions setting, so the same public PR text rule
-# reaches the steps whose summaries and findings write the PR title,
+# PR text: the PR step fills .github/pull_request_template.md (a short plain
+# section first, technical detail folded) and folds the recorded risk, test
+# results and pipeline history into one closed Validation block. Both are
+# trusted-only, read from the default-branch copy of this file and template.
+# docs/fork-configuration.md "Gate defaults" owns this and how other projects opt in.
+pr:
+  template: .github/pull_request_template.md
+  appendix: collapsed
+
+# The PR step has no free-form instructions setting, so the same public PR text
+# rule reaches the steps whose summaries and findings write the PR title,
 # description and comments: review (every path), document and test.
 # docs/fork-configuration.md "Private leak words" owns the rule and its known gap.
 review:
@@ -66,7 +75,8 @@ test:
     Read docs/herdr-backend.md and the bin/fm-herdr-lab.sh header as the owners of Herdr lab mechanics rather than reproducing that manual here.
     Ship or scout briefs that will drive Herdr lifecycle still require --herdr-lab at scaffold time; these Test-agent instructions are not a substitute for that brief flag.
     Your summaries, findings and evidence become this repository's public PR title, description and comments: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
-    Inline evidence content is a short result line only, never raw logs, command output, file contents or paths from the home.
+    Raw logs, transcripts and command output stay on this machine: write them to files in the evidence directory and name each in its scenario's evidence by file name only, but list no such file in the artifacts array and give no artifact content, so the PR shows the scenario table and a short result line and nothing more.
+    Keep testing_summary to one or two plain sentences; the scenario table carries the detail.
   evidence:
     store_in_repo: false
     attach_media: false
