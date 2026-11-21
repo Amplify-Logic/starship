@@ -880,6 +880,84 @@ test_only_the_highlighted_call_opens_as_a_card() {
   pass "factory pane: only the highlighted call opens as a card; every other call is one line"
 }
 
+# Merges are answered on the Factory pane, so finished work shows the short
+# plain section its PR opens with (In short, See it, You need to, Risk) beside the
+# merge choice, read once and kept, and a PR without that section shows none.
+test_finished_work_shows_its_pr_short_section_beside_the_merge_choice() {
+  reset_case
+  write_registry
+  write_world
+  cat > "$BINDIR/pr-body$CASE" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$FM_HOME/pr-reads"
+[ -e "$FM_HOME/no-template" ] && { printf 'Just a plain description.\n'; exit 0; }
+[ -e "$FM_HOME/linked" ] && { printf '# In short\nSee [the share page](https://example.invalid/share) now.\n\n# See it\n\n![The Share button](https://example.invalid/shot.png)\n'; exit 0; }
+cat <<'MD'
+<!-- How to fill this in. -->
+
+# In short
+
+<!-- One or two sentences. -->
+A garden page can now be shared as a **picture**.
+
+# See it
+
+Open a garden page and press Share.
+
+# You need to
+
+Nothing.
+
+# Risk
+
+Low: a very long page may be cut short.
+
+<details>
+<summary>Technical detail</summary>
+
+## Risk
+
+High, from the folded part.
+
+</details>
+MD
+SH
+  chmod +x "$BINDIR/pr-body$CASE"
+  export FM_FACTORY_PR_BODY="$BINDIR/pr-body$CASE"
+  local out screen
+  out=$(python3 "$FACTORY" --plain --width 92 --item garden-share) || fail "--plain failed"
+  assert_contains "$out" "$(printf '%s\n' \
+    "       In short     A garden page can now be shared as a picture." \
+    "       See it       Open a garden page and press Share." \
+    "       You need to  Nothing." \
+    "       Risk         Low: a very long page may be cut short." \
+    "       k  keep it    c  ask for changes")" "the short section does not sit above the merge choice"
+  assert_not_contains "$out" "folded part" "the folded detail was read as the short section"
+  screen=$(python3 "$FACTORY" --screen) || fail "--screen failed"
+  assert_equals "$(printf '%s' "$screen" | jq -r '.needs[] | select(.id == "garden-share") | .summary | map("\(.label)=\(.text)") | join("|")')" \
+    "In short=A garden page can now be shared as a picture.|See it=Open a garden page and press Share.|You need to=Nothing.|Risk=Low: a very long page may be cut short." \
+    "the screen data does not carry the short section"
+  assert_equals "$(printf '%s' "$screen" | jq -r '[.needs[] | select(.kind == "question") | .summary | length] | add')" "0" \
+    "a question carries a short section"
+  assert_equals "$(sort -u "$HOME_FIX/pr-reads")" "https://example.invalid/g/pull/12" "the PR read is not the finished work's"
+  assert_equals "$(wc -l < "$HOME_FIX/pr-reads" | tr -d ' ')" "1" "the short section was read again while it was kept"
+  # Kept half an hour, then read again: a PR opened without the template shows none.
+  touch "$HOME_FIX/no-template"
+  out=$(FM_FACTORY_NOW=$((NOW + 1801)) python3 "$FACTORY" --plain --width 92 --item garden-share) || fail "--plain failed"
+  assert_equals "$(wc -l < "$HOME_FIX/pr-reads" | tr -d ' ')" "2" "the short section was not read again after half an hour"
+  assert_not_contains "$out" "In short" "a PR without the short section showed one"
+  assert_contains "$out" "       k  keep it    c  ask for changes" "the merge choice is missing"
+  # A link or a screenshot in the short section reads as its words, never as half-written markdown.
+  rm "$HOME_FIX/no-template"; touch "$HOME_FIX/linked"
+  out=$(FM_FACTORY_NOW=$((NOW + 3602)) python3 "$FACTORY" --plain --width 92 --item garden-share) || fail "--plain failed"
+  assert_contains "$out" "$(printf '%s\n' \
+    "       In short     See the share page now." \
+    "       See it       The Share button")" "a link or a screenshot in the short section did not read as its words"
+  assert_not_contains "$out" "](" "a link or a screenshot showed as markdown"
+  unset FM_FACTORY_PR_BODY
+  pass "factory pane: finished work shows its PR's In short, See it, You need to and Risk beside the merge choice"
+}
+
 # On 2026-11-15 the feed listed jobs as finished that had only been closed.
 # Finished work is work the backlog holds a merged change, a landing or a
 # report for; anything else that was closed reads closed.
@@ -3704,6 +3782,7 @@ fm_test_run \
   test_an_opened_list_closes_when_its_folded_work_is_gone \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
+  test_finished_work_shows_its_pr_short_section_beside_the_merge_choice \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
   test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
   test_a_folded_pass_counts_as_idle_and_hides_no_other_card \

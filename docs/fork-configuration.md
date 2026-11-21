@@ -20,7 +20,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
-| Answering held decisions and ready merges by tapping on the phone | [Phone tap desk](#phone-tap-desk-configtap-desk) |
+| Answering held decisions by tapping on the phone, and ready merges too once switched on | [Phone tap desk](#phone-tap-desk-configtap-desk) |
 | Which pull requests land by themselves and who must say yes to the rest | [Merge rule table](#merge-rule-table-configmerge-rules) |
 | Waking the first mate when something arrives in a Mothership room | [Mothership monitoring](#mothership-monitoring-configmothership-monitor) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
@@ -898,7 +898,9 @@ The file's presence also switches on the `meeting-intake` skill as an [opt-in sk
 ## Phone tap desk (config/tap-desk)
 
 Optional, private, gitignored, and not inherited by secondmate homes; any file at the path turns it on, whatever it holds.
-Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which has firstmate put every decision held for the captain that waits on him now, and every ready task PR, on one private claude.ai artifact page where each is answered with a single tap, optionally with a short reason.
+Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which has firstmate put every decision held for the captain that waits on him now on one private claude.ai artifact page where each is answered with a single tap, optionally with a short reason.
+Ready merges are answered on the [Factory pane](factory-pane.md), which shows each PR's short section beside the merge choice, so the page lists them as not on it rather than carrying merge cards.
+A file at `config/tap-desk-merges`, whatever it holds, turns phone merging back on: the page then carries a merge card for every ready task PR as well.
 The page needs a Claude Code primary that can publish artifacts and read their database.
 Its private records live under `data/tap-desk/`: the card file and page `bin/fm-tap-desk.sh export` writes, the artifact link, the downloaded taps, and `ledger.jsonl`, the record of every routed tap and seven-day default; reasons also land in the decision record and as rule candidates in `data/learnings.md`.
 `bin/fm-tap-desk.sh`'s header owns the card format, routing, refusals, and default rules, and the skill owns when firstmate runs them.
