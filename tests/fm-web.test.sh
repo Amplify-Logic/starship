@@ -59,7 +59,8 @@ transcript() {  # <home> [<session>]
 
 # A root with the real server linked in and stand-ins for what it runs:
 # fm-desk-voice.sh records its arguments, and for suggestion prints the home's
-# suggestion file; fm-factory.py prints the home's
+# suggestion file (each waiting the seconds in send.delay or suggestion.delay,
+# when there is one, after reading); fm-factory.py prints the home's
 # screen.json for --screen (and fails when there is none) and, for act, records
 # the action it was handed in act.asks and answers with the home's act.answer;
 # fm-bridge-strip.sh prints the home's strip.fields, or fails without one.
@@ -103,12 +104,16 @@ SH
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 if [ "\$*" = suggestion ]; then
+  said=\$(cat "$home/suggestion" 2>/dev/null)
+  delay=\$(cat "$home/suggestion.delay" 2>/dev/null)
   printf 'suggestion\n' >> "$home/suggestion.reads"
-  cat "$home/suggestion" 2>/dev/null
+  [ -z "\$delay" ] || sleep "\$delay"
+  printf '%s\n' "\$said"
   exit 0
 fi
 printf '%s\n' "\$@" > "$home/desk-voice.args"
 printf 'FM_HOME=%s\n' "\$FM_HOME" >> "$home/desk-voice.args"
+[ ! -e "$home/send.delay" ] || sleep "\$(cat "$home/send.delay")"
 printf '%s\n' "$2"
 SH
   chmod +x "$root/bin/fm-desk-voice.sh"
@@ -676,6 +681,72 @@ test_the_suggested_prompt_reaches_the_page_only_while_ready() {
   pass "the suggested prompt reaches the page only while firstmate is ready"
 }
 
+# A suggestion read that was still under way when a turn began belongs to the
+# turn before, so it never comes back once that new turn ends.
+test_a_suggestion_read_from_before_a_turn_is_dropped() {
+  local home out n=0 seen=""
+  home=$(make_home suggestion-stale)
+  write_basic_transcript "$(transcript "$home")"
+  printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s9"}' >> "$(transcript "$home")"
+  printf 'the old suggestion\n' > "$home/suggestion"
+  printf '1.5\n' > "$home/suggestion.delay"
+  serve_home "$home"
+  assert_equals "$(jq -r '.state' <<<"$(conversation "$home")")" "idle" "the turn has ended"
+  while [ ! -s "$home/suggestion.reads" ] && [ "$n" -lt 50 ]; do conversation "$home" >/dev/null; sleep 0.1; n=$((n + 1)); done
+  [ -s "$home/suggestion.reads" ] || fail "the suggestion was never read"
+  printf 'the new suggestion\n' > "$home/suggestion"
+  rm "$home/suggestion.delay"
+  printf '%s\n' '{"type":"user","uuid":"u9","origin":{"kind":"human"},"message":{"role":"user","content":"go on"}}' >> "$(transcript "$home")"
+  assert_equals "$(jq -r '.state' <<<"$(conversation "$home")")" "busy" "a new turn is under way"
+  printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s10"}' >> "$(transcript "$home")"
+  n=0
+  while [ "$n" -lt 30 ]; do
+    out=$(jq -r '.suggestion' <<<"$(conversation "$home")")
+    [ "$out" = "the old suggestion" ] && fail "a suggestion read before the turn came back after it"
+    seen=$out
+    [ "$seen" = "the new suggestion" ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$seen" "the new suggestion" "the suggestion after the turn is read afresh"
+  pass "a suggestion read from before a turn is dropped"
+}
+
+# A restart waits for a send under way, so the page hears how its send went
+# and never asks for it again.
+test_a_restart_waits_for_a_send_under_way() {
+  local home root code port cookie csrf n=0 status
+  home=$(make_home restart-send)
+  root=$(make_root "$home" "sent: tmux %1")
+  code=$home/code/fm-web.py
+  mkdir -p "$home/code"
+  cp "$ENGINE" "$code"
+  : > "$home/web-serve.log"
+  HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" FM_WEB_CODE_CHECK_SECONDS=0.2 \
+    python3 "$code" serve --home "$home" --root "$root" --port 0 >"$home/web-serve.log" 2>&1 &
+  printf '%s\n' "$!" >> "$WEB_PID_FILE"
+  while [ "$n" -lt 50 ] && ! grep -qE '^listening on' "$home/web-serve.log"; do sleep 0.1; n=$((n + 1)); done
+  port=$(sed -n 's/^listening on 127\.0\.0\.1:\([0-9]*\)$/\1/p' "$home/web-serve.log" | head -n 1)
+  [ -n "$port" ] || fail "the server did not start: $(cat "$home/web-serve.log")"
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  printf '2\n' > "$home/send.delay"
+  curl -sS -o "$home/send.out" -w '%{http_code}' -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" \
+    --data '{"text":"hello"}' "http://127.0.0.1:$port/api/send" > "$home/send.status" 2>&1 &
+  n=0
+  while [ ! -e "$home/desk-voice.args" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -e "$home/desk-voice.args" ] || fail "the send did not reach desk voice"
+  printf '\n# a newer version\n' >> "$code"
+  wait $!
+  status=$(cat "$home/send.status")
+  assert_equals "$status" "200" "the send under way is answered before the restart"
+  assert_contains "$(cat "$home/send.out")" "typed" "the page hears the send went through"
+  n=0
+  while ! grep -q 'changed on disk; restarting' "$home/web-serve.log" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  assert_contains "$(cat "$home/web-serve.log")" "changed on disk; restarting" "the server still restarts after the send"
+  pass "a restart waits for a send under way"
+}
+
 # The server restarts itself in place when its own code on disk changes, so an
 # update shows without restarting it by hand, and the page learns it runs
 # newer code; code that does not compile leaves the running server alone.
@@ -1070,6 +1141,8 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words
 test_the_mirror_shows_the_terminal_status_row
 test_the_suggested_prompt_reaches_the_page_only_while_ready
 test_the_server_restarts_itself_when_its_code_changes
+test_a_suggestion_read_from_before_a_turn_is_dropped
+test_a_restart_waits_for_a_send_under_way
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes

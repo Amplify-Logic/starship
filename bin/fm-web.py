@@ -1315,21 +1315,23 @@ def suggestion_reader(home: Path, root: Path) -> Any:
     every SUGGESTION_TTL_SECONDS and only while the first mate is ready, so a
     poll never waits on the screen read; while it works there is none."""
     lock = threading.Lock()
-    held = {"value": "", "at": 0.0, "reading": False}
+    held = {"value": "", "at": float("-inf"), "reading": False, "turn": 0}
 
-    def read() -> None:
+    def read(turn: int) -> None:
         value = read_suggestion(home, root)
         with lock:
-            held.update(value=value, at=time.monotonic(), reading=False)
+            held["reading"] = False
+            if held["turn"] == turn:
+                held.update(value=value, at=time.monotonic())
 
     def get(ready: bool) -> str:
         with lock:
             if not ready:
-                held.update(value="", at=0.0)
+                held.update(value="", at=float("-inf"), turn=held["turn"] + 1)
                 return ""
             if not held["reading"] and time.monotonic() - held["at"] >= SUGGESTION_TTL_SECONDS:
                 held["reading"] = True
-                threading.Thread(target=read, daemon=True).start()
+                threading.Thread(target=read, args=(held["turn"],), daemon=True).start()
             return held["value"]
 
     return get
@@ -1976,7 +1978,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 result = desk_voice_send(STATE.home, STATE.root, text, images)
             except (OSError, subprocess.SubprocessError) as exc:
                 result = {"outcome": "failed", "detail": str(exc)}
-        self._json(200 if result["outcome"] != "failed" else 502, result)
+            self._json(200 if result["outcome"] != "failed" else 502, result)
 
     def _act(self, body: bytes) -> None:
         try:
@@ -1989,8 +1991,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 status, answer = factory_act(STATE.home, STATE.root, ask)
             except (OSError, subprocess.SubprocessError) as exc:
                 status, answer = 502, {"ok": False, "said": f"Not sent: {exc}."}
-        STATE.mirror.drop()
-        self._json(status, answer)
+            STATE.mirror.drop()
+            self._json(status, answer)
 
 
 # --- page --------------------------------------------------------------------
@@ -3621,6 +3623,8 @@ def watch_code(port: int) -> None:
         sys.stderr.flush()
         os.environ["FM_WEB_RESTARTED"] = "1"
         argv = restart_argv(port)
+        STATE.send_lock.acquire()
+        STATE.act_lock.acquire()
         os.execv(argv[0], argv)
 
 

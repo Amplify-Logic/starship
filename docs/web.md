@@ -139,7 +139,7 @@ It signs that window in with a link that works once, within two minutes, so the 
 Once in, the browser offers to keep it as an installed app: in Chrome, Install Starship from the menu; in Safari, File, then Add to Dock.
 The page carries a web app manifest and the Starship ship as its icon for that.
 
-The server restarts itself when its own code changes on disk, so a Starship update shows on the page without restarting anything by hand: it checks every two seconds, waits until the new code reads the same twice and compiles, and keeps running the old code otherwise.
+The server restarts itself when its own code changes on disk, so a Starship update shows on the page without restarting anything by hand: it checks every two seconds, waits until the new code reads the same twice and compiles, and keeps running the old code otherwise. A send or button press under way finishes and gets its answer before the restart.
 It keeps its process and port, and an open page reloads itself once it sees the new code, unless words or pictures are waiting in its message box.
 
 `start` prints the long-lived sign-in link, `http://127.0.0.1:8767/?token=...`; the first visit swaps the token for a cookie and drops it from the address bar.
