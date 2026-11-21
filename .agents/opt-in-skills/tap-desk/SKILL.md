@@ -10,10 +10,11 @@ metadata:
 
 # tap-desk
 
-The captain answers held decisions and ready merges from the phone with one tap each, never by voice and never as chat questions.
+The captain answers held decisions from the phone with one tap each, never by voice and never as chat questions.
+Ready merges are answered on the Factory pane, which shows each PR's short section beside the merge choice; the page carries merge cards only while `config/tap-desk-merges` turns phone merging on (`bin/fm-tap-desk.sh` header).
 `bin/fm-tap-desk.sh` owns the mechanics: the card format, how a tap is checked and routed, the default rules, and the records it keeps; read its header for anything this skill does not say.
 Every answer still lands through `bin/fm-captain-hold.sh` and every merge through `bin/fm-pr-merge.sh`.
-A merge tap is the captain's explicit word for that one PR at that one head, and nothing else: route passes it as `--captain-approved` with the card's head pinned, so the card says plainly when the PR was opened by another account or changes Starship's own rules, and fm-pr-merge still runs every other check and refuses that yes while the away record exists.
+With phone merging on, a merge tap is the captain's explicit word for that one PR at that one head, and nothing else: route passes it as `--captain-approved` with the card's head pinned, so the card says plainly when the PR was opened by another account or changes Starship's own rules, and fm-pr-merge still runs every other check and refuses that yes while the away record exists.
 
 ## The page
 
@@ -27,7 +28,8 @@ Keep one tap page per home: a private claude.ai artifact whose link is recorded 
    Send the captain the link once, and afterwards only when new cards are waiting, in one plain line rather than a question.
 
 The page carries exactly the owner's calls, the same count the bridge strip and the Factory pane show; a hold that is aged, deferred to a date, or waiting on other work gets no card until it waits on him again (`bin/fm-tap-desk.sh` header owns the rule).
-Only a PR the fleet reader calls ready (green, not validating, not needing attention) gets a merge card. A PR that is ready to merge goes on the page instead of into a chat question; the captain-facing line names the PR's full URL and says it is waiting on the tap page.
+A PR that is ready to merge is never a chat question: the captain-facing line names the PR's full URL and says it is waiting on the Factory pane, or on the tap page while phone merging is on.
+With phone merging on, only a PR the fleet reader calls ready (green, not validating, not needing attention) gets a merge card.
 
 ## Reading taps
 
@@ -46,7 +48,7 @@ At every wake while the page is published, and whenever the captain says they ta
    - `kept`: leave it held; it moves to the page's kept list and never gets the seven-day default.
    - `merged`: give the captain the one-line outcome with the PR's full URL, as for any merge.
    - `not-yet`: leave the PR open; do not ask again until its head changes or the captain raises it.
-   - `stale`: the question or PR changed after the card was made (for a merge: a new head, a PR closed or merged elsewhere, or the task's next PR); it is recorded once, so republish so the captain sees the current card.
+   - `stale`: the question or PR changed after the card was made (for a merge: a new head, a PR closed or merged elsewhere, the task's next PR, or phone merging switched off); it is recorded once, so republish so the captain sees the current card.
    - `refused`: the guarded path said no; read why. A refusal that will clear by itself, such as checks still running or the away record blocking a release or a merge, is retried on the next route; anything else is a blocker to report in plain words.
 4. Re-export and republish, then tell the captain what landed in one short reply.
 

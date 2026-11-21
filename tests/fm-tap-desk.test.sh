@@ -128,6 +128,17 @@ case "$1" in
 esac
 EOF
   chmod +x "$FAKEBIN/reader"
+  # Merges are answered on the Factory pane: without phone merging the page
+  # carries no merge card, names each ready merge as not shown, and keeps the count.
+  home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export > "$HOME_DIR/export.out" || fail "export failed"
+  assert_grep "merges: 0" "$HOME_DIR/export.out" "the page carried merge cards with phone merging off"
+  assert_grep "not shown: ship-pr: ready to merge; answer it on the Factory pane" "$HOME_DIR/export.out" \
+    "a ready merge was not pointed at the Factory pane"
+  assert_grep "not shown: ship-rules: ready to merge; answer it on the Factory pane" "$HOME_DIR/export.out" \
+    "a ready merge was not pointed at the Factory pane"
+  assert_grep "owner's calls: 6" "$HOME_DIR/export.out" "phone merging off changed the owner's calls"
+  assert_no_grep '"kind": "merge"' "$HOME_DIR/data/tap-desk/cards.json" "a merge card was written with phone merging off"
+  : > "$HOME_DIR/config/tap-desk-merges"
   home_env FM_FLEET_STATE_READER="$FAKEBIN/reader" "$DESK" export > "$HOME_DIR/export.out" || fail "export failed"
   assert_grep "decisions: 2" "$HOME_DIR/export.out" "export did not count both captain calls"
   assert_grep "merges: 2" "$HOME_DIR/export.out" "export did not count only the ready merges"
@@ -463,6 +474,14 @@ printf '%s\n' "\$*" >> "$HOME_DIR/merge.calls"
 exit 0
 EOF
   chmod +x "$FAKEBIN/fake-merge"
+  # With phone merging off, a merge tap from an older page is stale once and never merges.
+  write_tap "$taps" m.ship-pr merge ship-pr "$head" merge "" "" "$pr"
+  out=$(home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply) || fail "an old merge tap failed: $out"
+  assert_contains "$out" "stale: ship-pr: phone merging is off; answer it on the Factory pane" \
+    "a merge tap with phone merging off was not stale"
+  assert_absent "$HOME_DIR/merge.calls" "a merge tap with phone merging off reached the merge command"
+  rm -rf "$taps"
+  : > "$HOME_DIR/config/tap-desk-merges"
   write_tap "$taps" m.ship-pr merge ship-pr "$head" not-yet "" "Wait for the demo" "$pr"
   home_env FM_TAP_DESK_MERGE_BIN="$FAKEBIN/fake-merge" "$DESK" route --taps "$taps" --apply > "$HOME_DIR/notyet.out" || fail "not yet failed"
   assert_absent "$HOME_DIR/merge.calls" "not yet called the merge command"

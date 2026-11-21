@@ -512,7 +512,9 @@ write_screen() {  # <home>
    "kind": "finished work", "ask": "The queued orders page is ready to merge", "title": "The queued orders page",
    "why": "", "options": [], "suggested_by": "Starship", "recommendation": "", "holds_up": [],
    "waited": "ready 1 h 49 min", "answered": null, "checking": false, "mate": null,
-   "pr": "https://example.invalid/g/pull/12", "read": false}],
+   "pr": "https://example.invalid/g/pull/12", "read": false,
+   "summary": [{"label": "In short", "text": "Queued orders get a page of their own."},
+               {"label": "You need to", "text": "Nothing."}, {"label": "Risk", "text": "Low."}]}],
  "factories": [
   {"id": "garden-journal", "name": "Garden Journal", "state": "needs you", "steered_by": "you",
    "about": ["a phone journal for a vegetable garden", "2 workers, 1 busy"], "queue": "3 queued · 2 in line",
@@ -593,6 +595,10 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   # doing, are left as written even when they hold one of those words.
   assert_equals "$(m '.needs[1] | "\(.ask)|\(.question)|\(.pr)"')" \
     "The queued orders page is ready for your OK|false|https://example.invalid/g/pull/12" "finished work"
+  assert_equals "$(m '.needs[1].summary | map("\(.label): \(.text)") | join(" / ")')" \
+    "In short: Queued orders get a page of their own. / You need to: Nothing. / Risk: Low." \
+    "finished work carries its PR's short section beside the merge choice"
+  assert_equals "$(m '.needs[0].summary | length')" "0" "a question carries no short section"
   assert_equals "$(m '.projects[0].jobs | map("\(.title): \(.words) [\(.mark)]") | join("; ")')" \
     "Garden reminders: sorting the queued reminders [work]; The queued orders page: ready for your OK [done]; Print seed labels: waiting, tries again 09:30 [work]" \
     "a project's jobs"

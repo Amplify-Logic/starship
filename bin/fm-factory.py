@@ -102,11 +102,18 @@ activity.json (when each worker's pane last changed), last-look
 (when the owner last looked: the newest sign of a look on its first line, when
 the look before that ended on its second), steer.log (who steers each factory),
 tabs/ (the factory tabs it opened), talk-<pid>.wav while a spoken note is
-being written down, and read.log (what the last Read printed). A look is a key
+being written down, read.log (what the last Read printed), and
+pr-summaries.json (each ready PR's short section, kept half an hour). A look is a key
 pressed in the pane, or the pane focused in Herdr for a few seconds (asked with
 `herdr pane get`); focus alone keeps a look going for at most 15 minutes after
 the focus began or the last key press, so a pane left focused does not look
 forever. A factory's own tab records none, since it shows one factory only.
+
+A PR's short section. Finished work waiting for the merge word shows the In
+short, You need to and Risk parts of its PR's description (the sections
+.github/pull_request_template.md asks for) above `k  keep it`, read with
+`gh pr view` for a GitHub PR and kept for half an hour (pr_summaries); a PR
+opened without those sections, or one that cannot be read, shows none.
 
 Read. A call or job has something to read when its task has a report or a page
 of its own (data/<id>/report.md or data/<id>/page.html) or its hold reason names
@@ -203,6 +210,9 @@ Test seams:
                               `<cmd> <audio-file>` (default
                               bin/fm-deepgram-stt.sh); set, it also stands in
                               for the speech key
+  FM_FACTORY_PR_BODY          the command that prints a PR's description, run
+                              as `<cmd> <pr-url>` (default `gh pr view`, for
+                              GitHub PRs only); empty reads none
   FM_FACTORY_READ             reader command, run with the item's read sources
                               as arguments (default bin/fm-read.sh)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
@@ -1106,6 +1116,91 @@ def plain_words(value: Any) -> str:
     return "" if text.strip().lower() in ("", "none", "null", "-", "undefined") else text
 
 
+# The short plain section a PR opens with (.github/pull_request_template.md),
+# shown beside the merge choice: these three of its parts, in this order.
+PR_SUMMARY_PARTS = ("In short", "You need to", "Risk")
+# How long a PR's short section is kept before it is read again.
+PR_SUMMARY_KEEP = 1800
+
+
+def pr_summary(body: Optional[str]) -> List[Dict[str, str]]:
+    """The In short, You need to and Risk lines of a PR description, each as plain words.
+
+    A part is the text under its heading up to the next heading or the folded
+    technical detail, with the template's comments left out; a part that is
+    missing or empty is left out, so a PR opened without the template shows none.
+    """
+    text = re.sub(r"<!--.*?(?:-->|$)", "", body or "", flags=re.S)
+    parts: Dict[str, List[str]] = {}
+    current: Optional[str] = None
+    for line in text.splitlines():
+        if re.match(r"\s*<details\b", line, re.I):
+            break
+        heading = re.match(r"\s{0,3}#{1,3}\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            name = heading.group(1).strip().lower()
+            current = name if name not in parts else None
+            if current is not None:
+                parts[current] = []
+            continue
+        if current is not None:
+            parts[current].append(re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", line).strip())
+    summary = []
+    for label in PR_SUMMARY_PARTS:
+        words = re.sub(r"\*\*|__|`", "", " ".join(parts.get(label.lower()) or []))
+        words = tidy(words, 240)
+        if words:
+            summary.append({"label": label, "text": words})
+    return summary
+
+
+def pr_body_command(url: str) -> Optional[List[str]]:
+    """The command that prints a PR's description, or None when it is not read."""
+    seam = os.environ.get("FM_FACTORY_PR_BODY")
+    if seam is not None:
+        return shlex.split(seam) + [url] if seam.strip() else None
+    if not re.match(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+$", url):
+        return None
+    return ["gh", "pr", "view", url, "--json", "body", "--jq", ".body"]
+
+
+def pr_summaries(home: str, urls: List[str], now: int) -> Dict[str, List[Dict[str, str]]]:
+    """Each PR's short section, read once and kept in state/factory/pr-summaries.json for PR_SUMMARY_KEEP.
+
+    A PR that cannot be read is kept as having none for the same time, so a
+    rebuild never waits on it again and again; the reads run side by side.
+    """
+    path = os.path.join(pane_dir(home), "pr-summaries.json")
+    try:
+        kept = json.loads(read_text(path, 8_000_000) or "{}")
+    except ValueError:
+        kept = {}
+    kept = kept if isinstance(kept, dict) else {}
+    wanted = sorted(set(u for u in urls if u))
+    fresh = {u: kept[u] for u in wanted if isinstance(kept.get(u), dict)
+             and isinstance(kept[u].get("at"), int) and 0 <= now - kept[u]["at"] < PR_SUMMARY_KEEP}
+    stale = [u for u in wanted if u not in fresh and pr_body_command(u)]
+
+    def read(url: str) -> Dict[str, Any]:
+        try:
+            out = subprocess.run(pr_body_command(url) or ["false"], capture_output=True, text=True, timeout=15,
+                                 stdin=subprocess.DEVNULL)
+            body = out.stdout if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            body = ""
+        return {"at": now, "summary": pr_summary(body)}
+
+    if stale:
+        for url, entry in zip(stale, side_by_side(*[(lambda u=u: read(u)) for u in stale])):
+            fresh[url] = entry
+    if stale or set(kept) - set(fresh):
+        try:
+            write_atomic(path, json.dumps(fresh))
+        except OSError:
+            pass
+    return {u: list(e.get("summary") or []) for u, e in fresh.items()}
+
+
 # --------------------------------------------------------------------------
 # The record
 # --------------------------------------------------------------------------
@@ -1512,6 +1607,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                       "title": pr["child"], "why": None, "options": [], "suggested_by": None,
                       "recommendation": None, "holds_up": [], "since": pr["since"], "for": "you",
                       "pr": pr["url"], "checking": False, "read": [], "mate": pr["mate"]})
+
+    # Finished work shows its PR's short section beside the merge choice.
+    summaries = pr_summaries(home, [n["pr"] for n in needs if n["kind"] == "finished work" and n.get("pr")], now)
+    for need in needs:
+        if need["kind"] == "finished work":
+            need["summary"] = summaries.get(need.get("pr") or "", [])
 
     activity = dict(activity)
     seen_pane = activity
@@ -2728,6 +2829,9 @@ class View:
             if need.get("holds_up"):
                 rows += flow(width, [pad, S("holds up ", "faint")], ", ".join(need["holds_up"][:3]), "mist")
         else:
+            # The PR's short section, beside the merge choice it informs.
+            for part in need.get("summary") or []:
+                rows += flow(width, [pad, S("%-13s" % part["label"], "faint")], part["text"], "ice")
             if need.get("pr") and full:
                 rows.append(row(width, [pad, S("the change ", "faint"), S(need["pr"], "mist")]))
             if need.get("read"):
@@ -3228,6 +3332,7 @@ def screen(view: View) -> Dict[str, Any]:
                 "holds_up": list(need.get("holds_up") or [])[:3], "waited": view.waited(need),
                 "answered": {"key": sent.get("key")} if sent else None,
                 "checking": bool(need.get("checking")), "mate": need.get("mate"), "pr": need.get("pr"),
+                "summary": [{"label": p["label"], "text": p["text"]} for p in need.get("summary") or []],
                 "read": bool(need.get("read"))}
 
     def job_of(job: Dict[str, Any]) -> Dict[str, Any]:

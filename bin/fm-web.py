@@ -1104,6 +1104,11 @@ def _need_model(need: Dict[str, Any]) -> Dict[str, Any]:
         "checking": bool(need.get("checking")),
         "mate": need.get("mate") or "",
         "pr": need.get("pr") or "",
+        "summary": [
+            {"label": part.get("label") or "", "text": part.get("text") or ""}
+            for part in need.get("summary") or []
+            if isinstance(part, dict) and part.get("text")
+        ],
         "read": bool(need.get("read")),
     }
 
@@ -2275,6 +2280,9 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .talk .unsent{margin-top:.4rem}
 .rowb{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.5rem}
 .call-body>.rowb{margin-top:.5rem}
+.pr-short{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .8rem;margin:0;font-size:.9rem}
+.pr-short dt{color:var(--ink-2)}
+.pr-short dd{margin:0}
 .holds{font-size:.84rem;color:var(--ink-2)}
 .holds a{color:var(--here);overflow-wrap:anywhere}
 .said{font-size:.875rem;border-radius:.56rem;padding:.375rem .7rem;background:var(--here-bg);color:var(--here);font-weight:500}
@@ -3010,6 +3018,9 @@ function callCard(n){
     body.appendChild(el('p','said',(option?'You answered: '+option.label+'.':n.question?'You answered.':'You asked to keep it.')
       +' Waiting for Starship to act on it.'));
   }
+  if(!n.question&&(n.summary||[]).length){const dl=el('dl','pr-short');
+    n.summary.forEach(p=>{dl.appendChild(el('dt','',p.label));dl.appendChild(el('dd','',p.text));});
+    body.appendChild(dl);}
   const pending=confirming&&confirming.item===n.id?confirming:null;
   if(n.question&&n.options.length){
     const opts=el('div','opts');

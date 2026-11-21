@@ -2,7 +2,10 @@
 # fm-tap-desk.sh - phone tap cards over captain decisions and ready merges.
 #
 # One private card file and one phone page let the captain answer every task
-# held for the captain, and every ready task PR, with a single tap. There is no
+# held for the captain, and, while phone merging is on, every ready task PR,
+# with a single tap. Merges are answered on the Factory pane by default
+# (docs/factory-pane.md); a file at the home's config/tap-desk-merges turns
+# phone merging on. There is no
 # second decision lifecycle: a decision answer goes through
 # bin/fm-captain-hold.sh answer as a compare-and-answer (--expect-identity), and
 # a merge tap only ever through bin/fm-pr-merge.sh with every one of its checks.
@@ -23,8 +26,10 @@
 # bridge strip and the Factory pane show): each live decision held for the
 # captain, read through `fm-captain-hold.sh open --identity` whatever the
 # task's own kind, and each task whose work is ready to land and carries no
-# open captain hold. A merge card needs pr= in the task's metadata naming an
-# open, non-draft GitHub pull request, read live with gh. A PR still
+# open captain hold. With phone merging off, each ready merge is named under
+# not_shown as answered on the Factory pane and gets no card. A merge card
+# needs pr= in the task's metadata naming an open, non-draft GitHub pull
+# request, read live with gh. A PR still
 # validating, red, or needing attention is no call and gets no card; a hold
 # that is aged, deferred to a date that has not come, or waiting on other work
 # is no call either; and a call that cannot be carded (no PR, a draft,
@@ -75,7 +80,8 @@
 #     which fm-captain-hold refuses while the away record exists;
 #   - keep leaves the hold in place and notes the keep and its reason in the
 #     task body, and that question is then never given the seven-day default;
-#   - a merge tap is stale and records once when the task no longer records
+#   - a merge tap is stale and records once while phone merging is off, and
+#     when the task no longer records
 #     the card's PR, or that PR, read live, is no longer open or has a head
 #     other than the card's;
 #   - merge runs `fm-pr-merge.sh <task> <pr> --captain-approved --expected-head

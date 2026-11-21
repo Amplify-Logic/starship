@@ -60,6 +60,8 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   A question shows its why, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
   Those options come only from the hold's recorded marks or an `Options:` list in its reason, never from a title or a sentence cut into pieces.
   A question with no options recorded shows only its plain words and `Talk it through`.
+  Finished work with a pull request shows that PR's In short, You need to and Risk lines from its description above `k  keep it`, the short section every pipeline PR opens with ([PR text](fork-configuration.md#pr-text)), so the merge word can be given here in a minute; a PR opened without those sections, or one that cannot be read, shows none, and each PR is read once every half hour.
+  Merges are answered here and on the web mirror rather than on the phone tap page, unless the home turned [phone merging](fork-configuration.md#phone-tap-desk-configtap-desk) back on.
   A call with something to read shows an `r  Read the report` line; see [Reading the work](#reading-the-work).
   Only the highlighted one opens as a card, every word of its title and each option wrapped to the pane's width, and the highlight starts on the first; every other one stays one line with its factory and how long it has waited, its title shortened on a whole word with an ellipsis, so a long list still leaves room for the floor.
   A call you already answered, or finished work you asked to keep, says so in place of its wait (`answered 14:02, waiting for Starship`) and marks the option you picked, also after a restart, until the call is settled and leaves the list.

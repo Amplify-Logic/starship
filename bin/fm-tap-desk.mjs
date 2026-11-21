@@ -508,6 +508,18 @@ async function loadMergeCards(ctx, ledger, ids) {
   return { cards, notShown };
 }
 
+// Merges are answered on the Factory pane; the page carries merge cards only
+// while the home's config/tap-desk-merges turns phone merging on.
+function phoneMerges(ctx) {
+  return existsSync(path.join(ctx.home, "config", "tap-desk-merges"));
+}
+
+// With phone merging off, each merge call is named under not_shown, so the
+// page's count stays the owner's calls.
+function mergesOnFactoryPane(ids) {
+  return { cards: [], notShown: ids.map((id) => ({ id, reason: "ready to merge; answer it on the Factory pane (phone merging is off)" })) };
+}
+
 function scriptJson(value) {
   return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
 }
@@ -523,7 +535,10 @@ async function commandExport(args) {
   const ledger = readLedger(ctx);
   const now = Date.now();
   const calls = ownerCalls(ctx);
-  const [decisions, merges] = await Promise.all([loadDecisions(ctx, calls.decisions), loadMergeCards(ctx, ledger, calls.merges)]);
+  const [decisions, merges] = await Promise.all([
+    loadDecisions(ctx, calls.decisions),
+    phoneMerges(ctx) ? loadMergeCards(ctx, ledger, calls.merges) : mergesOnFactoryPane(calls.merges),
+  ]);
   const ownerOnly = ownerOnlyIds(ctx);
   const decisionCards = decisions.decisions
     .map((row) => decisionCard(row, ledger, now, days, ownerOnly))
@@ -686,6 +701,7 @@ function planDecision(ctx, tap, ownerOnly) {
 }
 
 function planMerge(ctx, tap) {
+  if (!phoneMerges(ctx)) return { final: true, outcome: "stale", detail: "phone merging is off; answer it on the Factory pane" };
   const metaFile = path.join(ctx.state, `${tap.id}.meta`);
   if (!existsSync(metaFile)) return { final: true, outcome: "stale", detail: "the task no longer has a record" };
   const meta = parseMeta(metaFile);
