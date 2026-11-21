@@ -2340,6 +2340,34 @@ EOF
   printf '%s\n' "$joined" | LC_ALL=C awk '{$1=$1; printf "%s", $0}'
 }
 
+# fm_composer_ghost_suggestion: the suggested next prompt Claude Code shows in
+# its otherwise-empty composer, printed on stdout, or fail when there is none.
+# Claude draws that suggestion as dim (SGR 2) text after its bare `❯` glyph,
+# and Tab turns it into typed text (verified on claude 2.1.283, tmux and Herdr;
+# tests/fixtures/composer-claude-dialogs/ holds the captures). It is the ghost
+# text fm_composer_strip_ghost drops, read the other way round: the box must
+# hold no typed text at all, so a draft is never mistaken for a suggestion, and
+# the capture must be styled, because without styling a suggestion and typed
+# text look the same. Claude's idle tip for a session with no messages yet
+# (`Try "..."`, the FM_COMPOSER_IDLE_RE alternation) is dim too, and is not a
+# suggestion Tab fills in, so it never counts.
+fm_composer_ghost_suggestion() {  # <caps> <screen>
+  local caps=$1 screen=$2 plain row glyph typed shown
+  case $'\n'"$caps"$'\n' in *$'\n'styled=1$'\n'*) ;; *) return 1 ;; esac
+  plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
+  _fm_composer_scan_screen "$plain" '' 1
+  _fm_composer_select_cursorless "$plain" "$screen" 1 || return 1
+  [ "$FM_COMPOSER_SELECTED_KIND" = bare ] || return 1
+  row=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_FIRST" "$plain")
+  fm_composer_leading_agent_glyph_var glyph "$row" && [ "$glyph" = '❯' ] || return 1
+  typed=$(fm_composer_extract_selected_content styled=1 "$screen") || return 1
+  [ -z "$typed" ] || return 1
+  shown=$(fm_composer_extract_selected_content styled=0 "$screen") || return 1
+  [ -n "$shown" ] || return 1
+  ! fm_composer_idle_matches "$shown" "${FM_COMPOSER_IDLE_RE:-$FM_COMPOSER_IDLE_RE_DEFAULT}" insensitive || return 1
+  printf '%s\n' "$shown"
+}
+
 # _fm_composer_row_option: 0 when the plain row, side borders and one leading
 # agent prompt glyph stripped, opens with a numbered option (`1. Yes`), with
 # FM_COMPOSER_ROW_OPTION set to `glyph` when that glyph led it (the

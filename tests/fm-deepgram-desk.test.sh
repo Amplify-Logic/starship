@@ -2108,6 +2108,53 @@ test_desk_voice_send_ignores_a_suggested_prompt() {
   pass "fm-desk-voice send: Claude's dim suggested prompt counts as an empty chat box"
 }
 
+desk_suggestion() {  # <home> -> stdout of fm-desk-voice.sh suggestion
+  local home=$1 dir="$1/fixture"
+  (
+    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
+      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" "$DESK" suggestion
+  )
+}
+
+# The page's message box shows the suggested prompt Claude shows, and only
+# while nothing is typed; reading it types nothing into the pane.
+test_desk_voice_suggestion_reads_claudes_suggested_prompt() {
+  local home out
+  home=$(desk_send_fixture suggestion) || { desk_send_skip suggestion; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'claude' > "$home/fixture/agent"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ -z "$out" ] || fail "an empty box with no suggestion should show none, got '$out'"
+  printf 'yes, ship both changes' > "$home/fixture/ghost"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ "$out" = 'yes, ship both changes' ] || fail "the dim suggested prompt should be read, got '$out'"
+  printf 'my own words' > "$home/fixture/draft"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ -z "$out" ] || fail "a typed draft is never a suggestion, got '$out'"
+  rm -f "$home/fixture/draft"
+  printf 'Try "how does <filepath> work?"' > "$home/fixture/ghost"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ -z "$out" ] || fail "Claude's first-message tip is not a suggestion, got '$out'"
+  [ -z "$(herdr_calls "$home" pane send-text)$(herdr_calls "$home" pane send-keys)" ] \
+    || fail "reading the suggestion must never type into the pane"
+  desk_send_done "$home"
+  home=$(desk_send_fixture suggestion-tmux tmux) || { desk_send_skip suggestion-tmux; return 0; }
+  : > "$home/fixture/tmux-composer"
+  printf 'yes, ship both changes' > "$home/fixture/ghost"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ "$out" = 'yes, ship both changes' ] || fail "the suggestion should be read on tmux too, got '$out'"
+  desk_send_done "$home"
+  home=$(desk_send_fixture suggestion-codex herdr codex) || { desk_send_skip suggestion-codex; return 0; }
+  cp "$HERDR_CLAUDE_SCREEN" "$home/fixture/screen"
+  printf 'yes, ship both changes' > "$home/fixture/ghost"
+  out=$(desk_suggestion "$home") || fail "suggestion failed: $out"
+  [ -z "$out" ] || fail "only a Claude primary's suggestion is shown, got '$out'"
+  desk_send_done "$home"
+  pass "fm-desk-voice suggestion: reads Claude's dim suggested prompt, never a draft, a tip or another harness's box"
+}
+
 test_desk_voice_send_goes_past_a_claude_draft() {
   local home out stash typed
   home=$(desk_send_fixture send-draft) || { desk_send_skip send-draft; return 0; }
@@ -2975,6 +3022,7 @@ test_desk_voice_send_falls_back_when_the_pane_refuses_text
 test_desk_voice_send_never_doubles_an_unconfirmed_submit
 test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_ignores_a_suggested_prompt
+test_desk_voice_suggestion_reads_claudes_suggested_prompt
 test_desk_voice_send_goes_past_a_claude_draft
 test_desk_voice_send_reads_only_the_visible_screen
 test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane

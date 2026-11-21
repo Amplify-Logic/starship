@@ -1419,6 +1419,31 @@ test_matrix_claude_selection_dialogs_are_unknown() {
   pass "matrix: claude's permission prompt, AskUserQuestion and /model picker read unknown on every profile"
 }
 
+# The web page's message box shows the suggestion Claude shows: the dim text
+# in an otherwise-empty box, read only from a styled capture, never a typed
+# draft, the first-message tip or a dialog.
+test_claude_ghost_suggestion_is_read_only_from_an_empty_styled_box() {
+  local screen out name
+  out=$(fm_composer_ghost_suggestion "$CAPS_STYLED" "$(cat "$DIALOGS/claude-2.1.283-ghost-suggestion.ansi")") \
+    || fail "the suggested prompt should be read"
+  [ "$out" = 'yes, go ahead' ] || fail "expected the suggested prompt, got '$out'"
+  out=$(fm_composer_ghost_suggestion "$CAPS_STYLED" "$(cat "$DIALOGS/claude-2.1.283-herdr-suggested-prompt.ansi")") \
+    || fail "the suggested prompt in herdr's read should be read"
+  [ "$out" = 'yes do it in chrome' ] || fail "expected herdr's suggested prompt, got '$out'"
+  screen=$(cat "$DIALOGS/claude-2.1.283-ghost-suggestion.ansi")
+  ! fm_composer_ghost_suggestion "$CAPS_PLAIN" "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" >/dev/null \
+    || fail "a capture without styling cannot tell a suggestion from typed text"
+  for name in draft idle-composer permission-prompt ask-user-question model-picker; do
+    ! out=$(fm_composer_ghost_suggestion "$CAPS_STYLED" "$(cat "$DIALOGS/claude-2.1.283-$name.ansi")") \
+      || fail "claude $name shows no suggestion, got '$out'"
+  done
+  screen="${ESC}[38;5;244m────────────────${ESC}[39m"$'\n'"${ESC}[39m❯${NBSP}${ESC}[2mTry${ESC}[0m ${ESC}[2m\"how does <filepath> work?\"${ESC}[0m"
+  screen+=$'\n'"${ESC}[38;5;244m────────────────${ESC}[39m"
+  ! out=$(fm_composer_ghost_suggestion "$CAPS_STYLED" "$screen") \
+    || fail "the first-message tip is not a suggestion, got '$out'"
+  pass "ghost suggestion: Claude's dim suggested prompt is read only from an empty, styled box"
+}
+
 test_matrix_claude_suggested_prompt_and_draft() {
   # Claude's dim suggested prompt (`❯` NBSP, then SGR 2 text) is not typed
   # input: the desk floater sends only into a box that reads empty or pending,
@@ -1929,6 +1954,7 @@ test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_zellij_ansi_dump
 test_matrix_claude_selection_dialogs_are_unknown
 test_matrix_claude_suggested_prompt_and_draft
+test_claude_ghost_suggestion_is_read_only_from_an_empty_styled_box
 test_claude_slash_popup_below_composer_is_furniture
 test_matrix_claude_wrapped_stash_marker
 test_selection_dialog_survives_ghost_stripped_option

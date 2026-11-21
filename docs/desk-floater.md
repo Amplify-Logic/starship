@@ -334,7 +334,7 @@ STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this 
 | Script | Role |
 | --- | --- |
 | `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys, dictation and screenshot stacking live in `desk-floater/Sources/DeskFloater.swift` |
-| `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, mailbox deliver / pending / drain, and saved recordings: keep / recordings / retry |
+| `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, mailbox deliver / pending / drain, saved recordings: keep / recordings / retry, and the chat's suggested next prompt for the web page: suggestion |
 | `bin/fm-web.sh` | The localhost page that mirrors the terminal workspace, whose chat sends through `bin/fm-desk-voice.sh send` ([web.md](web.md)) |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript, with a bounded, retried request |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |

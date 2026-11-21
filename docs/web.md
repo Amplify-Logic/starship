@@ -12,7 +12,7 @@ It adds nothing the terminal does not show.
 | --- | --- |
 | The tabs across the top | One slim header: the Starship mark, the same tabs (Control Centre, then one per factory, called a project here), then the band |
 | The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked Most urgent |
-| The status bar row ([status-bar.md](status-bar.md)) | The same row, word for word and in its colours, in a slim line under the header |
+| The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the counts, Needs you, Right now, Since you last looked |
 | A factory's own tab: its page, and its workers beside it | The project's tab: its page, and Workers at work beside it |
@@ -36,6 +36,9 @@ That line never shows a command, a path or code: a step description that holds o
 
 A message box at the bottom sends to the same first mate.
 Enter sends and Shift+Enter starts a new line.
+When Claude Code offers a suggested next message, the grey text in the terminal's input, the empty message box shows the same words, and Tab fills them in, as in the terminal.
+The page reads the suggestion from the first mate's own chat box through `bin/fm-desk-voice.sh suggestion`, only while the first mate is ready and the box holds nothing typed; it types nothing there.
+Under the box, the first mate's own part of the status bar row shows its model and effort, how much of its context and quota it has used, and what the session has cost.
 You can paste or drop images onto the page; they are attached to the next message.
 
 The page is another window onto the one primary session, not a second first mate.
@@ -110,7 +113,7 @@ Each button carries its key as a small hint, and a line of keys sits at the bott
 The Settings button opens one small panel:
 
 - **Text size**: five steps, Smaller to Largest, starting on Normal in the middle; the whole layout scales with it.
-- **Style**: Calm, the default, or Lively, the same page with stronger colours.
+- **Style**: Calm, the default, in soft pastel tints with each section of a panel as its own card, or Lively, the same grouping with stronger colours; in Light both draw the header light too.
 - **Light or dark**: Auto follows the system setting; Light is a warm cream.
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
 - **Show key hints**: the small key letters on the buttons and the line of keys at the bottom.
@@ -135,6 +138,9 @@ FM_HOME=/path/to/home bin/fm-web.sh open
 It signs that window in with a link that works once, within two minutes, so the home's token never sits on a command line; `open --print` prints such a link instead, for the first mate to hand over.
 Once in, the browser offers to keep it as an installed app: in Chrome, Install Starship from the menu; in Safari, File, then Add to Dock.
 The page carries a web app manifest and the Starship ship as its icon for that.
+
+The server restarts itself when its own code changes on disk, so a Starship update shows on the page without restarting anything by hand: it checks every two seconds, waits until the new code reads the same twice and compiles, and keeps running the old code otherwise. A send or button press under way finishes and gets its answer before the restart.
+It keeps its process and port, and an open page reloads itself once it sees the new code, unless words or pictures are waiting in its message box.
 
 `start` prints the long-lived sign-in link, `http://127.0.0.1:8767/?token=...`; the first visit swaps the token for a cookie and drops it from the address bar.
 Opening the address without a sign-in shows a page saying what this is and how to get in, in the look the browser last chose; a link that no longer works says so.
@@ -192,6 +198,7 @@ To revoke access, stop the server, delete `state/web/token`, and start it again;
 - A worker's own terminal is not shown; the terminal's factory tab keeps that.
 - The page shows recent conversation, not the full history of a long session.
 - A permission prompt or question dialog in the terminal is not shown as a control; a message sent meanwhile goes to the mailbox.
+- The suggested next message shows only for a first mate running in tmux or Herdr, whose screen reads keep the grey styling that tells a suggestion from typed words.
 
 ## Related surfaces
 
