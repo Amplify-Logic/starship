@@ -11,7 +11,11 @@
 # no-mistakes run-step attributed under bin/fm-nm-run-lib.sh's contract, else
 # the pane busy-signature) and reconciles the possibly-stale log against it.
 # A ship `done:` is current-state done only when bin/fm-dod-lib.sh accepts the
-# named head as reachable outside the worker's disposable copy; otherwise blocked.
+# named head as reachable outside the worker's disposable copy, or - for a
+# no-mistakes CI-ready report whose pipeline pushed a head the copy never
+# fetched - when a 5s-bounded forge read proves the PR this task's own, open,
+# not a draft, and green at its live head (ship_done_ready_on_forge); otherwise
+# blocked.
 # A no-mistakes ship's pipeline handoff - a `done:` that names no PR with green
 # checks - is never done either: it reads blocked with a reason saying it is a
 # handoff waiting for the /no-mistakes trigger (fm_dod_nm_handoff_done).
@@ -134,7 +138,12 @@
 #      a check of the full ci-step log overrides working -> done once checks read
 #      green, so a green PR is never silently read as still-validating. A ci log
 #      whose last marker reports no CI checks reads working (no-checks), and the
-#      crew's own checks-green report is not promoted over it. And a
+#      crew's own checks-green report is not promoted over it. A ci step row
+#      that says fixing while the run itself is not fixing (a fix round that
+#      found nothing to change and went back to watching CI) reads done only
+#      when the ci log's newest marker is green and the bounded forge read
+#      proves the run's PR open, not a draft, and green at the head the pipeline
+#      last pushed. And a
 #      terminal failed or cancelled run whose only unfinished step is the ci
 #      monitor, after every substantive step completed (an explicitly skipped
 #      rebase is allowed) and the ci log's last marker reads checks green,
@@ -360,14 +369,83 @@ fi
 # config/pr-register-scan is on, refreshes the same copy before it refuses, so
 # a read after it sees the fetched head.
 emit_ship_status_done() {  # [extra-detail]
-  local extra=${1:-} reason
+  local extra=${1:-} reason forge_head
   if reason=$(fm_dod_nm_handoff_done "$KIND" "$(meta_value mode)" "$LOG_LINE"); then
     emit blocked status-log "$reason${SEP}$(status_line_note "$LOG_LINE")"
   fi
   if reason=$(fm_dod_accept_ship_done "$KIND" "$(meta_value mode)" "$WT" "$(meta_value project)" "$LOG_LINE" "$STATE" "$ID" "$META"); then
     emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}"
   fi
+  if forge_head=$(ship_done_ready_on_forge); then
+    emit "done" status-log "$(status_line_note "$LOG_LINE")${extra:+${SEP}$extra}${SEP}PR open, not a draft, checks green at its live head ${forge_head:0:12} on the forge"
+  fi
   emit blocked status-log "$reason"
+}
+
+# A no-mistakes pipeline pushes from its own gate clone, routinely after a
+# rebase or fix round, so the head this copy names is often not the one on the
+# forge, and nothing fetches that push into the copy before registration
+# (bin/fm-pr-check.sh) records pr_head=. A CI-ready `done: PR <url> checks green`
+# the named-head gate refuses still reads done when the bounded forge read
+# proves the PR is this task's own (head branch = the task's branch), open, not
+# a draft, and green at its live head, which the forge stores outside the copy.
+# Only where the forge head is the named head (fm_dod_forge_head_is_named_head):
+# a direct-PR worker pushes from its own copy, so its gate keeps refusing.
+ship_done_ready_on_forge() {
+  local note url branch
+  [ "$KIND" = ship ] || return 1
+  fm_dod_forge_head_is_named_head "$(meta_value mode)" || return 1
+  note=$(status_line_note "$LOG_LINE")
+  fm_dod_note_reports_ci_ready "$note" || return 1
+  url=$(fm_dod_pr_url_from_done_note "$note") || return 1
+  branch=$(meta_value branch)
+  [ -n "$branch" ] || branch=${CREW_BRANCH:-}
+  forge_pr_ready_at_live_head "$url" "$branch" "${RUN_PUSHED_HEAD:-}"
+}
+
+# 0 when the bounded (5s) forge read proves <url> is an open, non-draft GitHub
+# pull request whose head branch is <branch> and whose live head commit carries
+# a SUCCESS combined check state; when <expected-head> is given, that live head
+# must also be it (either may be abbreviated). stdout then holds the live head.
+# Red, pending, unreported, draft, closed, merged, foreign-branch, unreadable,
+# and non-GitHub PRs all return 1, as does FM_CREW_STATE_NO_FORGE=1.
+forge_pr_ready_at_live_head() {  # <url> <branch> [<expected-head>]
+  local url=$1 branch=$2 expected=${3:-} record state merged draft head_ref head checks
+  [ "${FM_CREW_STATE_NO_FORGE:-0}" != 1 ] || return 1
+  [ -n "$branch" ] || return 1
+  case "$expected" in
+    '') ;;
+    *[!0-9a-f]*) return 1 ;;
+    *) [ "${#expected}" -ge 7 ] || return 1 ;;
+  esac
+  fm_pr_url_parse "$url" || return 1
+  [ "$FM_PR_PROVIDER" = github ] || return 1
+  # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
+  record=$(fm_run_timed 5 bash -c '
+    . "$1"
+    fm_pr_github_read_ready_record "$2" "$3" "$4" "$5" || exit 1
+    printf "state=%s\nmerged=%s\ndraft=%s\nhead_ref=%s\nhead=%s\nchecks=%s\n" \
+      "$FM_PR_READY_STATE" "$FM_PR_READY_MERGED" "$FM_PR_READY_DRAFT" \
+      "$FM_PR_READY_HEAD_REF" "$FM_PR_READY_HEAD" "$FM_PR_READY_CHECKS"
+  ' _ "$SCRIPT_DIR/fm-pr-lib.sh" "$FM_PR_HOST" "${FM_PR_PATH%%/*}" "${FM_PR_PATH#*/}" "$FM_PR_NUMBER" 2>/dev/null) \
+    || return 1
+  state=$(printf '%s\n' "$record" | sed -n 's/^state=//p' | head -1)
+  merged=$(printf '%s\n' "$record" | sed -n 's/^merged=//p' | head -1)
+  draft=$(printf '%s\n' "$record" | sed -n 's/^draft=//p' | head -1)
+  head_ref=$(printf '%s\n' "$record" | sed -n 's/^head_ref=//p' | head -1)
+  head=$(printf '%s\n' "$record" | sed -n 's/^head=//p' | head -1)
+  checks=$(printf '%s\n' "$record" | sed -n 's/^checks=//p' | head -1)
+  [ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" = open ] || return 1
+  [ "$merged" = false ] && [ "$draft" = false ] && [ "$checks" = SUCCESS ] || return 1
+  [ "$head_ref" = "$branch" ] || return 1
+  fm_pr_head_valid "$head" || return 1
+  if [ -n "$expected" ]; then
+    case "$head" in
+      "$expected"*) ;;
+      *) case "$expected" in "$head"*) ;; *) return 1 ;; esac ;;
+    esac
+  fi
+  printf '%s\n' "$head"
 }
 
 map_log_state() {  # <line>
@@ -1062,6 +1140,10 @@ nm_effective_ci_step_status() {
 # green marker before it is still current (no-mistakes' own ci-log parser
 # ignores the line the same way, v1.32.2 through v1.79.0). Reading it as
 # not-ready held a green PR at working for as long as main kept advancing.
+# A fix round's start ("auto-fix round N/M starting", "user-fix round
+# starting") and "running agent to fix CI issues" ARE not-ready markers
+# (pinned from no-mistakes v1.106.1): a green marker before them predates the
+# round, while one after them is the round's own return to a green PR.
 nm_ci_checks_state() {
   local run_id ci_log marker
   run_id=$(strip_quotes "$(nm_field id)")
@@ -1069,13 +1151,14 @@ nm_ci_checks_state() {
   ci_log=$(nm_run axi logs --step ci --run "$run_id" --full) || true
   [ -n "$ci_log" ] || { printf 'unknown'; return; }
   marker=$(printf '%s\n' "$ci_log" \
-    | grep -E 'CI checks passed|repository declares no CI \(no_ci: true\)|no CI checks reported - still monitoring|no CI checks reported yet|checks failed|issues detected|CI checks running' \
+    | grep -E 'CI checks passed|repository declares no CI \(no_ci: true\)|no CI checks reported - still monitoring|no CI checks reported yet|checks failed|issues detected|CI checks running|auto-fix round [0-9]+/[0-9]+ starting|user-fix round starting|running agent to fix CI issues' \
     | tail -1)
   case "$marker" in
     *"repository declares no CI (no_ci: true)"*) printf 'no-checks' ;;
     *"checks passed"*) printf 'green' ;;
     *"no CI checks reported - still monitoring"*) printf 'no-checks' ;;
     *"no CI checks reported yet"*|*"checks failed"*|*"issues detected"*|*"CI checks running"*) printf 'not-ready' ;;
+    *"auto-fix round "*" starting"*|*"user-fix round starting"*|*"running agent to fix CI issues"*) printf 'not-ready' ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -1363,6 +1446,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     RUN_STATUS=$status
     RUN_ID=$(strip_quotes "$(nm_field id)")
     RUN_HEAD=$(strip_quotes "$(nm_field head)")
+    # The head the pipeline itself last pushed: after a rebase or fix round it
+    # is not the head the worker handed over (same order as
+    # fm_dod_nm_custody_returned).
+    RUN_PUSHED_HEAD=$(fm_nm_branch_sync_nested "$RUN_OUT" pipeline current_head)
+    [ -n "$RUN_PUSHED_HEAD" ] || RUN_PUSHED_HEAD=$(strip_quotes "$(nm_field head_sha)")
+    [ -n "$RUN_PUSHED_HEAD" ] || RUN_PUSHED_HEAD=$RUN_HEAD
     # The pull request THIS run opened, if it reached its pr step at all. A run
     # that never opened one reports no pr field, and that absence is meaningful:
     # it is what keeps a terminal outcome from being lent an older task's PR.
@@ -1446,6 +1535,25 @@ if [ "$HAVE_RUN" = 1 ]; then
             ;;
           fixing)
             CI_LOG_STATE=not-ready
+            # A ci fix round whose agent found nothing to change goes back to
+            # watching CI inside the same round, so the ci step row keeps
+            # saying fixing while the PR sits green waiting for its merge word
+            # (no-mistakes v1.106.1, PR #101's onboarding run: `run: running`,
+            # `ci: fixing`, last log marker "all CI checks passed"). That reads
+            # done only while the top-level run is not itself fixing, the
+            # newest ci log marker is green - a later round start, agent run,
+            # or red marker is not (nm_ci_checks_state) - and the bounded forge
+            # read proves the run's PR open, not a draft, and green at the head
+            # the pipeline last pushed.
+            if [ "$RUN_STATUS" != fixing ] && [ "$(nm_ci_checks_state)" = green ]; then
+              ci_pr_url=$(strip_quotes "$(nm_field pr)")
+              if [ -n "$ci_pr_url" ] && [ -n "$RUN_PUSHED_HEAD" ] \
+                && forge_pr_ready_at_live_head "$ci_pr_url" "$CREW_BRANCH" "$RUN_PUSHED_HEAD" >/dev/null; then
+                CI_LOG_STATE=green
+                RUN_STATE="done"
+                RUN_DETAIL="checks green: PR ready for review (green at its live head on the forge; the ci fix round still monitors for merge/close): $ci_pr_url"
+              fi
+            fi
             ;;
         esac
       fi

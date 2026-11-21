@@ -1104,6 +1104,71 @@ fm_pr_github_read_record() {  # <host> <owner> <repo> <number>
   fm_pr_github_read_record_with_gh_axi "$@"
 }
 
+# Reads what a GitHub pull request needs to count as ready for its merge word,
+# in one GraphQL call: state, merged, draft, head branch, head commit, and the
+# combined check state of that head commit (statusCheckRollup.state: SUCCESS,
+# PENDING, FAILURE, ERROR or EXPECTED, empty when no check reported). Sets
+# FM_PR_READY_STATE, _MERGED, _DRAFT, _HEAD_REF, _HEAD and _CHECKS. Returns 1,
+# with every field empty, when gh is missing, the read fails, any field is
+# malformed, or the check state belongs to a commit other than the head.
+# bin/fm-crew-state.sh is the caller, bounded at 5 seconds.
+fm_pr_github_read_ready_record() {  # <host> <owner> <repo> <number>
+  local host=$1 owner=$2 repo=$3 number=$4 fields line total=0 named=0
+  local state='' merged='' draft='' head_ref='' head='' checks_head='' checks='' seen=' '
+  FM_PR_READY_STATE=''
+  FM_PR_READY_MERGED=''
+  FM_PR_READY_DRAFT=''
+  FM_PR_READY_HEAD_REF=''
+  FM_PR_READY_HEAD=''
+  FM_PR_READY_CHECKS=''
+  command -v gh >/dev/null 2>&1 || return 1
+  # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
+  if ! fields=$(GH_HOST=$host gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){state merged isDraft headRefName headRefOid commits(last:1){nodes{commit{oid statusCheckRollup{state}}}}}}}' \
+    -F "owner=$owner" -F "repo=$repo" -F "number=$number" \
+    --jq '.data.repository.pullRequest | "state=" + (.state // ""), "merged=" + (.merged | tostring), "draft=" + (.isDraft | tostring), "head_ref=" + (.headRefName // ""), "head=" + (.headRefOid // ""), "checks_head=" + (.commits.nodes[0].commit.oid // ""), "checks=" + (.commits.nodes[0].commit.statusCheckRollup.state // "")' \
+    2>/dev/null) || [ -z "$fields" ]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      state=*) state=${line#state=}; seen="$seen state" ;;
+      merged=*) merged=${line#merged=}; seen="$seen merged" ;;
+      draft=*) draft=${line#draft=}; seen="$seen draft" ;;
+      head_ref=*) head_ref=${line#head_ref=}; seen="$seen head_ref" ;;
+      head=*) head=${line#head=}; seen="$seen head" ;;
+      checks_head=*) checks_head=${line#checks_head=}; seen="$seen checks_head" ;;
+      checks=*) checks=${line#checks=}; seen="$seen checks" ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  [ "$named" -eq 7 ] && [ "$total" -eq 7 ] || return 1
+  [ "$seen" = '  state merged draft head_ref head checks_head checks' ] || return 1
+  [ -n "$state" ] && [ -n "$head_ref" ] || return 1
+  case "$merged" in true|false) ;; *) return 1 ;; esac
+  case "$draft" in true|false) ;; *) return 1 ;; esac
+  fm_pr_head_valid "$head" || return 1
+  [ "$checks_head" = "$head" ] || return 1
+  case "$checks" in ''|SUCCESS|PENDING|FAILURE|ERROR|EXPECTED) ;; *) return 1 ;; esac
+  # Consumed by bin/fm-crew-state.sh forge_pr_ready_at_live_head.
+  # shellcheck disable=SC2034
+  FM_PR_READY_STATE=$state
+  # shellcheck disable=SC2034
+  FM_PR_READY_MERGED=$merged
+  # shellcheck disable=SC2034
+  FM_PR_READY_DRAFT=$draft
+  # shellcheck disable=SC2034
+  FM_PR_READY_HEAD_REF=$head_ref
+  # shellcheck disable=SC2034
+  FM_PR_READY_HEAD=$head
+  # shellcheck disable=SC2034
+  FM_PR_READY_CHECKS=$checks
+}
+
 # GitHub required-check reading shared by bin/fm-pr-merge.sh and
 # bin/fm-park.sh. These read the repository named by PR_OWNER and PR_REPO,
 # which the caller sets.
