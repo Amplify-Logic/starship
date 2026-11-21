@@ -120,7 +120,18 @@ mkdir -p "$HOME/.local/bin"
 printf '#!/usr/bin/env bash\necho herdr 0.9.5\n' > "$HOME/.local/bin/herdr"
 chmod +x "$HOME/.local/bin/herdr"
 HS
-        chmod +x "$2/bin/fm-herdr-setup.sh" ;;
+        chmod +x "$2/bin/fm-herdr-setup.sh"
+        # The clone's own tool install: records its call the way
+        # bin/fm-bootstrap.sh install-missing would be asked.
+        cat > "$2/bin/fm-bootstrap.sh" <<'BS'
+#!/usr/bin/env bash
+printf 'bootstrap %s FM_HOME=%s\n' "$*" "${FM_HOME:-}" >> "$FAKE_WORLD/calls.log"
+case "$*" in
+  install-missing) [ "${FAKE_TOOLS_FAIL:-}" != 1 ] || { echo "error: not installed: treehouse" >&2; exit 1; } ;;
+  *) echo "usage: fm-bootstrap.sh install-missing [--check]" >&2; exit 1 ;;
+esac
+BS
+        chmod +x "$2/bin/fm-bootstrap.sh" ;;
       *)
         if [ -n "${FAKE_ADDON_CLONE_FAILS:-}" ] && [ -z "${1##*"$FAKE_ADDON_CLONE_FAILS"*}" ]; then
           echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2
@@ -142,10 +153,12 @@ case "${1:-}" in
     # A fresh Homebrew's first install reads standard input; under curl | bash
     # that is the rest of the setup script itself.
     [ "${FAKE_BREW_READS_STDIN:-}" = 1 ] && cat > /dev/null
-    for tool in node npm gh tmux jq; do
+    for tool in npm gh tmux jq; do
       printf '#!/usr/bin/env bash\necho %s-version-1\n' "$tool" > "$bin/$tool"
       chmod +x "$bin/$tool"
-    done ;;
+    done
+    printf '#!/usr/bin/env bash\necho %s\n' "${FAKE_BREW_NODE_VERSION:-v24.1.0}" > "$bin/node"
+    chmod +x "$bin/node" ;;
 esac
 SH
   chmod +x "$fakebin"/* "$dir/brew.stub"
@@ -250,6 +263,8 @@ test_fresh_install_then_rerun_is_idempotent() {
   assert_contains "$log" "google-chrome-stable_current_amd64.deb" "Chrome's package is installed with apt"
   assert_contains "$log" "git clone https://github.com/Amplify-Logic/starship $w/home/starship" \
     "Firstmate is cloned into ~/starship"
+  assert_contains "$log" "bootstrap install-missing FM_HOME=$w/home/starship" \
+    "every other tool the first mate needs is installed here, before the first mate starts"
   assert_contains "$out" "ok  jq" "the closing check finds jq"
   assert_contains "$out" "ok  chrome" "the closing check finds Chrome"
   assert_contains "$out" "ok  firstmate" "the closing check finds the clone"
@@ -431,13 +446,65 @@ test_addon_is_named_and_cloned_once_signed_in() {
   pass "--addon names the private add-on by OWNER/REPO only, clones it once the sign-in allows, and never overwrites another one"
 }
 
+test_clone_too_old_to_install_tools_stops_before_any_step() {
+  local w out status
+  w=$(make_world stale-clone)
+  run_setup "$w" --ci >/dev/null || fail "the first run should succeed"
+  # A bootstrap from before install-missing existed ignores its arguments,
+  # runs its session-start sweep and exits 0.
+  cat > "$w/home/starship/bin/fm-bootstrap.sh" <<'BS'
+#!/usr/bin/env bash
+printf 'bootstrap sweep %s\n' "$*" >> "$FAKE_WORLD/calls.log"
+echo "MISSING: treehouse (install: brew install treehouse)"
+BS
+  chmod +x "$w/home/starship/bin/fm-bootstrap.sh"
+  : > "$w/calls.log"
+  out=$(run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a clone too old to install tools should stop the setup, got $status: $out"
+  assert_contains "$out" "git -C $w/home/starship pull, then run this again" "the refusal says how to update the clone"
+  assert_not_contains "$out" "Setup finished" "an old clone never reports the setup finished"
+  [ ! -s "$w/calls.log" ] || fail "an old clone must stop the setup before any step or sweep: $(calls "$w")"
+  pass "a clone from before install-missing stops the setup before any step"
+}
+
+# quota-axi asks npm for Node >=22.19 (its published engines field); on an
+# older Node npm quietly installs a release below the bootstrap's floor, so the
+# setup must stop at Node rather than at a closing check a rerun cannot clear.
+test_node_too_old_for_the_tools_stops_before_any_install() {
+  local w out status
+  w=$(make_world old-node)
+  out=$(FAKE_BREW_NODE_VERSION=v22.13.1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a Node older than 22.19 should stop the setup, got $status: $out"
+  assert_contains "$out" "Node v22.13.1 is older than 22.19" "the failure names the Node version and the floor"
+  assert_contains "$out" "run: brew upgrade node, then run this again" "the failure gives a quote-free fix"
+  assert_not_contains "$(calls "$w")" "bootstrap install-missing" "no tool install runs on an old Node"
+  pass "a Node older than the npm tools accept stops the setup before the tool install"
+}
+
+test_failed_tool_install_stops_the_setup() {
+  local w out status
+  w=$(make_world tools-fail)
+  out=$(FAKE_TOOLS_FAIL=1 run_setup "$w" --ci)
+  status=$?
+  [ "$status" -eq 1 ] || fail "a failed tool install should stop the setup, got $status: $out"
+  assert_contains "$out" "a tool above did not install; run this again in a few minutes" \
+    "the failure says to run the setup again"
+  assert_not_contains "$out" "Setup finished." "a failed tool install never reports the setup finished"
+  pass "a tool that fails to install stops the setup before it reports finished"
+}
+
 test_help_and_usage_errors
+test_failed_tool_install_stops_the_setup
 test_addon_is_named_and_cloned_once_signed_in
 test_piped_install_runs_to_the_end
 test_refusals_change_nothing
 test_fresh_install_then_rerun_is_idempotent
+test_clone_too_old_to_install_tools_stops_before_any_step
 test_wsl_sends_sign_ins_to_the_windows_browser
 test_wslview_without_interop_is_not_ok
 test_arm64_skips_chrome
 test_windows_claude_does_not_count_as_installed
 test_missing_tool_fails_the_closing_check
+test_node_too_old_for_the_tools_stops_before_any_install

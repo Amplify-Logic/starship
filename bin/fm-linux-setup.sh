@@ -4,9 +4,9 @@
 # (ONBOARDING-windows.md) or is a plain Linux server reached over SSH
 # (ONBOARDING-linux-server.md).
 #
-# It installs only what must exist before the first mate starts; the first
-# mate's own bootstrap (bin/fm-bootstrap.sh) installs the rest after the
-# person's consent, exactly as on a Mac (ONBOARDING.md step 4):
+# It installs everything the first mate needs before the first mate starts,
+# so nothing is left to install inside its session, exactly as
+# bin/fm-mac-setup.sh does on a Mac:
 #   - apt: build-essential procps curl file git ca-certificates (Homebrew's
 #     Linux prerequisites), plus wslu inside WSL, whose wslview opens a link in
 #     the Windows default browser
@@ -24,6 +24,10 @@
 #     home, config/backend set to herdr, so the first mate starts in Herdr
 #     from its first launch, as on a Mac (bin/fm-herdr-setup.sh owns all
 #     three; a server keeps tmux, ONBOARDING-linux-server.md step 6)
+#   - every other tool the first mate needs (treehouse, no-mistakes and the
+#     npm tools), through the clone's own `bin/fm-bootstrap.sh
+#     install-missing`, which owns the list; running this script is the
+#     consent for those installs
 #   - lines in ~/.profile and ~/.bashrc, so login shells, tmux panes, and new
 #     terminals pick these up: one `brew shellenv` line, one ~/.local/bin PATH
 #     line, `export HOMEBREW_NO_ASK=1` (Homebrew otherwise stops every install
@@ -45,7 +49,8 @@
 # (WSL's cross-filesystem bridge breaks git, file watching, and permissions);
 # the kernel is WSL 1 (Herdr, mirrored networking and systemd need WSL 2, even
 # though Claude Code alone now runs on WSL 1); apt-get is absent; or
-# ~/starship exists but is not a Firstmate clone. The WSL version is read from
+# ~/starship exists but is not a Firstmate clone, or is a clone too old to
+# have `fm-bootstrap.sh install-missing`. The WSL version is read from
 # /proc/version; FM_PROC_VERSION_OVERRIDE names another file to read instead,
 # a seam for tests/fm-linux-setup.test.sh.
 #
@@ -88,6 +93,25 @@ usage: fm-linux-setup.sh [--ci] [--addon OWNER/REPO]
   --ci     skip the closing sign-in instructions (gh auth login, claude)
   --addon  name your private add-on by its GitHub repository, OWNER/REPO
 EOF
+}
+
+# The oldest Node the first mate's npm tools accept: the highest engines floor
+# among them (quota-axi asks for >=22.19). On an older Node, npm quietly
+# installs an old release that fits it instead, below the floor
+# bin/fm-bootstrap.sh checks, so the tool install could never succeed.
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=19
+
+node_recent_enough() {  # true when node runs and is at least NODE_MIN
+  local v major rest minor
+  v=$(node --version 2>/dev/null </dev/null) || return 1
+  v=${v#v}
+  major=${v%%.*}
+  rest=${v#*.}
+  minor=${rest%%.*}
+  case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ "$major" -gt "$NODE_MIN_MAJOR" ] && return 0
+  [ "$major" -eq "$NODE_MIN_MAJOR" ] && [ "$minor" -ge "$NODE_MIN_MINOR" ]
 }
 
 say() { printf '==> %s\n' "$*"; }
@@ -203,6 +227,8 @@ main() {
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     if [ -f "$TARGET/bin/fm-primary.sh" ] && git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
       CLONE_PRESENT=1
+      grep -qF 'fm-bootstrap.sh install-missing' "$TARGET/bin/fm-bootstrap.sh" 2>/dev/null \
+        || die "$TARGET is an older Starship copy that cannot install the tools the first mate needs; update it by running: git -C $TARGET pull, then run this again"
     else
       die "$TARGET exists but is not a Firstmate clone; move it aside, then run this again"
     fi
@@ -245,6 +271,7 @@ main() {
   say "Homebrew packages: $BREW_PACKAGES"
   # shellcheck disable=SC2086  # deliberate word-split of the package list
   brew install $BREW_PACKAGES </dev/null || die "brew install failed"
+  node_recent_enough || die "Node $(node --version 2>/dev/null) is older than $NODE_MIN_MAJOR.$NODE_MIN_MINOR or does not run, and the first mate's tools need it; run: brew upgrade node, then run this again"
 
   LOCAL_BIN="$HOME/.local/bin"
   PATH="$LOCAL_BIN:$PATH"
@@ -295,6 +322,10 @@ main() {
       warn "this Starship copy predates the Herdr setup; update it with 'git -C $TARGET pull', then run $TARGET/bin/fm-herdr-setup.sh"
     fi
   fi
+
+  say "The first mate's tools"
+  FM_HOME="$TARGET" "$TARGET/bin/fm-bootstrap.sh" install-missing </dev/null \
+    || die "a tool above did not install; run this again in a few minutes"
 
   # shellcheck disable=SC2016  # these lines are written for the shell to expand later
   for rc in "$HOME/.profile" "$HOME/.bashrc"; do

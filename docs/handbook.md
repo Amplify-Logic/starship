@@ -53,7 +53,7 @@ The rest of the clone (instructions, scripts, skills, and these docs) is shared 
 
 Three plain-text files carry what the first mate should always know.
 It reads all three at the start of every session, whichever AI tool you run it on.
-Your first conversation starts the first of them: what to call you, what you want off your plate, and your house rules go in as you answer ([first-voyage](../.agents/skills/first-voyage/SKILL.md) owns that conversation).
+Your first conversation starts the first of them: your name, what your work is about, and your house rules go in as you answer ([first-voyage](../.agents/skills/first-voyage/SKILL.md) owns that conversation).
 
 | File | Holds | Example entries |
 | --- | --- | --- |

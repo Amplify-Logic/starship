@@ -7,9 +7,12 @@ Five steps, about 30 minutes, mostly waiting for installs.
 This guide is for a blank macOS machine.
 On a Windows PC, start with [ONBOARDING-windows.md](ONBOARDING-windows.md); on a rented Linux server, start with [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md).
 Both set up the machine, then return here for steps 3 to 5.
-The finish line is real work: your first mate adds a first project and brings back one report from a worker that read it.
-Your first project is one of your own repositories, on plain Starship.
+The finish line is real work: your first mate brings back one report from a worker that read something you know.
+That is one of your own GitHub repositories or, if you have none, a folder of your own work on your Mac, such as an export of your tickets or a few documents.
 After that, [the captain's handbook](docs/handbook.md) explains the whole system, connects your other tools, and gives you a first-week path.
+
+> **Sending these commands to someone over Slack or another chat app?** Send each one as a code block (the `</>` button, or three backticks around it).
+> Chat apps turn straight quotes into curly ones, which breaks a command; the commands in this guide carry no quotes, so a code block keeps them exact.
 
 > Your setup is yours alone.
 > A fresh clone gets only the public repo - no one else's preferences, backlog, project list, or accounts.
@@ -19,9 +22,9 @@ After that, [the captain's handbook](docs/handbook.md) explains the whole system
 
 ## 1. Accounts (browser, before the terminal)
 
-1. **GitHub** - an account that can see your first project: one of your own repositories, which becomes your first project in step 5.
-   If a repository shows you a 404, ask its owner to invite you.
-   Starship itself is public, so you install plain Starship; during setup your first mate also makes you one private repository on this account, for your own changes.
+1. **GitHub** - an account of your own; a free one is fine, and you need no repositories yet.
+   Starship itself is public, so you install plain Starship; during setup your first mate makes you one private repository on this account, for your own changes.
+   If you want your first report on a repository someone else owns, and it shows you a 404, ask its owner to invite you.
 2. **Claude** - a Claude account with a paid plan (Pro or Max) for Claude Code.
    If your organisation has a Claude workspace, use that account: the connectors it offers (mail, calendar, documents, and so on) then come along into Claude Code.
 
@@ -29,32 +32,43 @@ You should see: both accounts signed in in a browser tab.
 
 ---
 
-## 2. Install the tools (Terminal)
+## 2. Install everything (Terminal, before anything else opens)
 
-Homebrew needs a Mac user that is an administrator: its installer asks for your Mac password, and a standard user cannot give it.
+Your Mac user must be an administrator, because Homebrew, the installer everything else comes from, asks for your Mac password.
 **System Settings**, then **Users & Groups**, shows "Admin" under your name when you are one; if it says "Standard", ask whoever manages the Mac to make you an admin first.
 
-Install Homebrew:
+Open **Terminal** (press Command-Space, type Terminal, press Enter) and paste this one line:
 
 ```sh
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-mac-setup.sh | bash
 ```
 
-When it finishes it prints two lines that put `brew` on your `PATH`.
-Run them, then open a **new** Terminal window for everything below.
+It checks for Homebrew, Node and jq first and installs whatever is missing, so nothing later fails for want of them.
+Then it installs Claude Code, gets Starship into `~/starship`, sets up [Herdr](https://herdr.dev), and installs every other tool your first mate needs, all in this Terminal window, before your first mate ever starts.
+When it asks for your password, type your Mac password; nothing shows while you type, which is normal.
+It takes about 10 to 20 minutes, mostly Apple's command line tools downloading.
+If the text stops without `Setup finished.`, run the same line again: it keeps what is already installed and finishes the rest.
+
+You should see: `Setup finished.`, then your first-hour checklist with the first three steps ticked.
+
+Then open a **new** Terminal window (Command-N), so the new tools are found, and sign in twice:
 
 ```sh
-brew install git node gh tmux jq
 gh auth login
-npm install -g @anthropic-ai/claude-code
 claude
 ```
 
-Homebrew asks `Do you want to proceed with the installation? [y/n]` before it installs; press `y`.
 `gh auth login` asks four questions with the answers you want already selected, so press Enter at each: **GitHub.com**, **Login with a web browser**, **HTTPS**, then **Yes** to authenticate Git.
 `claude` opens a browser login; complete it, then type `/exit`, or press Enter if it asks whether to trust your home folder, which just closes it.
 
-You should see: `gh auth status` says you are logged in to github.com, and `claude --version` prints a version.
+You should see: `gh auth status` says you are logged in to github.com.
+
+**Your first-hour checklist.** It lists every step from here to your first report and ticks each one off by itself as it completes.
+To keep it open while you work, open one more Terminal window and run:
+
+```sh
+~/starship/bin/fm-first-hour.sh --watch
+```
 
 ---
 
@@ -62,10 +76,11 @@ You should see: `gh auth status` says you are logged in to github.com, and `clau
 
 Your first mate and its workers run inside [Herdr](https://herdr.dev), a terminal view made for AI agents: every worker shows up in its sidebar, with whether it is working or waiting for you.
 
+On a Mac, step 2 already got Starship and set up Herdr; start at **Prefer a guided start?** below.
 Coming from [ONBOARDING-windows.md](ONBOARDING-windows.md)? Its setup script already did the first part, and its step 8 opened Herdr; start at **Start your first mate**, in Herdr's shell.
 Coming from [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md)? A server runs in tmux instead; start at **Start your first mate**, inside your tmux session.
 
-**Get Starship and set up Herdr:**
+**Get Starship and set up Herdr by hand** (only if you skipped step 2's setup line):
 
 ```sh
 git clone https://github.com/Amplify-Logic/starship ~/starship
@@ -137,22 +152,20 @@ On Windows, follow the daily steps in [ONBOARDING-windows.md step 9](ONBOARDING-
 Type anything; `hello` is enough.
 
 Your first mate introduces itself and leads the rest of your setup.
-It lists the tools still missing (for example `treehouse` and `no-mistakes`), says what each is for, and asks before installing.
-Say **yes**.
-
-You should see: it reports the tools installed, with nothing required still missing.
+Every tool is already installed by step 2, so it installs nothing here.
+If it says a few tools did not finish installing, open a new plain Terminal window (not a Herdr pane), run the line it gives you, and tell it when it is done.
 
 It may also mention that your Claude Code version is newer than the one Starship was checked with, and ask whether to re-certify or pin it.
 You can ignore that: nothing is blocked, keeping that check current is the maintainers' job, and you can answer "leave it as it is".
 
 Then it asks you four questions, one at a time, each with its reason:
 
-1. What to call you, and how you like to be talked to.
-2. The one thing you'd most like off your plate.
+1. Your name, and, if you like, how you like to be talked to.
+2. What your work is about and what you would like a hand with; "I'm new and still finding out" is a fine answer.
 3. Three house rules it keeps unless you change them, and the one rule that is yours.
-4. The address of one GitHub repository you know well.
+4. What the first report should be on: a GitHub repository you know well or, if you have none, a folder on your Mac with some of your own work in it.
 
-Answer in your own words; "keep the defaults" is a fine answer to the first and the third.
+Answer in your own words; "keep the defaults" is a fine answer to the third, and to how you like to be talked to, while your name is always yours to give.
 The three rules it offers are the ones that keep it safe: it never sends, posts or replies to anyone outside on your behalf without showing you the draft first, nothing merges without your word, and nothing destructive or irreversible happens without you saying so.
 It writes your answers into your private preferences file (`data/captain.md`) and gives every worker your first rule as you left it, or no such rule if you dropped it.
 The conversation itself lives in [the first-voyage skill](.agents/skills/first-voyage/SKILL.md), which is what your first mate follows.
@@ -162,7 +175,7 @@ You should see: it tells you your answers are written in your preferences file, 
 Before the fourth question, it asks your yes to make you your own private repository on your GitHub account, your add-on.
 This step is not optional: if you say no, the first project waits until you agree.
 Every change you want to how your first mate works goes there, never into public Starship, so nothing of yours can reach the public repository by mistake.
-It also checks that every push from your home is screened for private words, and starts your private word list (`config/leak-words`), where you add the names that must never appear in public, such as people and customers.
+It also checks that every push from your home is screened, so nothing private reaches the public repository.
 If GitHub is not signed in yet, it stops and tells you how to sign in; run `gh auth login` again if so, then tell it you're done.
 
 You should see: it names your new private repository, and says every push from your home is now checked.
@@ -171,15 +184,17 @@ You should see: it names your new private repository, and says every push from y
 
 ## 5. Finish line: the first report comes back
 
-Right after the fourth answer, your first mate adds that repository as your first project, delivered through no-mistakes: every change goes through the full no-mistakes checks and comes to you as a pull request, and nothing merges until you say so.
-It also tells you one or two true things about the repository.
-Then it proposes the first job from what you said you want off your plate: a report on the part of that repository closest to it, with no changes.
+Right after the fourth answer, your first mate adds your first project.
+A repository is added through no-mistakes: every change goes through the full no-mistakes checks and comes to you as a pull request, and nothing merges until you say so.
+A folder of your own work becomes a project that stays on your Mac: the report reads the folder where it is, changes nothing in it, and publishes nothing.
+It also tells you one or two true things about what it found.
+Then it proposes the first job from what you said about your work: a report on the part closest to it, with no changes.
 Say **go**, or name a different part you know well.
 
 You should see: a few minutes later, a short plain-English report on that part.
 Check it against what you know.
-That one report proves the whole stack end to end: your GitHub access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
-Your setup is finished.
+That one report proves the whole stack end to end: your access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
+Your setup is finished, and every step of your first-hour checklist is ticked.
 To see this and every later job at a glance, ask your first mate to open the Factory pane (`bin/fm-factory-pane.sh install`, run inside Herdr; see [docs/factory-pane.md](docs/factory-pane.md)).
 
 If the session ends before the first report, just say so next time, for example "let's finish setting up", and your first mate picks up where it left off.
@@ -224,8 +239,10 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | You see | Do this |
 |---|---|
 | `Invalid input. Please press 'y' to proceed` | Homebrew is asking yes or no; press `y`. |
-| `command not found: brew` | Run the two `PATH` lines Homebrew printed at the end, then open a new Terminal window. |
-| `command not found: npm` or `claude` | `brew install node`, then `npm install -g @anthropic-ai/claude-code`, then open a new Terminal window. |
+| `command not found: brew` | Open a new Terminal window; step 2's setup line makes new windows find Homebrew. If it is still not found, run that line again. |
+| `command not found: npm` or `claude` | Run step 2's setup line again, then open a new Terminal window. |
+| Not sure what is left to do | `~/starship/bin/fm-first-hour.sh` lists every first-hour step, ticked or not, and says how to finish the next one. |
+| A command someone sent you over chat fails with odd quote marks | Ask them to send it as a code block; chat apps turn straight quotes into curly ones. |
 | `gh: not logged in` or `NEEDS_GH_AUTH` | `gh auth login`, answering its four questions with GitHub.com, the web browser, HTTPS, and Yes to authenticate Git. |
 | `bin/fm-primary.sh` refuses to start | `bin/fm-primary.sh opus --preflight` names what is missing without starting anything. |
 | `permission denied` on `bin/fm-primary.sh` | `chmod +x bin/*.sh`, then launch again. |
@@ -235,6 +252,6 @@ It explains the whole system in plain words, how to connect your mail, calendar 
 | Claude says you reached your usage limit, or workers stop until a reset time | On Claude Pro, your first mate and every Opus worker share one usage window. Wait for the reset time Claude names, then ask the first mate to run fewer workers at a time, or lower its thinking level with `echo low > config/primary-effort` and start it again. |
 | It asks whether to re-certify or pin Claude Code | Ignore it; say "leave it as it is". Nothing is blocked, and that check is the maintainers' job. |
 | `skipped: dirty working tree` after "update starship" | `git -C ~/starship status --short` lists the cause. Move a `??` file out of `~/starship`; for an `M` file, save a copy elsewhere if you want it, then `git -C ~/starship restore <path>`. Then update again. |
-| It cannot add your first project | Your GitHub account cannot see that repository yet; ask its owner to invite you. |
+| It cannot add your first project | Your GitHub account cannot see that repository yet; ask its owner to invite you, or give it a folder of your own work instead. |
 | It never notices a worker finished | The trust prompt was declined; quit, launch again, and choose **Yes, I trust this folder**. |
 | Nothing happens for minutes | Normal - work runs in the background. Ask "what are you doing?" |

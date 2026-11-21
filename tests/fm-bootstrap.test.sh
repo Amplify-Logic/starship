@@ -1041,6 +1041,131 @@ SH
   pass "bootstrap: install attempts every approved tool, exits 1 naming the ones whose installer failed, and blames a GitHub outage for release downloads"
 }
 
+# install-missing reads the same detection a session start prints, so a setup
+# script installs exactly what the first mate would otherwise ask about: an
+# absent tool through its install command and an outdated one through its own
+# updater, and nothing at all once the home is complete.
+test_install_missing_installs_what_detection_reports() {
+  local case_dir fakebin base out status
+  case_dir="$TMP_ROOT/install-missing"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  : > "$case_dir/calls.log"
+  rm -f "$fakebin/treehouse" "$fakebin/gh-axi"
+  base=$(fm_test_base_path_sans "$BASE_PATH" treehouse gh-axi)
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+url=
+for arg in "$@"; do case "$arg" in -*) ;; *) url=$arg ;; esac; done
+printf 'curl %s\n' "$url" >> "$FAKE_CALLS"
+printf 'echo installed from %s\n' "$url"
+# The installer leaves a treehouse with lease support, as the real one does.
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo "treehouse version v0.4.2 (fake)"\n[ "${1:-} ${2:-}" = "get --help" ] && echo "Usage: treehouse get [--lease]"\nexit 0\n' > "$(dirname "$0")/treehouse"
+chmod +x "$(dirname "$0")/treehouse"
+SH
+  # npm installs the named tool the way a real install would, so the
+  # `<tool> setup hooks` step that follows it finds the tool. It also reads
+  # standard input, which must not swallow the tools listed after it.
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >> "$FAKE_CALLS"
+cat >/dev/null
+tool=${3:-}
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo 0.1.29\nexit 0\n' > "$(dirname "$0")/$tool"
+chmod +x "$(dirname "$0")/$tool"
+SH
+  chmod +x "$fakebin/curl" "$fakebin/npm"
+  # Its updater really updates, so the detection that follows the installs
+  # finds it current.
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --version ] && { echo "no-mistakes version v${FM_FAKE_NM_VERSION:-1.50.0} (fake)"; exit 0; }
+printf 'no-mistakes %s\n' "$*" >> "$FAKE_CALLS"
+[ "${1:-}" = update ] && sed -i.bak 's/FM_FAKE_NM_VERSION:-1.50.0/FM_FAKE_NM_VERSION:-1.59.2/' "$0"
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    "$ROOT/bin/fm-bootstrap.sh" install-missing --check 2>&1 </dev/null) || status=$?
+  [ "$status" -eq 1 ] || fail "--check with tools pending should exit 1, got $status: $out"
+  assert_contains "$out" "needs: treehouse (install)" "--check names an absent tool"
+  assert_contains "$out" "needs: gh-axi (install)" "--check names every absent tool"
+  assert_contains "$out" "needs: no-mistakes (upgrade)" "--check names an outdated tool as an upgrade"
+  [ ! -s "$case_dir/calls.log" ] || fail "--check must install nothing: $(cat "$case_dir/calls.log")"
+
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" install-missing 2>&1 </dev/null) || status=$?
+  [ "$status" -eq 0 ] || fail "install-missing with working installers should exit 0, got $status: $out"
+  assert_contains "$(cat "$case_dir/calls.log")" "curl https://kunchenguid.github.io/treehouse/install.sh" \
+    "an absent treehouse is installed with its installer"
+  assert_contains "$(cat "$case_dir/calls.log")" "npm install -g gh-axi" "an absent npm tool is installed with npm"
+  assert_contains "$(cat "$case_dir/calls.log")" "no-mistakes update" "an outdated tool is upgraded with its own updater"
+  assert_not_contains "$(cat "$case_dir/calls.log")" "npm install -g tasks-axi" "a present tool is left alone"
+
+  : > "$case_dir/calls.log"
+  fm_fake_version_tool "$fakebin" gh-axi FM_FAKE_GH_AXI_VERSION 0.1.29
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --version ] && { echo "treehouse version v0.4.2 (fake)"; exit 0; }
+[ "${1:-} ${2:-}" = "get --help" ] && echo "Usage: treehouse get [--lease]"
+exit 0
+SH
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --version ] && echo "no-mistakes version v1.59.2 (fake)"
+exit 0
+SH
+  chmod +x "$fakebin/treehouse" "$fakebin/no-mistakes"
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    "$ROOT/bin/fm-bootstrap.sh" install-missing --check 2>&1 </dev/null) || status=$?
+  [ "$status" -eq 0 ] && [ -z "$out" ] || fail "--check on a complete home should be silent and exit 0, got $status: $out"
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    "$ROOT/bin/fm-bootstrap.sh" install-missing 2>&1 </dev/null) || status=$?
+  [ "$status" -eq 0 ] || fail "install-missing on a complete home should exit 0, got $status: $out"
+  assert_contains "$out" "every tool this home needs is installed" "a complete home says nothing is pending"
+  [ ! -s "$case_dir/calls.log" ] || fail "a complete home must install nothing: $(cat "$case_dir/calls.log")"
+  [ ! -e "$case_dir/home/state" ] || fail "install-missing must not start a session's state in the home"
+  pass "install-missing installs absent tools, upgrades outdated ones, and does nothing once the home is complete"
+}
+
+# An installer that exits 0 can still leave a tool below its floor: on a Node
+# older than quota-axi's engines field, npm quietly installs an old quota-axi
+# release. install-missing must then fail naming the tool, not exit 0 and leave
+# a closing check whose rerun repeats the same install.
+test_install_missing_fails_when_an_install_leaves_a_tool_outdated() {
+  local case_dir fakebin base out status
+  case_dir="$TMP_ROOT/install-missing-still-outdated"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  : > "$case_dir/calls.log"
+  rm -f "$fakebin/quota-axi"
+  base=$(fm_test_base_path_sans "$BASE_PATH" quota-axi)
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >> "$FAKE_CALLS"
+tool=${3:-}
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --version ] && echo 0.1.8\nexit 0\n' > "$(dirname "$0")/$tool"
+chmod +x "$(dirname "$0")/$tool"
+SH
+  chmod +x "$fakebin/npm"
+  status=0
+  out=$(PATH="$fakebin:$base" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" FAKE_CALLS="$case_dir/calls.log" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh" install-missing 2>&1 </dev/null) || status=$?
+  assert_contains "$(cat "$case_dir/calls.log")" "npm install -g quota-axi" "the absent quota-axi is installed"
+  [ "$status" -eq 1 ] || fail "install-missing should exit 1 when a tool is still below its floor, got $status: $out"
+  assert_contains "$out" "OUTDATED: quota-axi (installed: 0.1.8; requires 0.1.51" \
+    "the failure names the tool, the version it got, and the floor"
+  assert_contains "$out" "error: not installed: quota-axi" "the summary names the tool"
+  pass "install-missing exits 1 naming a tool an installer left below its floor"
+}
+
 test_orca_backend_gates_orca_tool_only_when_selected() {
   local case_dir fakebin out missing_orca
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
@@ -2274,6 +2399,8 @@ test_git_is_required_with_supported_install_instruction
 test_host_environment_reports
 test_host_environment_names_arm_without_chrome
 test_install_reports_failed_installers
+test_install_missing_installs_what_detection_reports
+test_install_missing_fails_when_an_install_leaves_a_tool_outdated
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux

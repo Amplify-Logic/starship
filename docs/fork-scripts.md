@@ -7,6 +7,8 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
 | `fm-linux-setup.sh`      | Take a fresh Ubuntu 24.04, inside WSL 2 or on a server, to the point where a first mate can start |
+| `fm-mac-setup.sh`        | Take a Mac to the point where a first mate can start, in one quote-free command: Homebrew, Node and jq first, then Claude Code, Starship, Herdr and every tool the first mate needs, before Herdr opens |
+| `fm-first-hour.sh`       | The first-hour checklist: every step from a blank machine to the first report, each ticked from evidence as it completes, with `--watch` to keep it on screen |
 | `fm-herdr-setup.sh`      | Make a fresh home start in Herdr: install Herdr and its Claude Code integration, select it as the runtime, and add the `starship` and `onboard-starship` commands |
 | `fm-release.sh`          | Maintainer-only cut of the next named Starship release from a green default branch, with its CHANGELOG.md section as notes |
 | `fm-claude-reply-speak.sh` | Claude Stop `async` hook speaking the primary's final reply through desk voice-out when the turn spoke nothing (docs/fork-configuration.md "Desk voice-out"), and warning the first mate at its next turn, without blocking, when that reply used internal terms `AGENTS.md` section 9 says to translate |
