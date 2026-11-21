@@ -1594,9 +1594,12 @@ test_top_level_fixing_done_log_stays_working() {
 }
 
 # The bucket the overview's "ready for your OK" count and the Factory pane
-# read off one crew-state line (fm_fleet_status_bucket).
+# read off one crew-state line (fm_fleet_status_bucket). A child bash keeps
+# the lib's globals (FM_CLASSIFY_EVENT_WINDOW_LINES among them) out of this
+# suite's shell.
 fleet_bucket_of() {  # <line> <meta>
-  ( . "$ROOT/bin/fm-fleet-status-lib.sh" && fm_fleet_status_bucket "$1" "$2" )
+  # shellcheck disable=SC2016 # The child bash expands its own positional args.
+  bash -c '. "$1" && fm_fleet_status_bucket "$2" "$3"' _ "$ROOT/bin/fm-fleet-status-lib.sh" "$1" "$2"
 }
 
 # The 2026-11-21 PR #104 / #105 shape: the pipeline rebased and pushed a head
