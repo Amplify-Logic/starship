@@ -147,7 +147,10 @@ test_trail_lines_carry_no_names() {
   [ "$("$RULES" trail docs)" = "Merge trail: landed by itself under this project's merge rule (docs only)." ] \
     || fail "trail: docs line changed"
   "$RULES" trail tests | grep -q '(tests only)' || fail "trail: tests line changed"
-  "$RULES" trail deps | grep -q 'same major version' || fail "trail: deps line changed"
+  [ "$("$RULES" trail deps)" = "Merge trail: landed by itself under this project's merge rule (dependency updates within the same major version)." ] \
+    || fail "trail: deps line changed"
+  [ "$("$RULES" trail lockfiles)" = "Merge trail: landed by itself under this project's merge rule (lockfile-only dependency refresh)." ] \
+    || fail "trail: lockfile-only line changed"
   "$RULES" trail anything | grep -q 'any green change' || fail "trail: anything line changed"
   set +e
   "$RULES" trail mixed > /dev/null 2>&1

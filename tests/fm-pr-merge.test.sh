@@ -6370,10 +6370,12 @@ test_merge_rule_rows_and_malformed_table() {
 
 # A dependency pull request lands by itself only when each package.json moves
 # its versions within the same major number, read at the merge base and head.
+# One that changes only lockfiles lands too, but its trail never claims a
+# version check that did not run.
 test_merge_rule_checks_package_json_versions() {
   local case_dir rc head base=b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0 label
   head=e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3
-  for label in same-major major-bump added unreadable; do
+  for label in same-major lockfile-only major-bump added unreadable; do
     case_dir=$(make_case "merge-rule-deps-$label")
     add_gh_mocks "$case_dir" "$head"
     write_merge_rules "$case_dir" 'project | deps | the owner'
@@ -6387,6 +6389,8 @@ test_merge_rule_checks_package_json_versions() {
     esac
     if [ "$label" = added ]; then
       printf '%s\n' '[{"filename":"web/package.json","status":"added"},{"filename":"web/package-lock.json","status":"added"}]' > "$case_dir/github-files.json"
+    elif [ "$label" = lockfile-only ]; then
+      printf '%s\n' '[{"filename":"web/package-lock.json","status":"modified"},{"filename":"Cargo.lock","status":"modified"}]' > "$case_dir/github-files.json"
     else
       printf '%s\n' '[{"filename":"web/package.json","status":"modified"},{"filename":"web/package-lock.json","status":"modified"}]' > "$case_dir/github-files.json"
     fi
@@ -6398,8 +6402,15 @@ test_merge_rule_checks_package_json_versions() {
     case "$label" in
       same-major)
         expect_code 0 "$rc" "merge-rule-deps-$label: a same-major update must land by itself: $(cat "$case_dir/stderr")"
-        assert_grep 'dependency updates within the same major version' "$case_dir/gh.log" \
-          "merge-rule-deps-$label: the trail did not name the dependency class"
+        grep -qxF "pr comment 78 --repo example/repo --body Merge trail: landed by itself under this project's merge rule (dependency updates within the same major version)." "$case_dir/gh.log" \
+          || fail "merge-rule-deps-$label: the trail did not name the checked dependency update"
+        ;;
+      lockfile-only)
+        expect_code 0 "$rc" "merge-rule-deps-$label: a lockfile-only refresh must land by itself: $(cat "$case_dir/stderr")"
+        grep -qxF "pr comment 78 --repo example/repo --body Merge trail: landed by itself under this project's merge rule (lockfile-only dependency refresh)." "$case_dir/gh.log" \
+          || fail "merge-rule-deps-$label: the trail did not say lockfile-only: $(grep 'pr comment' "$case_dir/gh.log" || true)"
+        assert_no_grep 'same major version' "$case_dir/gh.log" \
+          "merge-rule-deps-$label: the trail claimed a version check that never ran"
         ;;
       *)
         expect_code 1 "$rc" "merge-rule-deps-$label: the update must wait for a yes"

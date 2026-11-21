@@ -255,7 +255,9 @@
 # GitLab or Forgejo merge is refused unless its row lets anything land, because
 # those changed files are not read here. After a GitHub merge is confirmed, the
 # pull request gets one generic merge-trail comment saying it merged on the
-# owner's yes or landed by itself under which class; a queued merge gets none,
+# owner's yes or landed by itself under which class (a dependency pull request
+# that changes no package.json is named a lockfile-only refresh, since no
+# version check ran); a queued merge gets none,
 # and a comment that fails is reported without changing the merge outcome.
 # Without the table none of this applies.
 #
@@ -1407,7 +1409,11 @@ github_merge_rule_check() {
 "
     return 0
   fi
-  FM_PR_MERGE_TRAIL_CLASS=$class
+  if [ "$class" = deps ] && [ -z "$manifests" ]; then
+    FM_PR_MERGE_TRAIL_CLASS=lockfiles
+  else
+    FM_PR_MERGE_TRAIL_CLASS=$class
+  fi
 }
 
 # Percent-encode each segment of a path for a REST URL, keeping its slashes.

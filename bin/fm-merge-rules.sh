@@ -10,7 +10,9 @@
 #
 # TABLE (config/merge-rules; optional, private, gitignored, not inherited by
 # secondmate homes). Without the file nothing here applies and every merge
-# behaves as before. With it, the table is the whole answer to "what may land
+# behaves as before. Because the table is not inherited, a home without its own
+# config/merge-rules, including a secondmate home, keeps its existing merge
+# rules even when another home has a table. With it, the table is the whole answer to "what may land
 # without the owner's yes": one row per project, three fields split by "|":
 #
 #   # project          | lands by itself   | who must say yes
@@ -61,14 +63,17 @@
 # each GitHub pull request it confirms merged, saying who let it land and under
 # which rule, with no names: "merged on the owner's yes" when the merge was
 # --captain-approved, otherwise "landed by itself under this project's merge
-# rule" with the class that let it.
+# rule" with the class that let it. A dependency pull request that changes no
+# package.json had no version check, so its line says "lockfile-only
+# dependency refresh"; "dependency updates within the same major version"
+# appears only when every changed package.json passed deps-check.
 #
 # Usage:
 #   fm-merge-rules.sh check                 validate the table; prints its row count
 #   fm-merge-rules.sh rule <project>        print the row a project path or name reads
 #   fm-merge-rules.sh classify              classify GitHub pull request file pages on stdin
 #   fm-merge-rules.sh deps-check <old> <new>  compare two package.json files
-#   fm-merge-rules.sh trail <class|approved>  print the merge-trail line
+#   fm-merge-rules.sh trail <class|lockfiles|approved>  print the merge-trail line
 #   fm-merge-rules.sh -h | --help
 # FM_HOME selects the home whose config/merge-rules is read.
 
@@ -238,13 +243,15 @@ fm_merge_rules_deps_check() {  # <old-file> <new-file>
   [ -z "$out" ] || { printf '%s\n' "$out"; return 1; }
 }
 
-# The generic merge-trail line. Arg: approved, or the class that let it land.
+# The generic merge-trail line. Arg: approved, the class that let it land, or
+# lockfiles for a dependency pull request that changed no package.json.
 fm_merge_rules_trail() {
   case "${1-}" in
     approved) echo "Merge trail: merged on the owner's yes." ;;
     docs) echo "Merge trail: landed by itself under this project's merge rule (docs only)." ;;
     tests) echo "Merge trail: landed by itself under this project's merge rule (tests only)." ;;
     deps) echo "Merge trail: landed by itself under this project's merge rule (dependency updates within the same major version)." ;;
+    lockfiles) echo "Merge trail: landed by itself under this project's merge rule (lockfile-only dependency refresh)." ;;
     anything) echo "Merge trail: landed by itself under this project's merge rule (any green change)." ;;
     *) return 1 ;;
   esac
@@ -286,7 +293,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       fm_merge_rules_deps_check "$2" "$3"
       ;;
     trail)
-      fm_merge_rules_trail "${2:-}" || { echo "usage: fm-merge-rules.sh trail <approved|docs|tests|deps|anything>" >&2; exit 2; }
+      fm_merge_rules_trail "${2:-}" || { echo "usage: fm-merge-rules.sh trail <approved|docs|tests|deps|lockfiles|anything>" >&2; exit 2; }
       ;;
     *)
       echo "usage: fm-merge-rules.sh check|rule|classify|deps-check|trail (see --help)" >&2
