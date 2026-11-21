@@ -110,7 +110,7 @@ the focus began or the last key press, so a pane left focused does not look
 forever. A factory's own tab records none, since it shows one factory only.
 
 A PR's short section. Finished work waiting for the merge word shows the In
-short, You need to and Risk parts of its PR's description (the sections
+short, See it, You need to and Risk parts of its PR's description (the sections
 .github/pull_request_template.md asks for) above `k  keep it`, read with
 `gh pr view` for a GitHub PR and kept for half an hour (pr_summaries); a PR
 opened without those sections, or one that cannot be read, shows none.
@@ -1117,14 +1117,14 @@ def plain_words(value: Any) -> str:
 
 
 # The short plain section a PR opens with (.github/pull_request_template.md),
-# shown beside the merge choice: these three of its parts, in this order.
-PR_SUMMARY_PARTS = ("In short", "You need to", "Risk")
+# shown beside the merge choice: its four parts, in this order.
+PR_SUMMARY_PARTS = ("In short", "See it", "You need to", "Risk")
 # How long a PR's short section is kept before it is read again.
 PR_SUMMARY_KEEP = 1800
 
 
 def pr_summary(body: Optional[str]) -> List[Dict[str, str]]:
-    """The In short, You need to and Risk lines of a PR description, each as plain words.
+    """The In short, See it, You need to and Risk lines of a PR description, each as plain words.
 
     A part is the text under its heading up to the next heading or the folded
     technical detail, with the template's comments left out; a part that is

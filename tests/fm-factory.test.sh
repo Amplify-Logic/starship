@@ -881,7 +881,7 @@ test_only_the_highlighted_call_opens_as_a_card() {
 }
 
 # Merges are answered on the Factory pane, so finished work shows the short
-# plain section its PR opens with (In short, You need to, Risk) beside the
+# plain section its PR opens with (In short, See it, You need to, Risk) beside the
 # merge choice, read once and kept, and a PR without that section shows none.
 test_finished_work_shows_its_pr_short_section_beside_the_merge_choice() {
   reset_case
@@ -927,14 +927,14 @@ SH
   out=$(python3 "$FACTORY" --plain --width 92 --item garden-share) || fail "--plain failed"
   assert_contains "$out" "$(printf '%s\n' \
     "       In short     A garden page can now be shared as a picture." \
+    "       See it       Open a garden page and press Share." \
     "       You need to  Nothing." \
     "       Risk         Low: a very long page may be cut short." \
     "       k  keep it    c  ask for changes")" "the short section does not sit above the merge choice"
-  assert_not_contains "$out" "Open a garden page" "a part other than the three was shown"
   assert_not_contains "$out" "folded part" "the folded detail was read as the short section"
   screen=$(python3 "$FACTORY" --screen) || fail "--screen failed"
   assert_equals "$(printf '%s' "$screen" | jq -r '.needs[] | select(.id == "garden-share") | .summary | map("\(.label)=\(.text)") | join("|")')" \
-    "In short=A garden page can now be shared as a picture.|You need to=Nothing.|Risk=Low: a very long page may be cut short." \
+    "In short=A garden page can now be shared as a picture.|See it=Open a garden page and press Share.|You need to=Nothing.|Risk=Low: a very long page may be cut short." \
     "the screen data does not carry the short section"
   assert_equals "$(printf '%s' "$screen" | jq -r '[.needs[] | select(.kind == "question") | .summary | length] | add')" "0" \
     "a question carries a short section"
@@ -947,7 +947,7 @@ SH
   assert_not_contains "$out" "In short" "a PR without the short section showed one"
   assert_contains "$out" "       k  keep it    c  ask for changes" "the merge choice is missing"
   unset FM_FACTORY_PR_BODY
-  pass "factory pane: finished work shows its PR's In short, You need to and Risk beside the merge choice"
+  pass "factory pane: finished work shows its PR's In short, See it, You need to and Risk beside the merge choice"
 }
 
 # On 2026-11-15 the feed listed jobs as finished that had only been closed.
