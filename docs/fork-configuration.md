@@ -21,6 +21,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
 | The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
 | Answering held decisions and ready merges by tapping on the phone | [Phone tap desk](#phone-tap-desk-configtap-desk) |
+| Which pull requests land by themselves and who must say yes to the rest | [Merge rule table](#merge-rule-table-configmerge-rules) |
 | Waking the first mate when something arrives in a Mothership room | [Mothership monitoring](#mothership-monitoring-configmothership-monitor) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
@@ -882,6 +883,25 @@ Its presence switches on the `tap-desk` [opt-in skill](#opt-in-skills-configadhd
 The page needs a Claude Code primary that can publish artifacts and read their database.
 Its private records live under `data/tap-desk/`: the card file and page `bin/fm-tap-desk.sh export` writes, the artifact link, the downloaded taps, and `ledger.jsonl`, the record of every routed tap and seven-day default; reasons also land in the decision record and as rule candidates in `data/learnings.md`.
 `bin/fm-tap-desk.sh`'s header owns the card format, routing, refusals, and default rules, and the skill owns when firstmate runs them.
+
+## Merge rule table (config/merge-rules)
+
+Optional, private, gitignored, and not inherited by secondmate homes.
+Without the file, merges behave as before.
+Because the table is not inherited, a home without its own `config/merge-rules`, including a secondmate home, keeps its existing merge rules even when another home has a table.
+With it, the file is the one written answer to which pull requests land by themselves: one row per project naming what lands by itself (docs, tests, deps, anything, or nothing) and who must say yes to everything else.
+
+```text
+# project      | lands by itself   | who must say yes
+example-app    | docs, tests, deps | the owner
+example-site   | nothing           | the owner
+```
+
+`bin/fm-pr-merge.sh` checks each GitHub merge against the task's project row: without `--captain-approved`, a pull request merges only when its row lets anything land or every file it changes sits in one single class the row lists, read from the pull request's changed files at merge time.
+A project with no row, a mixed or unlisted class, and a pull request that no task owns wait for a yes, and a malformed table refuses every merge until it is fixed.
+Each merge it confirms on GitHub then gets one generic comment saying who let it land and under which rule, such as "merged on the owner's yes" or "landed by itself under this project's merge rule (docs only)", with no names.
+A dependency pull request says "dependency updates within the same major version" only when every package.json it changes passed the version check; one that changes only lockfiles had no version check and says "lockfile-only dependency refresh".
+`bin/fm-merge-rules.sh`'s header owns the table format, row matching, the file classes, and the trail lines, and `bin/fm-pr-merge.sh`'s header owns how a merge uses them.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

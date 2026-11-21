@@ -49,6 +49,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-startup-memory-budget.sh` | Validate and report the bounded startup-memory allowance and current usage |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |
+| `fm-merge-rules.sh`      | The home's merge rule table: its format, which project row a merge reads, the docs, tests, and dependency classes of a pull request's changed files, and the generic merge-trail line (docs/fork-configuration.md "Merge rule table") |
 | `fm-tap-desk.sh`         | Export the owner's calls as phone tap cards, read each held decision's options and recommendation (`shapes`), route the taps through the captain-hold and PR-merge paths, and apply the seven-day easy-to-undo default |
 | `fm-read.sh`             | Open a task's own page, or render Markdown reports as one private loopback Lavish reading page |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |

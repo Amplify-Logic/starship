@@ -243,6 +243,24 @@
 # to be given in person. GitLab and Forgejo merges carry neither refusal yet,
 # so --captain-approved is refused there rather than silently dropped.
 #
+# While this home has a merge rule table (config/merge-rules; bin/fm-merge-rules.sh
+# owns its format, row matching, and file classes), a GitHub merge without
+# --captain-approved also needs the task's project row to let the pull request
+# land by itself: the row lists anything, or every file the pull request
+# changes, read live, sits in one class the row lists. No row (including every
+# --no-task merge, which records no project), a row that lets nothing land, a
+# mixed or unlisted class, or a read that fails is one more refusal reported
+# beside the others, lifted only by --captain-approved. A malformed table
+# refuses every merge before anything is recorded, and while a table exists a
+# GitLab or Forgejo merge is refused unless its row lets anything land, because
+# those changed files are not read here. After a GitHub merge is confirmed, the
+# pull request gets one generic merge-trail comment saying it merged on the
+# owner's yes or landed by itself under which class (a dependency pull request
+# that changes no package.json is named a lockfile-only refresh, since no
+# version check ran); a queued merge gets none,
+# and a comment that fails is reported without changing the merge outcome.
+# Without the table none of this applies.
+#
 # A GitHub pull request that no task owns, such as a teammate's, is merged by
 # passing --no-task in place of the task id. It meets every live pre-merge
 # condition above, the author and rules refusals included (with no recorded
@@ -291,6 +309,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-afk-contract.sh"
 # shellcheck source=bin/fm-role-lib.sh
 . "$SCRIPT_DIR/fm-role-lib.sh"
+# shellcheck source=bin/fm-merge-rules.sh
+. "$SCRIPT_DIR/fm-merge-rules.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -720,6 +740,7 @@ fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
 # changed-file read, so a task-less pull request, which records no project, is
 # always checked.
 RULES_GUARDED=true
+MERGE_PROJECT=
 if [ "$NO_TASK" = false ]; then
   if [ ! -f "$META" ] || [ -L "$META" ]; then
     echo "error: task metadata is unavailable" >&2
@@ -734,6 +755,19 @@ if [ "$NO_TASK" = false ]; then
   if [ -n "$MERGE_PROJECT" ] && ! fm_role_rules_guarded "$MERGE_PROJECT" "$FM_ROOT" "$FM_HOME"; then
     RULES_GUARDED=false
   fi
+fi
+
+# The home's merge rule table, read before anything is recorded. The header's
+# merge-rule paragraph owns what it changes here; bin/fm-merge-rules.sh owns the
+# table, its row matching, and the file classes.
+if ! fm_merge_rules_resolve "$FM_HOME" "$MERGE_PROJECT"; then
+  echo "error: PR merge refused: $FM_MERGE_RULES_ERROR" >&2
+  exit 1
+fi
+if [ "$FM_MERGE_RULES_ACTIVE" = true ] && [ "$PROVIDER" != github ] \
+  && [ "$FM_MERGE_RULE_LANDS" != anything ]; then
+  echo "error: PR merge refused: this home's merge rule table is checked against a GitHub pull request's changed files, which this script does not read on $PROVIDER; only a project whose row lets anything land by itself merges here, so this merge waits for a yes and is made on the forge by hand" >&2
+  exit 1
 fi
 
 MERGE_CONTROL_LOCK=
@@ -1212,15 +1246,25 @@ github_checks_not_green() {
 # Sets FM_PR_MERGE_HEAD to the verified head on success. Returns 3, rather than
 # the usual 1, when mergeable=UNKNOWN is the only failing condition, so the
 # caller can retry a still-computing mergeability read instead of refusing.
-# The two refusals only the captain's explicit yes lifts, set as refusal lines
-# each ending in a newline, or empty, in FM_PR_CAPTAIN_REFUSALS. The account
-# login is read once per run. Args: the live pull request view JSON.
+# The refusals only the captain's explicit yes lifts, set as refusal lines
+# each ending in a newline, or empty, in FM_PR_CAPTAIN_REFUSALS: another
+# account's pull request, a change to Starship's own rules, and, while the
+# merge rule table exists, a pull request its project's row does not let land
+# by itself. The account login is read once per run. Args: the live pull
+# request view JSON.
 FM_PR_GITHUB_OWN_LOGIN=
 FM_PR_CAPTAIN_REFUSALS=
+# The class whose row let this pull request land by itself, or approved, for
+# the merge-trail line; empty while no merge rule table exists.
+FM_PR_MERGE_TRAIL_CLASS=
 github_captain_word_refusals() {
-  local json=$1 author files rules out=''
+  local json=$1 author files='' files_read=true rules out=''
   FM_PR_CAPTAIN_REFUSALS=
-  [ "$CAPTAIN_APPROVED" = false ] || return 0
+  FM_PR_MERGE_TRAIL_CLASS=
+  if [ "$CAPTAIN_APPROVED" = true ]; then
+    [ "$FM_MERGE_RULES_ACTIVE" = false ] || FM_PR_MERGE_TRAIL_CLASS=approved
+    return 0
+  fi
   author=$(printf '%s' "$json" | jq -r '.author.login // empty | strings' 2>/dev/null || true)
   if [ -z "$FM_PR_GITHUB_OWN_LOGIN" ]; then
     FM_PR_GITHUB_OWN_LOGIN=$(gh api user 2>/dev/null | jq -r '.login // empty | strings' 2>/dev/null || true)
@@ -1232,8 +1276,11 @@ github_captain_word_refusals() {
     out="$out  - the pull request was opened by '$author', not by this home's GitHub account '$FM_PR_GITHUB_OWN_LOGIN'; merge only with --captain-approved after the captain's explicit yes
 "
   fi
+  if [ "$RULES_GUARDED" = true ] || github_merge_rule_reads_files; then
+    files=$(gh api --paginate "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/files" 2>/dev/null) || files_read=false
+  fi
   if [ "$RULES_GUARDED" = true ]; then
-    if ! files=$(gh api --paginate "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/files" 2>/dev/null) \
+    if [ "$files_read" = false ] \
       || ! rules=$(printf '%s' "$files" | jq -rs '
         [ .[] | if type == "array" then .[] else error("invalid files page") end
           | if (.filename | type) == "string" then .filename, (.previous_filename // empty | strings)
@@ -1249,7 +1296,140 @@ github_captain_word_refusals() {
 "
     fi
   fi
+  if [ "$FM_MERGE_RULES_ACTIVE" = true ]; then
+    github_merge_rule_check "$json" "$files_read" "$files"
+    out="$out$FM_PR_MERGE_RULE_REFUSAL"
+  fi
   FM_PR_CAPTAIN_REFUSALS=$out
+}
+
+# Whether the merge rule check needs the changed files: only a row that lists
+# docs, tests, or deps classifies them.
+github_merge_rule_reads_files() {
+  [ "$FM_MERGE_RULES_ACTIVE" = true ] && [ -n "$FM_MERGE_RULE_PROJECT" ] || return 1
+  case " $FM_MERGE_RULE_LANDS " in
+    *" anything "* | *" nothing "*) return 1 ;;
+  esac
+  return 0
+}
+
+# Check one pull request against its project's merge rule row. Sets
+# FM_PR_MERGE_RULE_REFUSAL to one refusal line, or empty, and on a pass
+# FM_PR_MERGE_TRAIL_CLASS to the class that let it land by itself.
+# Args: live pull request view JSON, whether the files were read, the files.
+FM_PR_MERGE_RULE_REFUSAL=
+github_merge_rule_check() {
+  local json=$1 files_read=$2 files=$3 who=${FM_MERGE_RULE_YES:-the owner}
+  local fields='' line class='' classes='' outside='' manifests='' reason='' entry status path
+  local head base merge_base='' old new problems
+  FM_PR_MERGE_RULE_REFUSAL=
+  if [ -z "$FM_MERGE_RULE_PROJECT" ]; then
+    FM_PR_MERGE_RULE_REFUSAL="  - this home's merge rule table has no row for this pull request's project, so nothing lands by itself; merge only with --captain-approved after the owner's yes
+"
+    return 0
+  fi
+  case " $FM_MERGE_RULE_LANDS " in
+    *" anything "*)
+      FM_PR_MERGE_TRAIL_CLASS=anything
+      return 0
+      ;;
+    *" nothing "*)
+      reason="the merge rule for $FM_MERGE_RULE_PROJECT lets nothing land by itself"
+      ;;
+  esac
+  if [ -z "$reason" ] && { [ "$files_read" = false ] \
+    || ! fields=$(printf '%s' "$files" | fm_merge_rules_classify); }; then
+    reason="the files the pull request changes could not be read, so the merge rule for $FM_MERGE_RULE_PROJECT cannot be checked"
+  fi
+  if [ -z "$reason" ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        class=*) class=${line#class=} ;;
+        classes=*) classes=${line#classes=} ;;
+        outside=*) outside=${line#outside=} ;;
+        manifests=*) manifests=${line#manifests=} ;;
+      esac
+    done <<< "$fields"
+    case "$class" in
+      other)
+        reason="the pull request changes files outside the docs, tests, and dependency classes ($outside)"
+        ;;
+      mixed)
+        if [ -n "$outside" ]; then
+          reason="the pull request changes files outside the docs, tests, and dependency classes ($outside)"
+        else
+          reason="the pull request mixes classes ($classes), and only a pull request in one single class lands by itself"
+        fi
+        ;;
+      docs | tests | deps)
+        case " $FM_MERGE_RULE_LANDS " in
+          *" $class "*) ;;
+          *) reason="the pull request is $class only, which the merge rule for $FM_MERGE_RULE_PROJECT does not let land by itself (it lets $FM_MERGE_RULE_LANDS)" ;;
+        esac
+        ;;
+      *)
+        reason="the files the pull request changes could not be classified, so the merge rule for $FM_MERGE_RULE_PROJECT cannot be checked"
+        ;;
+    esac
+  fi
+  if [ -z "$reason" ] && [ "$class" = deps ] && [ -n "$manifests" ]; then
+    head=$(printf '%s' "$json" | jq -r '.headRefOid // empty | strings' 2>/dev/null || true)
+    base=$(printf '%s' "$json" | jq -r '.baseRefName // empty | strings' 2>/dev/null || true)
+    for entry in $manifests; do
+      status=${entry%%:*}
+      path=${entry#*:}
+      if [ "$status" != modified ]; then
+        reason="the pull request has $path as ${status:-changed} rather than only updating its versions"
+        break
+      fi
+      if [ -z "$merge_base" ]; then
+        if [ -z "$head" ] || [ -z "$base" ] \
+          || ! merge_base=$(gh api "repos/$PR_OWNER/$PR_REPO/compare/$(github_uri_path "$base")...$head" \
+            --jq '.merge_base_commit.sha // empty' 2>/dev/null) || [ -z "$merge_base" ]; then
+          merge_base=
+          reason="the pull request's merge base could not be read, so its package.json version changes cannot be checked"
+          break
+        fi
+      fi
+      if ! old=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+          "repos/$PR_OWNER/$PR_REPO/contents/$(github_uri_path "$path")?ref=$merge_base" 2>/dev/null) \
+        || ! new=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+          "repos/$PR_OWNER/$PR_REPO/contents/$(github_uri_path "$path")?ref=$head" 2>/dev/null); then
+        reason="$path could not be read at the merge base and head, so its version changes cannot be checked"
+        break
+      fi
+      if ! problems=$(fm_merge_rules_deps_check <(printf '%s' "$old") <(printf '%s' "$new")); then
+        reason="$path is not a same-major dependency update ($(printf '%s\n' "$problems" | paste -sd ';' - | sed 's/;/; /g'))"
+        break
+      fi
+    done
+  fi
+  if [ -n "$reason" ]; then
+    FM_PR_MERGE_RULE_REFUSAL="  - $reason; under this home's merge rule it waits for a yes from $who: merge only with --captain-approved after that yes
+"
+    return 0
+  fi
+  if [ "$class" = deps ] && [ -z "$manifests" ]; then
+    FM_PR_MERGE_TRAIL_CLASS=lockfiles
+  else
+    FM_PR_MERGE_TRAIL_CLASS=$class
+  fi
+}
+
+# Percent-encode each segment of a path for a REST URL, keeping its slashes.
+github_uri_path() {
+  printf '%s' "$1" | jq -sRr 'split("/") | map(@uri) | join("/")'
+}
+
+# Leave the generic merge-trail line on a merged pull request while the merge
+# rule table exists. A failed comment never undoes or misreports the merge.
+github_leave_merge_trail() {
+  local line
+  [ "$FM_MERGE_RULES_ACTIVE" = true ] && [ -n "$FM_PR_MERGE_TRAIL_CLASS" ] || return 0
+  line=$(fm_merge_rules_trail "$FM_PR_MERGE_TRAIL_CLASS") || return 0
+  if ! gh pr comment "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --body "$line" >/dev/null 2>&1; then
+    printf 'actionable: merged %s but could not leave its merge-trail note: %s\n' "$URL" "$line" >&2
+  fi
 }
 
 github_verify_mergeable() {
@@ -2079,6 +2259,7 @@ case "$PROVIDER" in
     if [ "$FM_PR_GITHUB_MERGED" = true ]; then
       printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
         "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+      github_leave_merge_trail
       # No task record means no merge poll or wake to publish.
       [ "$NO_TASK" = false ] || exit 0
     elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then

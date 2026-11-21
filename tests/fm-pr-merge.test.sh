@@ -282,6 +282,10 @@ case "${1:-} ${2:-}" in
     fi
     exit "$merge_rc"
     ;;
+  "pr comment")
+    [ ! -f "$(dirname "$FM_TEST_GH_VIEW_JSON")/github-comment-fail" ] || exit 1
+    exit 0
+    ;;
   "api graphql")
     if [ -f "${FM_TEST_GH_GRAPHQL_FAIL:-}" ]; then
       echo 'error: could not reach the GitHub API' >&2
@@ -307,6 +311,30 @@ case "${1:-} ${2:-}" in
           printf '%s\n' '[{"filename":"README.md"}]'
         fi
         exit 0
+        ;;
+      # The merge base and file versions the merge rule's package.json check
+      # reads: contents/<ref>/<path> under the case directory.
+      *" repos/"*"/compare/"*)
+        view_dir=$(dirname "$FM_TEST_GH_VIEW_JSON")
+        [ -f "$view_dir/merge-base" ] || exit 1
+        cat "$view_dir/merge-base"
+        exit 0
+        ;;
+      *" repos/"*"/contents/"*)
+        view_dir=$(dirname "$FM_TEST_GH_VIEW_JSON")
+        for arg in "$@"; do
+          case "$arg" in
+            repos/*/contents/*)
+              ref=${arg##*\?ref=}
+              path=${arg#repos/*/*/contents/}
+              path=${path%%\?ref=*}
+              [ -f "$view_dir/contents/$ref/$path" ] || exit 1
+              cat "$view_dir/contents/$ref/$path"
+              exit 0
+              ;;
+          esac
+        done
+        exit 1
         ;;
     esac
     # The required-check reads: the branch itself, and its rules read without
@@ -6187,3 +6215,239 @@ test_squash_summary_falls_back_to_repository_default
 test_squash_summary_caller_commit_text_wins
 test_squash_summary_leaves_gitlab_and_forgejo_untouched
 test_squash_summary_ignores_headings_inside_code_fences
+
+# The home's merge rule table (bin/fm-merge-rules.sh owns its format). The
+# task's project directory is "<case>/project", so its row is named project.
+write_merge_rules() {
+  local case_dir=$1
+  shift
+  printf '%s\n' '# project | lands by itself | who must say yes' "$@" \
+    > "$case_dir/home/config/merge-rules"
+}
+
+# A pull request inside a class its row lists lands by itself and leaves one
+# generic trail line naming that class; one outside it waits for a yes, which
+# --captain-approved gives, and that merge's trail says so.
+test_merge_rule_lands_only_listed_classes_and_leaves_a_trail() {
+  local case_dir rc head files
+  head=e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1
+  case_dir=$(make_case merge-rule-docs)
+  add_gh_mocks "$case_dir" "$head"
+  write_merge_rules "$case_dir" 'project | docs, tests | the owner'
+  printf '%s\n' '[{"filename":"docs/guide.md"},{"filename":"README.md"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/71 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-rule-docs: a docs-only pull request must land by itself: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 71 example/repo --squash
+  grep -qxF "pr comment 71 --repo example/repo --body Merge trail: landed by itself under this project's merge rule (docs only)." "$case_dir/gh.log" \
+    || fail "merge-rule-docs: the trail line was not left: $(grep 'pr comment' "$case_dir/gh.log" || true)"
+
+  for files in '[{"filename":"docs/guide.md"},{"filename":"bin/app.sh"}]' \
+    '[{"filename":"docs/guide.md"},{"filename":"tests/app.test.sh"}]' \
+    '[{"filename":"package-lock.json"}]' \
+    '[{"filename":"docs/new.md","previous_filename":"bin/old.sh"}]' \
+    '[{"filename":".github/notes.md"}]' '[{"filename":"AGENTS.md"}]'; do
+    case_dir=$(make_case "merge-rule-out-$(printf '%s' "$files" | cksum | cut -d' ' -f1)")
+    add_gh_mocks "$case_dir" "$head"
+    write_merge_rules "$case_dir" 'project | docs, tests | the owner'
+    printf '%s\n' "$files" > "$case_dir/github-files.json"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/72 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "merge-rule-out: $files must wait for a yes"
+    assert_grep 'waits for a yes from the owner: merge only with --captain-approved' "$case_dir/stderr" \
+      "merge-rule-out: the refusal for $files did not name the merge rule"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "merge-rule-out: gh pr merge ran for $files"
+    assert_no_grep 'pr comment' "$case_dir/gh.log" "merge-rule-out: a trail was left for $files"
+  done
+  assert_grep 'AGENTS.md' "$case_dir/stderr" "merge-rule-out: an agent instruction file was not named"
+
+  case_dir=$(make_case merge-rule-mixed)
+  add_gh_mocks "$case_dir" "$head"
+  write_merge_rules "$case_dir" 'project | docs, tests | the owner'
+  printf '%s\n' '[{"filename":"docs/guide.md"},{"filename":"tests/app.test.sh"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/73 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  set -e
+  assert_grep 'mixes classes (docs tests)' "$case_dir/stderr" "merge-rule-mixed: the mix was not named"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/73 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-rule-mixed: --captain-approved must lift the merge rule: $(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 73 example/repo --squash
+  grep -qxF "pr comment 73 --repo example/repo --body Merge trail: merged on the owner's yes." "$case_dir/gh.log" \
+    || fail "merge-rule-mixed: the approved trail line was not left"
+  pass "fm-pr-merge lands only a merge rule's listed classes by itself and leaves a generic trail line"
+}
+
+# A project with no row, a row that lets nothing land, and a task-less pull
+# request all wait for a yes; a row that lets anything land merges without
+# reading the files; a malformed table refuses before anything is recorded.
+test_merge_rule_rows_and_malformed_table() {
+  local case_dir rc head
+  head=e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2
+  for label in no-row nothing no-task; do
+    case_dir=$(make_case "merge-rule-$label")
+    add_gh_mocks "$case_dir" "$head"
+    case "$label" in
+      no-row) write_merge_rules "$case_dir" 'other-app | docs | the owner' ;;
+      *) write_merge_rules "$case_dir" 'project | nothing | the owner' ;;
+    esac
+    set +e
+    if [ "$label" = no-task ]; then
+      run_pr_merge "$case_dir" --no-task https://github.com/example/repo/pull/74 \
+        > "$case_dir/stdout" 2> "$case_dir/stderr"
+    else
+      run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/74 \
+        > "$case_dir/stdout" 2> "$case_dir/stderr"
+    fi
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "merge-rule-$label: the merge must wait for a yes"
+    case "$label" in
+      nothing) assert_grep 'lets nothing land by itself' "$case_dir/stderr" "merge-rule-$label: the reason was not named" ;;
+      *) assert_grep 'has no row for this pull request' "$case_dir/stderr" "merge-rule-$label: the reason was not named" ;;
+    esac
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "merge-rule-$label: gh pr merge ran"
+  done
+
+  case_dir=$(make_case merge-rule-anything)
+  add_gh_mocks "$case_dir" "$head"
+  write_merge_rules "$case_dir" 'project | anything | nobody'
+  printf '%s\n' '[{"filename":"src/app.ts"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/75 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-rule-anything: any green pull request must land: $(cat "$case_dir/stderr")"
+  assert_grep "any green change" "$case_dir/gh.log" "merge-rule-anything: the trail did not name the rule"
+
+  case_dir=$(make_case merge-rule-malformed)
+  add_gh_mocks "$case_dir" "$head"
+  write_merge_rules "$case_dir" 'project | docs, features | the owner'
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/76 --captain-approved \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "merge-rule-malformed: a malformed table must refuse"
+  assert_grep 'config/merge-rules is malformed: line 2 has unknown class features' "$case_dir/stderr" \
+    "merge-rule-malformed: the refusal did not name the bad line"
+  assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" "merge-rule-malformed: the PR was recorded"
+  [ ! -s "$case_dir/gh.log" ] || fail "merge-rule-malformed: the forge was read"
+
+  case_dir=$(make_gitlab_case merge-rule-gitlab)
+  write_merge_rules "$case_dir" 'project | docs | the owner'
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "merge-rule-gitlab: a GitLab merge under a docs row must refuse"
+  assert_grep 'does not read on gitlab' "$case_dir/stderr" "merge-rule-gitlab: the reason was not named"
+  assert_no_grep 'mr merge' "$case_dir/glab.log" "merge-rule-gitlab: glab merged"
+
+  case_dir=$(make_case merge-rule-no-table)
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' '[{"filename":"src/app.ts"}]' > "$case_dir/github-files.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/77 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-rule-no-table: without a table the merge must behave as before"
+  assert_no_grep 'pr comment' "$case_dir/gh.log" "merge-rule-no-table: a trail was left without a table"
+  pass "fm-pr-merge reads the merge rule row, refuses a malformed table, and changes nothing without one"
+}
+
+# A dependency pull request lands by itself only when each package.json moves
+# its versions within the same major number, read at the merge base and head.
+# One that changes only lockfiles lands too, but its trail never claims a
+# version check that did not run.
+test_merge_rule_checks_package_json_versions() {
+  local case_dir rc head base=b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0 label
+  head=e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3
+  for label in same-major lockfile-only major-bump added unreadable; do
+    case_dir=$(make_case "merge-rule-deps-$label")
+    add_gh_mocks "$case_dir" "$head"
+    write_merge_rules "$case_dir" 'project | deps | the owner'
+    printf '%s\n' "$base" > "$case_dir/merge-base"
+    mkdir -p "$case_dir/contents/$base/web" "$case_dir/contents/$head/web"
+    printf '%s\n' '{"name":"web","dependencies":{"left-pad":"^1.2.0"}}' > "$case_dir/contents/$base/web/package.json"
+    case "$label" in
+      major-bump) printf '%s\n' '{"name":"web","dependencies":{"left-pad":"^2.0.0"}}' > "$case_dir/contents/$head/web/package.json" ;;
+      unreadable) rm -f "$case_dir/merge-base" ;;
+      *) printf '%s\n' '{"name":"web","dependencies":{"left-pad":"^1.3.0"}}' > "$case_dir/contents/$head/web/package.json" ;;
+    esac
+    if [ "$label" = added ]; then
+      printf '%s\n' '[{"filename":"web/package.json","status":"added"},{"filename":"web/package-lock.json","status":"added"}]' > "$case_dir/github-files.json"
+    elif [ "$label" = lockfile-only ]; then
+      printf '%s\n' '[{"filename":"web/package-lock.json","status":"modified"},{"filename":"Cargo.lock","status":"modified"}]' > "$case_dir/github-files.json"
+    else
+      printf '%s\n' '[{"filename":"web/package.json","status":"modified"},{"filename":"web/package-lock.json","status":"modified"}]' > "$case_dir/github-files.json"
+    fi
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/78 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    case "$label" in
+      same-major)
+        expect_code 0 "$rc" "merge-rule-deps-$label: a same-major update must land by itself: $(cat "$case_dir/stderr")"
+        grep -qxF "pr comment 78 --repo example/repo --body Merge trail: landed by itself under this project's merge rule (dependency updates within the same major version)." "$case_dir/gh.log" \
+          || fail "merge-rule-deps-$label: the trail did not name the checked dependency update"
+        ;;
+      lockfile-only)
+        expect_code 0 "$rc" "merge-rule-deps-$label: a lockfile-only refresh must land by itself: $(cat "$case_dir/stderr")"
+        grep -qxF "pr comment 78 --repo example/repo --body Merge trail: landed by itself under this project's merge rule (lockfile-only dependency refresh)." "$case_dir/gh.log" \
+          || fail "merge-rule-deps-$label: the trail did not say lockfile-only: $(grep 'pr comment' "$case_dir/gh.log" || true)"
+        assert_no_grep 'same major version' "$case_dir/gh.log" \
+          "merge-rule-deps-$label: the trail claimed a version check that never ran"
+        ;;
+      *)
+        expect_code 1 "$rc" "merge-rule-deps-$label: the update must wait for a yes"
+        assert_no_grep 'pr merge' "$case_dir/gh.log" "merge-rule-deps-$label: gh pr merge ran"
+        ;;
+    esac
+  done
+  assert_grep 'merge base could not be read' "$TMP_ROOT/merge-rule-deps-unreadable/stderr" \
+    "merge-rule-deps: an unreadable merge base was not named"
+  assert_grep 'left-pad changes major version (^1.2.0 to ^2.0.0)' "$TMP_ROOT/merge-rule-deps-major-bump/stderr" \
+    "merge-rule-deps: the major bump was not named"
+  assert_grep 'web/package.json as added' "$TMP_ROOT/merge-rule-deps-added/stderr" \
+    "merge-rule-deps: an added manifest was not named"
+  pass "fm-pr-merge lands a dependency pull request by itself only within the same major version"
+}
+
+# A trail comment that fails is reported and leaves the merge outcome alone.
+test_merge_rule_trail_failure_keeps_the_merge() {
+  local case_dir rc
+  case_dir=$(make_case merge-rule-trail-fails)
+  add_gh_mocks "$case_dir" e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4
+  write_merge_rules "$case_dir" 'project | docs | the owner'
+  : > "$case_dir/github-comment-fail"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/79 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-rule-trail-fails: the merge must still succeed"
+  assert_grep 'could not leave its merge-trail note' "$case_dir/stderr" \
+    "merge-rule-trail-fails: the failed note was not reported"
+  assert_grep 'verified: https://github.com/example/repo/pull/79 is merged' "$case_dir/stdout" \
+    "merge-rule-trail-fails: the merge was not verified"
+  pass "fm-pr-merge reports a failed merge-trail note without changing the merge outcome"
+}
+
+test_merge_rule_lands_only_listed_classes_and_leaves_a_trail
+test_merge_rule_rows_and_malformed_table
+test_merge_rule_checks_package_json_versions
+test_merge_rule_trail_failure_keeps_the_merge
