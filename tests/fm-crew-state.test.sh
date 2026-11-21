@@ -1669,7 +1669,7 @@ test_ci_ready_done_with_pipeline_rewritten_head_reads_ready() {
 # the run's own head.
 test_ci_ready_done_attributed_run_needs_the_run_head_on_the_forge() {
   reset_fakes
-  local d out live url=https://github.com/o/r/pull/2
+  local d out live rewritten url=https://github.com/o/r/pull/2
   d=$(new_case rewritten-attributed)
   make_repo_on_branch "$d/wt" fm/rewritten-run
   live=$FM_FAKE_RUN_HEAD
@@ -1690,7 +1690,16 @@ test_ci_ready_done_attributed_run_needs_the_run_head_on_the_forge() {
   out=$(FM_FAKE_READY_HEAD=2222222222222222222222222222222222222222 \
     FM_FAKE_READY_CHECKS_HEAD=2222222222222222222222222222222222222222 run_crew_state "$d" rwrun)
   assert_contains "$out" "state: blocked" "a forge head other than the run's own is not this run's green"
-  pass "an attributed run's CI-ready done needs the run's own head green on the forge"
+
+  rewritten=4444444444444444444444444444444444444444
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/rewritten-run; printf 'branch_sync:\n  pipeline:\n    current_head: %s\n' "$rewritten")"
+  out=$(FM_FAKE_READY_HEAD=$rewritten run_crew_state "$d" rwrun)
+  assert_contains "$out" "state: done · source: status-log" \
+    "a PR green at the head the pipeline rebased and pushed reads done"
+  out=$(run_crew_state "$d" rwrun)
+  assert_contains "$out" "state: blocked" \
+    "once the pipeline pushed another head, the worker's handed-over head on the forge is stale"
+  pass "an attributed run's CI-ready done needs the run's pushed head green on the forge"
 }
 
 # The 2026-11-21 PR #101 shape (no-mistakes v1.106.1): a ci fix round found
@@ -1735,7 +1744,7 @@ LOG
 
 test_ci_fix_round_watching_a_green_pr_reads_ready() {
   reset_fakes
-  local d out
+  local d out rewritten
   d=$(new_case ci-fix-round-green)
   make_repo_on_branch "$d/wt" fm/fixround
   make_fakebin "$d" >/dev/null
@@ -1783,6 +1792,15 @@ test_ci_fix_round_watching_a_green_pr_reads_ready() {
   FM_FAKE_AXI_STATUS="$(run_ci_fix_round_watching fm/fixround fixing)"
   out=$(run_crew_state "$d" fixround)
   assert_contains "$out" "state: working" "a run that is itself fixing stays in the pipeline"
+
+  rewritten=5555555555555555555555555555555555555555
+  FM_FAKE_AXI_STATUS="$(run_ci_fix_round_watching fm/fixround; printf 'branch_sync:\n  pipeline:\n    current_head: %s\n' "$rewritten")"
+  out=$(FM_FAKE_READY_HEAD=$rewritten run_crew_state "$d" fixround)
+  assert_contains "$out" "state: done · source: run-step · checks green: PR ready for review" \
+    "a fix round after a rebase that rewrote the head reads ready when the pushed head is green"
+  out=$(run_crew_state "$d" fixround)
+  assert_contains "$out" "state: working" \
+    "green at the run's handed-over head is stale once the pipeline pushed another"
   pass "a ci fix round watching a PR green at the run's head reads ready"
 }
 

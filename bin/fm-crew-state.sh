@@ -142,7 +142,8 @@
 #      that says fixing while the run itself is not fixing (a fix round that
 #      found nothing to change and went back to watching CI) reads done only
 #      when the ci log's newest marker is green and the bounded forge read
-#      proves the run's PR open, not a draft, and green at the run's head. And a
+#      proves the run's PR open, not a draft, and green at the head the pipeline
+#      last pushed. And a
 #      terminal failed or cancelled run whose only unfinished step is the ci
 #      monitor, after every substantive step completed (an explicitly skipped
 #      rebase is allowed) and the ci log's last marker reads checks green,
@@ -399,7 +400,7 @@ ship_done_ready_on_forge() {
   url=$(fm_dod_pr_url_from_done_note "$note") || return 1
   branch=$(meta_value branch)
   [ -n "$branch" ] || branch=${CREW_BRANCH:-}
-  forge_pr_ready_at_live_head "$url" "$branch" "${RUN_HEAD:-}"
+  forge_pr_ready_at_live_head "$url" "$branch" "${RUN_PUSHED_HEAD:-}"
 }
 
 # 0 when the bounded (5s) forge read proves <url> is an open, non-draft GitHub
@@ -1445,6 +1446,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     RUN_STATUS=$status
     RUN_ID=$(strip_quotes "$(nm_field id)")
     RUN_HEAD=$(strip_quotes "$(nm_field head)")
+    # The head the pipeline itself last pushed: after a rebase or fix round it
+    # is not the head the worker handed over (same order as
+    # fm_dod_nm_custody_returned).
+    RUN_PUSHED_HEAD=$(fm_nm_branch_sync_nested "$RUN_OUT" pipeline current_head)
+    [ -n "$RUN_PUSHED_HEAD" ] || RUN_PUSHED_HEAD=$(strip_quotes "$(nm_field head_sha)")
+    [ -n "$RUN_PUSHED_HEAD" ] || RUN_PUSHED_HEAD=$RUN_HEAD
     # The pull request THIS run opened, if it reached its pr step at all. A run
     # that never opened one reports no pr field, and that absence is meaningful:
     # it is what keeps a terminal outcome from being lent an older task's PR.
@@ -1536,14 +1543,12 @@ if [ "$HAVE_RUN" = 1 ]; then
             # done only while the top-level run is not itself fixing, the
             # newest ci log marker is green - a later round start, agent run,
             # or red marker is not (nm_ci_checks_state) - and the bounded forge
-            # read proves the run's PR open, not a draft, and green at the
-            # run's own head.
+            # read proves the run's PR open, not a draft, and green at the head
+            # the pipeline last pushed.
             if [ "$RUN_STATUS" != fixing ] && [ "$(nm_ci_checks_state)" = green ]; then
               ci_pr_url=$(strip_quotes "$(nm_field pr)")
-              ci_head=$(strip_quotes "$(nm_field head_sha)")
-              [ -n "$ci_head" ] || ci_head=$RUN_HEAD
-              if [ -n "$ci_pr_url" ] && [ -n "$ci_head" ] \
-                && forge_pr_ready_at_live_head "$ci_pr_url" "$CREW_BRANCH" "$ci_head" >/dev/null; then
+              if [ -n "$ci_pr_url" ] && [ -n "$RUN_PUSHED_HEAD" ] \
+                && forge_pr_ready_at_live_head "$ci_pr_url" "$CREW_BRANCH" "$RUN_PUSHED_HEAD" >/dev/null; then
                 CI_LOG_STATE=green
                 RUN_STATE="done"
                 RUN_DETAIL="checks green: PR ready for review (green at its live head on the forge; the ci fix round still monitors for merge/close): $ci_pr_url"
