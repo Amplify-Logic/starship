@@ -634,7 +634,7 @@ test_replay_draws_the_last_rendered_figures_again() {
   out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_STATUS_BAR_NOW=1000 \
     "$ROOT/bin/fm-status-bar.sh" --replay --own </dev/null | strip_ansi)
   rm -f "$HOME_FIX/state/.afk"
-  [ "$out" = '⚓ Opus·xhigh │ 🧠50% ⚡20% │ $1.50' ] \
+  [ "$out" = "⚓ Opus·xhigh │ 🧠50% ⚡20% │ \$1.50" ] \
     || fail "replay --own should print only model and effort, usage and cost, got '$out'"
   rm -f "$HOME_FIX/state/.primary-status-metrics"
   pass "status bar: replay draws the last rendered figures again with fresh fleet fields, or only its own with --own"
