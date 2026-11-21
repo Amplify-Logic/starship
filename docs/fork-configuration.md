@@ -789,6 +789,24 @@ Delivery is a durable record under private `data/dropped-threads/`, which a late
 Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the resolved knobs and installed file, or `remove` to unload it.
 The default cadence is 900 seconds, read back from the digest owner; set `interval_seconds = N` in `config/dropped-threads` to change it.
 
+## Weekly changes page (config/weekly-changes)
+
+An opt-in weekly page that says in plain words what changed across your registered projects, for a reader who does not open pull requests.
+It ships inert: with no `enabled = true` line in private gitignored `config/weekly-changes`, `bin/fm-weekly-changes.py` does nothing at all, so cloning this repo, seeding a secondmate home, or adding a device never enrols it.
+Each home and each device opts in separately.
+
+Once a week, at the configured local weekday and time (Monday 07:00 by default), it writes one local page covering the week before.
+For each project, busiest first, it shows the changelog bullets added that week, then every pull request merged that week by its In short section (the first section of the [PR text](#pr-text) template), or by its title when it has none, each with a link to the pull request.
+It names the projects where nothing landed and the ones it could not read, with why.
+It reads GitHub through the signed-in `gh` and only reads; it never wakes firstmate, writes no backlog or inbox record, and never changes a project.
+
+Pages live under private `data/weekly-changes/`; `bin/fm-weekly-changes.py open` opens the newest, `preview` shows the week so far without opting in, and the [web page](web.md#this-week) has a This week button for it.
+The script's header owns the project and source rules, the page files, the exact commands and the config keys (`weekday`, `time`, `days`, `interval_seconds`).
+
+`bin/fm-weekly-changes-schedule.sh` owns the inspectable macOS launchd schedule, written through the shared `bin/fm-launchd-schedule-lib.sh`, and refuses to install on a home that has not opted in.
+Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the resolved settings and installed file, or `remove` to unload it.
+It polls hourly by default, read back from the page owner, and writes each week's page once, on the first poll after the weekly time.
+
 ## Desk voice-out (config/speak)
 
 An opt-in, per-home and per-device gate for speaking a captain-facing outcome out of this machine's own speaker.

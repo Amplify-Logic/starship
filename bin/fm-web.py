@@ -1908,7 +1908,18 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/":
             self._nonce = secrets.token_urlsafe(16)
-            self._send(200, page_html(self._nonce, STATE.csrf).encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, page_html(self._nonce, STATE.csrf, weekly_page(STATE.home) is not None).encode("utf-8"),
+                       "text/html; charset=utf-8")
+        elif parsed.path == "/weekly":
+            page = weekly_page(STATE.home)
+            if page is None:
+                self._text(404, "No weekly page has been written yet.")
+                return
+            # The page carries one inline <style> and no script, so the
+            # response's nonce is the only thing it needs to render.
+            self._nonce = secrets.token_urlsafe(16)
+            body = page.replace("<style>", f'<style nonce="{self._nonce}">', 1)
+            self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
         elif parsed.path.startswith("/api/picture/"):
             pid = parsed.path[len("/api/picture/"):]
             found = STATE.transcript.picture(pid) if PICTURE_ID_RE.match(pid) else None
@@ -2111,7 +2122,7 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 .aside.good{color:var(--done)}.aside.low{color:var(--work)}.aside.critical{color:var(--you);font-weight:600}
 .tools{display:flex;align-items:center;gap:.375rem}
 .gear,.qbtn{flex:none;display:inline-flex;align-items:center;gap:.375rem;border:1px solid var(--hull-line);background:transparent;color:var(--hull-2);border-radius:.5rem;padding:.2rem .6rem;font-size:.81rem}
-.qbtn{padding:.2rem .5rem;font-weight:600}
+.qbtn{padding:.2rem .5rem;font-weight:600;text-decoration:none}
 .gear:hover,.gear[aria-expanded="true"],.qbtn:hover,.qbtn[aria-expanded="true"]{color:var(--hull-ink);border-color:var(--edge)}
 .gear svg{font-size:.95rem}
 .lamp .s{display:none}
@@ -3480,7 +3491,17 @@ def signin_html(nonce: str, stale: bool) -> str:
 """
 
 
-def page_html(nonce: str, csrf: str) -> str:
+def weekly_page(home: Path) -> Optional[str]:
+    """The newest weekly "what changed" page, which bin/fm-weekly-changes.py owns."""
+    try:
+        return (home / "data" / "weekly-changes" / "latest.html").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
+    weekly_link = ('<a class="qbtn" href="/weekly" target="_blank" rel="noopener" '
+                   'title="What changed this week">This week</a>\n') if weekly else ""
     return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script>
 </head>
 <body data-csrf="{html.escape(csrf, quote=True)}" data-build="{html.escape(BUILD, quote=True)}">{ship_symbol()}
@@ -3489,7 +3510,7 @@ def page_html(nonce: str, csrf: str) -> str:
 <div class="brand"><span>Starship</span></div>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Projects"></nav>
 <div class="band" id="band"><span class="band-note">reading the crew</span></div>
-<div class="tools"><button class="qbtn" id="keysBtn" type="button" aria-expanded="false" aria-controls="keysSheet" aria-label="Keyboard keys" title="Keyboard keys (?)">?</button>
+<div class="tools">{weekly_link}<button class="qbtn" id="keysBtn" type="button" aria-expanded="false" aria-controls="keysSheet" aria-label="Keyboard keys" title="Keyboard keys (?)">?</button>
 <button class="gear" id="gear" type="button" aria-expanded="false" aria-controls="settings"><span>Settings</span></button></div>
 </header>
 <div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">Firstmate</button>

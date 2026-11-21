@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **A weekly plain "what changed" page is available.** Nothing changes until you opt in: put `enabled = true` in `~/starship/config/weekly-changes` and run `bin/fm-weekly-changes-schedule.sh install`, and every Monday morning a local page lists each project's changes from the week by their short summary, with the changelog highlights and a link to each change ([configuration](docs/fork-configuration.md#weekly-changes-page-configweekly-changes)).
+  `bin/fm-weekly-changes.py open` opens it, and the web page's This week button does too.
 - **Starship's PRs now open with a short plain section.** In short, See it, You need to and Risk come first, the technical detail is folded, and the test results and pipeline history sit in one closed Validation block with raw logs kept on the machine that ran them.
   Nothing changes for your own projects until you opt one in: copy Starship's PR template and its two `pr:` settings into that project ([configuration](docs/fork-configuration.md#pr-text)).
 - **`starship` is now part of every setup, with `onboard-starship` beside it for a guided first start.** `bin/fm-herdr-setup.sh` now adds both commands; `onboard-starship` sets a new desk up one step at a time and ends with a starter desk layout, so plain `starship` opens it from then on.
