@@ -505,13 +505,13 @@ test_a_long_paste_is_sent_and_the_limit_is_named() {
   cookie=$(sign_in "$home" "$port")
   csrf=$(csrf_of "$port" "$cookie")
   long=$(python3 -c 'print(" ".join(["word"] * 7000), end="")')
-  jq -nc --arg t "$long" '{text:$t}' > "$home/long.json"
+  printf '%s' "$long" | python3 -c 'import json, sys; print(json.dumps({"text": sys.stdin.buffer.read().decode()}))' > "$home/long.json"
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/long.json" "http://127.0.0.1:$port/api/send")
   assert_equals "$(jq -r '.outcome' <<<"$out")" "typed" "a 35,000 character paste is sent"
   cmp -s "$home/desk-voice.stdin" <(printf '%s' "$long") || fail "the whole paste reached desk voice"
   long=$(python3 -c 'print("\U0001F600" * 40000, end="")')
   [ "$(printf '%s' "$long" | wc -c | tr -d ' ')" -gt 131071 ] || fail "the paste must outgrow one Linux argument"
-  jq -nc --arg t "$long" '{text:$t}' > "$home/long.json"
+  printf '%s' "$long" | python3 -c 'import json, sys; print(json.dumps({"text": sys.stdin.buffer.read().decode()}))' > "$home/long.json"
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/long.json" "http://127.0.0.1:$port/api/send")
   assert_equals "$(jq -r '.outcome' <<<"$out")" "typed" "a paste larger than one Linux argument is sent"
   cmp -s "$home/desk-voice.stdin" <(printf '%s' "$long") || fail "the paste larger than one Linux argument reached desk voice whole"
