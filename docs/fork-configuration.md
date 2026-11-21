@@ -800,8 +800,9 @@ For each project, busiest first, it shows the changelog bullets added that week,
 It names the projects where nothing landed and the ones it could not read, with why.
 It reads GitHub through the signed-in `gh` and only reads; it never wakes firstmate, writes no backlog or inbox record, and never changes a project.
 
-Pages live under private `data/weekly-changes/`; `bin/fm-weekly-changes.py open` opens the newest, `preview` shows the week so far without opting in, and the [web page](web.md#this-week) has a This week button for it.
-The script's header owns the project and source rules, the page files, the exact commands and the config keys (`weekday`, `time`, `days`, `interval_seconds`).
+Pages live under private `data/weekly-changes/`, the newest as `latest.html`, and the [web page](web.md#this-week) has a This week button for it.
+Each page covers the seven days before its slot.
+The script's header owns the project and source rules, the page files, the exact commands and the config keys (`weekday`, `time`, `interval_seconds`).
 
 `bin/fm-weekly-changes-schedule.sh` owns the inspectable macOS launchd schedule, written through the shared `bin/fm-launchd-schedule-lib.sh`, and refuses to install on a home that has not opted in.
 Run `render` to inspect the complete definition, `install` to write and load it, `status` to print the resolved settings and installed file, or `remove` to unload it.

@@ -12,9 +12,11 @@
 #   - When GitHub cannot be read for any project nothing is written, so the next
 #     run retries; when only some fail, the page is written and names them.
 #   - Text from GitHub is escaped, and a changelog failure only adds a note.
-#   - preview works without opting in and writes nothing under the home.
-#   - Local configuration is validated and unknown keys are refused.
-#   - Old pages are pruned, latest and open find the newest page.
+#   - The lead sentence counts only projects where a pull request landed, not
+#     ones where only the changelog moved.
+#   - Local configuration is validated and unknown keys (days among them, since
+#     a page always covers seven days) are refused.
+#   - Old pages are pruned and status names the newest page.
 #   - The schedule renders, installs and removes against a temporary home and a
 #     fake launchd transport, and refuses a home that never opted in.
 set -u
@@ -62,11 +64,7 @@ fi
 echo "fake gh: unexpected call: $*" >&2
 exit 3
 SH
-cat >"$FAKEBIN/opener" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$FAKE_GH_DIR/opened.log"
-SH
-chmod +x "$FAKEBIN/gh" "$FAKEBIN/opener"
+chmod +x "$FAKEBIN/gh"
 
 cat >"$FAKE_GH_DIR/acme_alpha.prs.json" <<'JSON'
 [
@@ -128,8 +126,7 @@ page() {  # <home> <now> <args...>
   local h=$1 now=$2
   shift 2
   PATH="$FAKEBIN:$PATH" TZ=Europe/Amsterdam FM_HOME="$h" FM_ROOT_OVERRIDE="$CODE_ROOT" \
-    FM_WEEKLY_CHANGES_NOW="$now" FAKE_GH_DIR="$FAKE_GH_DIR" \
-    FM_WEEKLY_CHANGES_OPEN="$FAKEBIN/opener" "$PAGE" "$@"
+    FM_WEEKLY_CHANGES_NOW="$now" FAKE_GH_DIR="$FAKE_GH_DIR" "$PAGE" "$@"
 }
 
 gh_calls() {
@@ -239,52 +236,48 @@ test_failures() {
   pass 'a total failure writes nothing and retries; a partial one is named on the page'
 }
 
-test_preview_without_opt_in() {
-  local h out
-  h="$TMP_ROOT/preview"
-  new_home "$h" false
-  out=$(page "$h" "$T_WED" preview --days 9) || fail 'preview failed'
-  assert_contains "$out" 'What changed this week' 'preview printed no page'
-  assert_contains "$out" 'You can now drop a photo on the page.' 'preview missed a change in its window'
-  page "$h" "$T_WED" preview --out "$TMP_ROOT/preview.html" >/dev/null || fail 'preview --out failed'
-  assert_present "$TMP_ROOT/preview.html" 'preview --out wrote no file'
-  assert_absent "$h/data/weekly-changes" 'preview wrote under the home'
-  pass 'preview works without opting in and writes nothing under the home'
+test_lead_ignores_changelog_only_projects() {
+  local h html
+  h="$TMP_ROOT/changelog-only"
+  new_home "$h"
+  cp "$FAKE_GH_DIR/acme_alpha.commits" "$FAKE_GH_DIR/acme_quiet-one.commits"
+  page "$h" "$T_WED" run >/dev/null || fail 'run failed'
+  rm -f "$FAKE_GH_DIR/acme_quiet-one.commits"
+  html=$(cat "$h/data/weekly-changes/latest.html")
+  assert_contains "$html" '<h2>Quiet One <span>0 changes</span></h2>' 'the changelog-only project has no section'
+  assert_contains "$html" '5 changes landed across 3 projects.' 'the lead counted a project where no change landed'
+  pass 'the lead sentence counts only projects where a change landed'
 }
 
 test_configuration_is_validated() {
   local h out code
   h="$TMP_ROOT/config"
   new_home "$h"
-  for bad in 'colour = blue' 'weekday = someday' 'time = 7am' 'days = 0' 'enabled = yes' 'interval_seconds = -1'; do
+  for bad in 'colour = blue' 'weekday = someday' 'time = 7am' 'days = 7' 'enabled = yes' 'interval_seconds = -1'; do
     printf '%s\n' "$bad" >"$h/config/weekly-changes"
     out=$(page "$h" "$T_WED" status 2>&1) && code=0 || code=$?
     expect_code 2 "$code" "config line '$bad'"
   done
-  printf '# a comment\nenabled = true\nweekday = friday\ntime = 17:30\ndays = 14\ninterval_seconds = 600\n' \
+  printf '# a comment\nenabled = true\nweekday = friday\ntime = 17:30\ninterval_seconds = 600\n' \
     >"$h/config/weekly-changes"
   out=$(page "$h" "$T_WED" status) || fail 'status failed on a valid config'
   assert_contains "$out" 'weekday: friday' 'the weekday was not read'
-  assert_contains "$out" 'days: 14' 'days was not read'
   assert_equals 600 "$(page "$h" "$T_WED" interval)" 'interval did not print the configured cadence'
   pass 'configuration is validated and unknown keys are refused'
 }
 
-test_pruning_latest_and_open() {
-  local h i out code
+test_pruning_and_status() {
+  local h i
   h="$TMP_ROOT/prune"
   new_home "$h"
-  out=$(page "$h" "$T_WED" latest 2>&1) && code=0 || code=$?
-  expect_code 1 "$code" 'latest before any page'
+  assert_contains "$(page "$h" "$T_WED" status)" 'latest: none yet' 'status named a page before any was written'
   mkdir -p "$h/data/weekly-changes/pages"
   for i in $(seq 10 39); do : >"$h/data/weekly-changes/pages/2025-01-$i.html"; done
   page "$h" "$T_WED" run >/dev/null || fail 'run failed'
   assert_equals 26 "$(find "$h/data/weekly-changes/pages" -name '*.html' | wc -l | tr -d ' ')" 'old pages were not pruned to 26'
   assert_present "$h/data/weekly-changes/pages/2026-11-16.html" 'pruning removed the newest page'
-  assert_equals "$h/data/weekly-changes/latest.html" "$(page "$h" "$T_WED" latest)" 'latest did not print the page'
-  page "$h" "$T_WED" open || fail 'open failed'
-  assert_contains "$(cat "$FAKE_GH_DIR/opened.log")" "$h/data/weekly-changes/latest.html" 'open did not open the newest page'
-  pass 'old pages are pruned and latest and open find the newest'
+  assert_contains "$(page "$h" "$T_WED" status)" "latest: $h/data/weekly-changes/latest.html" 'status did not name the newest page'
+  pass 'old pages are pruned and status names the newest'
 }
 
 test_schedule_on_a_temp_home() {
@@ -337,7 +330,7 @@ test_inert_without_opt_in
 test_weekly_page_content
 test_slot_before_its_time
 test_failures
-test_preview_without_opt_in
+test_lead_ignores_changelog_only_projects
 test_configuration_is_validated
-test_pruning_latest_and_open
+test_pruning_and_status
 test_schedule_on_a_temp_home

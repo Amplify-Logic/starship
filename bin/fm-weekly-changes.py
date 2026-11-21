@@ -3,9 +3,6 @@
 
 Usage:
   fm-weekly-changes.py run
-  fm-weekly-changes.py preview [--days N] [--out FILE]
-  fm-weekly-changes.py latest
-  fm-weekly-changes.py open
   fm-weekly-changes.py status
   fm-weekly-changes.py interval
   fm-weekly-changes.py --help
@@ -53,15 +50,12 @@ own directory), and its only network use is the read-only gh calls above.
 `run` is the scheduled entry point (bin/fm-weekly-changes-schedule.sh installs
 it on macOS launchd) and the manual command. It writes the page for the latest
 weekly slot whose time has passed, once; a slot missed while the machine slept
-is written on the first run after it wakes. The page covers the `days` before
+is written on the first run after it wakes. The page covers the 7 days before
 that slot. When every project that should be read fails, nothing is written
 and it exits 1, so the next scheduled run tries the same slot again; when only
 some fail, the page is written and names them.
-`preview` writes the page for the `days` ending now to --out FILE, or prints it,
-and works whether or not the home has opted in. `latest` prints the newest
-page's path, `open` opens it in the default browser, `status` prints the
-resolved settings and the newest page, and `interval` prints the schedule's
-poll cadence.
+`status` prints the resolved settings and the newest page, and `interval`
+prints the schedule's poll cadence.
 
 PAGES. data/weekly-changes/pages/<slot-local-date>.html holds each week's page
 (the newest 26 are kept) and data/weekly-changes/latest.html is a copy of the
@@ -76,7 +70,6 @@ cloning the repo or seeding a secondmate home never enrols it. Lines are
   enabled           true to arm this home (default false)
   weekday           the slot's local weekday, monday..sunday (default monday)
   time              the slot's local HH:MM (default 07:00)
-  days              how many days one page covers (default 7)
   interval_seconds  scheduled poll cadence (default 3600)
 
 Environment:
@@ -84,7 +77,6 @@ Environment:
   FM_ROOT_OVERRIDE         code root (defaults to this script's repository)
   FM_WEEKLY_CHANGES_NOW    epoch second used as "now" (tests)
   FM_WEEKLY_CHANGES_GH     gh command (default gh)
-  FM_WEEKLY_CHANGES_OPEN   command `open` hands the page path to
 """
 
 from __future__ import annotations
@@ -116,9 +108,10 @@ GH_TIMEOUT = 60
 TEXT_MAX = 320
 HIGHLIGHTS_MAX = 8
 CHANGELOG = "CHANGELOG.md"
+WEEK_DAYS = 7
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-DEFAULTS = {"enabled": "false", "weekday": "monday", "time": "07:00", "days": "7",
+DEFAULTS = {"enabled": "false", "weekday": "monday", "time": "07:00",
             "interval_seconds": "3600"}
 
 # One data/projects.md row; the name ends at the first " [" or " - ", as in
@@ -176,9 +169,8 @@ def load_config() -> Dict[str, str]:
     match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", cfg["time"])
     if not match:
         die(f"time must be HH:MM: {cfg['time']}")
-    for key in ("days", "interval_seconds"):
-        if not re.fullmatch(r"[1-9]\d*", cfg[key]):
-            die(f"{key} must be a positive integer: {cfg[key]}")
+    if not re.fullmatch(r"[1-9]\d*", cfg["interval_seconds"]):
+        die(f"interval_seconds must be a positive integer: {cfg['interval_seconds']}")
     return cfg
 
 
@@ -441,14 +433,15 @@ def plural(n: int, one: str, many: str) -> str:
 
 
 def lead_sentence(busy: List[Dict[str, object]]) -> str:
-    total = sum(len(p["prs"]) for p in busy)  # type: ignore[arg-type]
     if not busy:
         return "Nothing landed this week."
-    if total == 0:
+    with_prs = [p for p in busy if p["prs"]]
+    total = sum(len(p["prs"]) for p in with_prs)  # type: ignore[arg-type]
+    if not with_prs:
         return "No pull requests landed this week, but the changelog moved."
-    if len(busy) == 1:
-        return f"{plural(total, 'change', 'changes')} landed in {busy[0]['label']}."
-    return f"{plural(total, 'change', 'changes')} landed across {len(busy)} projects."
+    if len(with_prs) == 1:
+        return f"{plural(total, 'change', 'changes')} landed in {with_prs[0]['label']}."
+    return f"{plural(total, 'change', 'changes')} landed across {len(with_prs)} projects."
 
 
 CSS = """
@@ -563,7 +556,7 @@ def cmd_run(cfg: Dict[str, str]) -> int:
         page = PAGES / f"{time.strftime('%Y-%m-%d', time.localtime(slot))}.html"
         if page.exists():
             return 0
-        text = build(shift_days(slot, int(cfg["days"]), hour, minute), slot)
+        text = build(shift_days(slot, WEEK_DAYS, hour, minute), slot)
         if text is None:
             return 1
         write_atomic(page, text)
@@ -574,44 +567,13 @@ def cmd_run(cfg: Dict[str, str]) -> int:
     return 0
 
 
-def cmd_preview(cfg: Dict[str, str], args: List[str]) -> int:
-    days, out = int(cfg["days"]), None
-    while args:
-        flag = args.pop(0)
-        if flag == "--days" and args and re.fullmatch(r"[1-9]\d*", args[0]):
-            days = int(args.pop(0))
-        elif flag == "--out" and args:
-            out = Path(args.pop(0))
-        else:
-            die(f"preview: unexpected argument: {flag}")
-    end = now()
-    start = end - days * 86400
-    text = build(start, end)
-    if text is None:
-        return 1
-    if out is None:
-        sys.stdout.write(text)
-    else:
-        write_atomic(out, text)
-        print(f"wrote: {out}")
-    return 0
-
-
 def cmd_status(cfg: Dict[str, str]) -> int:
     print(f"enabled: {cfg['enabled']}")
     print(f"weekday: {cfg['weekday']}")
     print(f"time: {cfg['time']}")
-    print(f"days: {cfg['days']}")
     print(f"interval_seconds: {cfg['interval_seconds']}")
     print(f"latest: {LATEST if LATEST.is_file() else 'none yet'}")
     return 0
-
-
-def cmd_open() -> int:
-    if not LATEST.is_file():
-        die("no weekly page has been written yet", 1)
-    opener = os.environ.get("FM_WEEKLY_CHANGES_OPEN") or ("open" if sys.platform == "darwin" else "xdg-open")
-    return subprocess.run(shlex.split(opener) + [str(LATEST)]).returncode
 
 
 def main(argv: List[str]) -> int:
@@ -619,20 +581,11 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(__doc__ or "")
         return 0 if argv else 2
     command, rest = argv[0], argv[1:]
-    if command not in ("preview",) and rest:
+    if rest:
         die(f"{command} takes no arguments")
     cfg = load_config()
     if command == "run":
         return cmd_run(cfg)
-    if command == "preview":
-        return cmd_preview(cfg, rest)
-    if command == "latest":
-        if not LATEST.is_file():
-            die("no weekly page has been written yet", 1)
-        print(LATEST)
-        return 0
-    if command == "open":
-        return cmd_open()
     if command == "status":
         return cmd_status(cfg)
     if command == "interval":

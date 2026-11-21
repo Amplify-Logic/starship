@@ -1908,7 +1908,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/":
             self._nonce = secrets.token_urlsafe(16)
-            self._send(200, page_html(self._nonce, STATE.csrf, weekly_page(STATE.home) is not None).encode("utf-8"),
+            self._send(200, page_html(self._nonce, STATE.csrf, weekly_path(STATE.home).is_file()).encode("utf-8"),
                        "text/html; charset=utf-8")
         elif parsed.path == "/weekly":
             page = weekly_page(STATE.home)
@@ -3491,10 +3491,14 @@ def signin_html(nonce: str, stale: bool) -> str:
 """
 
 
-def weekly_page(home: Path) -> Optional[str]:
+def weekly_path(home: Path) -> Path:
     """The newest weekly "what changed" page, which bin/fm-weekly-changes.py owns."""
+    return home / "data" / "weekly-changes" / "latest.html"
+
+
+def weekly_page(home: Path) -> Optional[str]:
     try:
-        return (home / "data" / "weekly-changes" / "latest.html").read_text(encoding="utf-8")
+        return weekly_path(home).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
