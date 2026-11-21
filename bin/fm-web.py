@@ -3625,7 +3625,13 @@ def watch_code(port: int) -> None:
         argv = restart_argv(port)
         STATE.send_lock.acquire()
         STATE.act_lock.acquire()
-        os.execv(argv[0], argv)
+        try:
+            os.execv(argv[0], argv)
+        except OSError as exc:
+            STATE.act_lock.release()
+            STATE.send_lock.release()
+            refused = now
+            print(f"not restarting: {exc}", file=sys.stderr, flush=True)
 
 
 def command_serve(home: Path, root: Path, port: int) -> None:

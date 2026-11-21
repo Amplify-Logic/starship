@@ -747,6 +747,38 @@ test_a_restart_waits_for_a_send_under_way() {
   pass "a restart waits for a send under way"
 }
 
+# A restart that cannot start the new code leaves the running server
+# answering sends and button presses as before.
+test_a_failed_restart_keeps_sends_and_buttons_working() {
+  local home root code port cookie csrf out n=0
+  home=$(make_home restart-fails)
+  root=$(make_root "$home" "sent: tmux %1")
+  code=$home/code/fm-web.py
+  mkdir -p "$home/code" "$home/python"
+  cp "$ENGINE" "$code"
+  ln -s "$(python3 -c 'import sys; print(sys.executable)')" "$home/python/python3"
+  : > "$home/web-serve.log"
+  HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" FM_WEB_CODE_CHECK_SECONDS=0.2 \
+    "$home/python/python3" "$code" serve --home "$home" --root "$root" --port 0 >"$home/web-serve.log" 2>&1 &
+  printf '%s\n' "$!" >> "$WEB_PID_FILE"
+  while [ "$n" -lt 50 ] && ! grep -qE '^listening on' "$home/web-serve.log"; do sleep 0.1; n=$((n + 1)); done
+  port=$(sed -n 's/^listening on 127\.0\.0\.1:\([0-9]*\)$/\1/p' "$home/web-serve.log" | head -n 1)
+  [ -n "$port" ] || fail "the server did not start: $(cat "$home/web-serve.log")"
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  rm "$home/python/python3"
+  printf '\n# a newer version\n' >> "$code"
+  n=0
+  while ! grep -q 'not restarting:' "$home/web-serve.log" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  assert_contains "$(cat "$home/web-serve.log")" "not restarting:" "the failed restart is logged"
+  assert_equals "$(status_of --max-time 5 -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"text":"hello"}' \
+    "http://127.0.0.1:$port/api/send")" "200" "a send is still answered"
+  out=$(curl -sS --max-time 5 -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" \
+    --data '{"action":"talk","factory":"garden-journal","text":"check the ribbon"}' "http://127.0.0.1:$port/api/act" 2>&1)
+  [ -n "$(jq -r '.said // empty' <<<"$out" 2>/dev/null)" ] || fail "a button press is still answered (got '$out')"
+  pass "a failed restart keeps sends and buttons working"
+}
+
 # The server restarts itself in place when its own code on disk changes, so an
 # update shows without restarting it by hand, and the page learns it runs
 # newer code; code that does not compile leaves the running server alone.
@@ -1143,6 +1175,7 @@ test_the_suggested_prompt_reaches_the_page_only_while_ready
 test_the_server_restarts_itself_when_its_code_changes
 test_a_suggestion_read_from_before_a_turn_is_dropped
 test_a_restart_waits_for_a_send_under_way
+test_a_failed_restart_keeps_sends_and_buttons_working
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
