@@ -110,6 +110,8 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-supervision-sentinel.sh` | Home-scoped macOS launchd outage sentinel that alarms outside the harness process tree and never restarts supervision (docs/watcher-continuity.md) |
 | `fm-dropped-threads.sh`  | Opt-in twice-daily dropped-threads digest from local records: one spoken sentence plus a short list, recorded for a later Starship Voice phone card and spoken at the desk (docs/fork-configuration.md "Dropped-threads digest") |
 | `fm-dropped-threads-schedule.sh` | Render, install, inspect, and remove that digest's opt-in macOS launchd schedule (docs/fork-configuration.md "Dropped-threads digest") |
+| `fm-weekly-changes.py`   | Opt-in weekly plain "what changed" page: each registered project's merged pull requests by their In short line, plus changelog highlights, as a local page (docs/fork-configuration.md "Weekly changes page") |
+| `fm-weekly-changes-schedule.sh` | Render, install, inspect, and remove that page's opt-in macOS launchd schedule (docs/fork-configuration.md "Weekly changes page") |
 | `fm-launchd-schedule-lib.sh` | Shared per-home LaunchAgent render, lint, load, and remove for this fork's scheduled owners |
 | `fm-task-outcome.sh`     | Resolve a worker outcome from an explicit value, structured backlog title, or safe fallback |
 | `fm-visible-title.sh`    | Build the human WORKER tab title from a resolved outcome and state label, the single owner of that format |

@@ -272,6 +272,7 @@ Ask the first mate to set one up; each owner page lists what it needs.
 | Factory pane ([factory-pane.md](factory-pane.md)) | Every factory at a glance beside your work: what needs you, what each crew is doing this minute, what happened since you last looked, and a tab per factory with its live workers | Herdr |
 | Phone bridge page ([bridge-view.md](bridge-view.md)) | A phone page showing what needs you, with photo drop and hold-to-speak | Tailscale and Python 3.12 |
 | Dropped-threads digest ([configuration](fork-configuration.md#dropped-threads-digest-configdropped-threads)) | A twice-daily "what is left hanging" summary | A scheduled job on this Mac |
+| Weekly changes page ([configuration](fork-configuration.md#weekly-changes-page-configweekly-changes)) | A plain "what changed this week" page across your projects, from each change's short summary and the changelogs | A scheduled job on this Mac and the GitHub CLI signed in |
 | Computer use ([macos-computer-use](../.agents/opt-in-skills/macos-computer-use/SKILL.md)) | Lets the agents operate Mac apps and windows | Peekaboo, which the first mate installs, and Mac Accessibility permissions |
 | Activity ledger ([fleet-ledger.md](fleet-ledger.md)) | A file other tools can read to follow the fleet | Nothing extra |
 | Second opinion ([second-opinion.md](second-opinion.md)) | A rival AI model stress-tests a big design or decision before work starts | `config/second-opinion`; each review draws on your Claude plan, and the different-vendor pass on a Cursor plan |

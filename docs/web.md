@@ -6,7 +6,7 @@ A calm localhost page that mirrors the terminal workspace for someone who does n
 ## What it is
 
 The page is the workspace's regions in the same places, in plain words and with buttons where the terminal has keys.
-It adds nothing the terminal does not show.
+Apart from the weekly page below, it adds nothing the terminal does not show.
 
 | In the terminal | On the page |
 | --- | --- |
@@ -121,6 +121,11 @@ The Settings button opens one small panel:
 
 Settings and the panel sizes are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.
+
+### This week
+
+When the home has a weekly "what changed" page ([configuration](fork-configuration.md#weekly-changes-page-configweekly-changes)), a This week button in the header opens the newest one in its own window, behind the same sign-in.
+With no page written yet, the button is not shown.
 
 ## Starting it
 

@@ -1153,6 +1153,28 @@ test_launcher_start_status_url_stop() {
   pass "the launcher starts, reports, prints the URL and stops"
 }
 
+test_the_weekly_page_opens_from_the_mirror() {
+  local home root port cookie hdr nonce body
+  home=$(make_home weekly)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  assert_not_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'href="/weekly"' "no link before a weekly page exists"
+  assert_equals "$(status_of --cookie "$cookie" "http://127.0.0.1:$port/weekly")" "404" "no page yet is a plain 404"
+  mkdir -p "$home/data/weekly-changes"
+  printf '<!doctype html><html><head><style>body{color:red}</style></head><body><h1>What changed this week</h1></body></html>\n' \
+    > "$home/data/weekly-changes/latest.html"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'href="/weekly"' "the page links to the weekly page"
+  assert_equals "$(status_of "http://127.0.0.1:$port/weekly")" "403" "the weekly page needs the cookie"
+  hdr=$home/weekly.hdr
+  body=$(curl -sS -D "$hdr" --cookie "$cookie" "http://127.0.0.1:$port/weekly")
+  assert_contains "$body" "What changed this week" "the weekly page is served"
+  nonce=$(sed -n "s/.*style-src 'nonce-\([^']*\)'.*/\1/p" "$hdr" | tr -d '\r')
+  [ -n "$nonce" ] || fail "the weekly page has no style nonce: $(cat "$hdr")"
+  assert_contains "$body" "<style nonce=\"$nonce\">" "the weekly page's style carries the response nonce"
+  pass "the mirror links to and serves the newest weekly page behind the sign-in"
+}
+
 test_transcript_parsing_collapses_tools_and_marks_compaction
 test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
@@ -1180,4 +1202,5 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_the_live_line_says_what_is_happening_in_plain_words
+test_the_weekly_page_opens_from_the_mirror
 test_launcher_start_status_url_stop

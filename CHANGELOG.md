@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **A weekly plain "what changed" page is available.** Nothing changes until you opt in: put `enabled = true` in `~/starship/config/weekly-changes` and run `bin/fm-weekly-changes-schedule.sh install`, and every Monday morning a local page lists each project's changes from the week by their short summary, with the changelog highlights and a link to each change ([configuration](docs/fork-configuration.md#weekly-changes-page-configweekly-changes)).
+  The newest page is `data/weekly-changes/latest.html`, and the web page's This week button opens it.
 - **Starship's PRs now open with a short plain section.** In short, See it, You need to and Risk come first, the technical detail is folded, and the test results and pipeline history sit in one closed Validation block with raw logs kept on the machine that ran them.
   Nothing changes for your own projects until you opt one in: copy Starship's PR template and its two `pr:` settings into that project ([configuration](docs/fork-configuration.md#pr-text)).
 - **A new Mac sets up with one line, and the first conversation suits someone in their first week.** `curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-mac-setup.sh | bash` checks Homebrew, Node and jq first, then installs every tool before Herdr or the first mate opens ([ONBOARDING.md step 2](ONBOARDING.md#2-install-everything-terminal-before-anything-else-opens)); `bin/fm-linux-setup.sh` now installs the whole toolchain too.
