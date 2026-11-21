@@ -1148,6 +1148,8 @@ def pr_summary(body: Optional[str]) -> List[Dict[str, str]]:
     summary = []
     for label in PR_SUMMARY_PARTS:
         words = re.sub(r"\*\*|__|`", "", " ".join(parts.get(label.lower()) or []))
+        # A link or a screenshot reads as its own words, not as half-written markdown.
+        words = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", words)
         words = tidy(words, 240)
         if words:
             summary.append({"label": label, "text": words})

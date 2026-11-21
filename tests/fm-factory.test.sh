@@ -891,6 +891,7 @@ test_finished_work_shows_its_pr_short_section_beside_the_merge_choice() {
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$FM_HOME/pr-reads"
 [ -e "$FM_HOME/no-template" ] && { printf 'Just a plain description.\n'; exit 0; }
+[ -e "$FM_HOME/linked" ] && { printf '# In short\nSee [the share page](https://example.invalid/share) now.\n\n# See it\n\n![The Share button](https://example.invalid/shot.png)\n'; exit 0; }
 cat <<'MD'
 <!-- How to fill this in. -->
 
@@ -946,6 +947,13 @@ SH
   assert_equals "$(wc -l < "$HOME_FIX/pr-reads" | tr -d ' ')" "2" "the short section was not read again after half an hour"
   assert_not_contains "$out" "In short" "a PR without the short section showed one"
   assert_contains "$out" "       k  keep it    c  ask for changes" "the merge choice is missing"
+  # A link or a screenshot in the short section reads as its words, never as half-written markdown.
+  rm "$HOME_FIX/no-template"; touch "$HOME_FIX/linked"
+  out=$(FM_FACTORY_NOW=$((NOW + 3602)) python3 "$FACTORY" --plain --width 92 --item garden-share) || fail "--plain failed"
+  assert_contains "$out" "$(printf '%s\n' \
+    "       In short     See the share page now." \
+    "       See it       The Share button")" "a link or a screenshot in the short section did not read as its words"
+  assert_not_contains "$out" "](" "a link or a screenshot showed as markdown"
   unset FM_FACTORY_PR_BODY
   pass "factory pane: finished work shows its PR's In short, See it, You need to and Risk beside the merge choice"
 }
