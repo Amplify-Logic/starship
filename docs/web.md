@@ -173,6 +173,7 @@ Every message goes through `bin/fm-desk-voice.sh send --source web`, the desk fl
 It types the message into the primary's own chat when that chat is safely empty, or past a Claude draft, and otherwise saves it to the durable desk-voice mailbox with a wake.
 Under the box, the page says which happened: typed into the chat, typed but not confirmed, or saved to the mailbox.
 Pasted images are saved where the floater saves its screenshots, `state/desk-voice/shots/`, owner-only, and passed with `--image`.
+The words go to it on standard input (`--stdin`), not as an argument, because Linux refuses any single argument over 128 KiB and a long paste can be larger.
 Only PNG, JPEG, GIF and WebP images are accepted.
 Typing into the chat turns line breaks into spaces, as it does for the floater; a mailbox delivery keeps them.
 [desk-floater.md](desk-floater.md#how-transcripts-reach-firstmate) owns the full delivery rules.

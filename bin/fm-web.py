@@ -36,8 +36,10 @@ is a link to /api/file/<home path>, served read-only in its own type
 
 Sending never types anywhere itself. Every message, with any pasted images
 saved into state/desk-voice/shots/, goes through
-`bin/fm-desk-voice.sh send --source web`, which types into the primary's own
-chat only when that is safe and otherwise uses the durable mailbox.
+`bin/fm-desk-voice.sh send --source web --stdin`, which types into the
+primary's own chat only when that is safe and otherwise uses the durable
+mailbox. The words go on standard input, never as one argument, so a long
+paste is not refused by the 128 KiB single-argument limit on Linux.
 
 While the first mate is ready, the conversation reading also carries the
 suggested next prompt Claude shows in its empty chat box, read in the
@@ -1557,18 +1559,17 @@ def desk_voice_send(home: Path, root: Path, text: str, images: List[Path]) -> Di
     argv = [str(script), "send", "--source", "web"]
     for image in images:
         argv.extend(["--image", str(image)])
-    argv.append("--")
-    if text:
-        argv.append(text)
+    argv.append("--stdin")
     env = dict(os.environ)
     env["FM_HOME"] = str(home)
     env["FM_ROOT_OVERRIDE"] = str(root)
     proc = subprocess.run(
         argv,
         env=env,
-        stdin=subprocess.DEVNULL,
+        input=text,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=SEND_TIMEOUT_SECONDS,
     )
     line = (proc.stdout or "").strip().splitlines()[-1:] or [""]

@@ -111,6 +111,7 @@ if [ "\$*" = suggestion ]; then
   printf '%s\n' "\$said"
   exit 0
 fi
+cat > "$home/desk-voice.stdin"
 printf '%s\n' "\$@" > "$home/desk-voice.args"
 printf 'FM_HOME=%s\n' "\$FM_HOME" >> "$home/desk-voice.args"
 [ ! -e "$home/send.delay" ] || sleep "\$(cat "$home/send.delay")"
@@ -471,8 +472,10 @@ test_send_uses_desk_voice_with_saved_images() {
   image=$(sed -n 5p <<<"$args")
   case "$image" in "$home/state/desk-voice/shots/"*.png) ;; *) fail "image not saved in the shots folder: $image" ;; esac
   [ -f "$image" ] || fail "saved image is missing"
-  assert_equals "$(sed -n 6p <<<"$args")" "--" "text follows an end-of-options marker"
-  assert_contains "$args" "--source evil"
+  assert_equals "$(sed -n 6p <<<"$args")" "--stdin" "the text is read from standard input"
+  assert_equals "$(sed -n 7p <<<"$args")" "FM_HOME=$home" "no text rides in the arguments"
+  assert_equals "$(cat "$home/desk-voice.stdin")" "--source evil
+second line" "the text arrives whole on standard input"
   assert_contains "$args" "FM_HOME=$home"
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" \
     --data '{"text":"x","images":["data:text/html;base64,PGI+"]}' "http://127.0.0.1:$port/api/send")
@@ -501,12 +504,18 @@ test_a_long_paste_is_sent_and_the_limit_is_named() {
   port=$(start_web "$home" "$root")
   cookie=$(sign_in "$home" "$port")
   csrf=$(csrf_of "$port" "$cookie")
-  long=$(python3 -c 'print("word " * 7000, end="")')
+  long=$(python3 -c 'print(" ".join(["word"] * 7000), end="")')
   jq -nc --arg t "$long" '{text:$t}' > "$home/long.json"
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/long.json" "http://127.0.0.1:$port/api/send")
   assert_equals "$(jq -r '.outcome' <<<"$out")" "typed" "a 35,000 character paste is sent"
-  assert_equals "$(grep -c '^word word' "$home/desk-voice.args")" "1" "the whole paste reached desk voice"
-  rm -f "$home/desk-voice.args"
+  cmp -s "$home/desk-voice.stdin" <(printf '%s' "$long") || fail "the whole paste reached desk voice"
+  long=$(python3 -c 'print("\U0001F600" * 40000, end="")')
+  [ "$(printf '%s' "$long" | wc -c | tr -d ' ')" -gt 131071 ] || fail "the paste must outgrow one Linux argument"
+  jq -nc --arg t "$long" '{text:$t}' > "$home/long.json"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/long.json" "http://127.0.0.1:$port/api/send")
+  assert_equals "$(jq -r '.outcome' <<<"$out")" "typed" "a paste larger than one Linux argument is sent"
+  cmp -s "$home/desk-voice.stdin" <(printf '%s' "$long") || fail "the paste larger than one Linux argument reached desk voice whole"
+  rm -f "$home/desk-voice.args" "$home/desk-voice.stdin"
   python3 -c 'import json; print(json.dumps({"text": "x" * 200001}))' > "$home/over.json"
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data-binary @"$home/over.json" "http://127.0.0.1:$port/api/send")
   assert_equals "$(jq -r '.detail' <<<"$out")" "the message is too long: at most 200,000 characters" "the refusal names the limit"
