@@ -29,12 +29,15 @@ Everything the first mate did between two messages folds into one quiet line, su
 Notices typed into the chat by the machinery, such as the desk voice's mailbox ring, are steps in that line, never your messages.
 A picture you pasted, or a screenshot the desk voice sent, shows as a small picture you can click to see in full, never as its file path.
 Any other image path you typed stays in your words exactly as you wrote it, with the picture shown beneath the message.
+A file the first mate names in a reply, home-relative such as `data/<task>/knowledge.html` or as an absolute path, is a link that opens the file in a new tab when it exists under the home's `data/` or `.lavish/` folder.
+Web pages, PDFs, pictures and drawings open as themselves, and Markdown and other text files open as plain text; any other path stays plain words.
 A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
 While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run (counted from when the page first saw it working, when the turn began before the part of the conversation the page reads); it goes away when the turn ends.
 That line never shows a command, a path or code: a step description that holds one reads as the generic words for that kind of step instead.
 
 A message box at the bottom sends to the same first mate.
+A message can hold up to 200,000 characters, enough for a long pasted transcript.
 Enter sends and Shift+Enter starts a new line.
 When Claude Code offers a suggested next message, the grey text in the terminal's input, the empty message box shows the same words, and Tab fills them in, as in the terminal.
 The page reads the suggestion from the first mate's own chat box through `bin/fm-desk-voice.sh suggestion`, only while the first mate is ready and the box holds nothing typed; it types nothing there.
@@ -112,7 +115,7 @@ Each button carries its key as a small hint, and a line of keys sits at the bott
 
 The Settings button opens one small panel:
 
-- **Text size**: five steps, Smaller to Largest, starting on Normal in the middle; the whole layout scales with it.
+- **Text size**: five steps, Smaller to Largest, starting on Normal in the middle; the whole layout scales with it, except that below Normal the chat keeps Normal's width, so more words fit on a line.
 - **Style**: Calm, the default, in soft pastel tints with each section of a panel as its own card, or Lively, the same grouping with stronger colours; in Light both draw the header light too.
 - **Light or dark**: Auto follows the system setting; Light is a warm cream.
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
@@ -170,6 +173,7 @@ Every message goes through `bin/fm-desk-voice.sh send --source web`, the desk fl
 It types the message into the primary's own chat when that chat is safely empty, or past a Claude draft, and otherwise saves it to the durable desk-voice mailbox with a wake.
 Under the box, the page says which happened: typed into the chat, typed but not confirmed, or saved to the mailbox.
 Pasted images are saved where the floater saves its screenshots, `state/desk-voice/shots/`, owner-only, and passed with `--image`.
+The words go to it on standard input (`--stdin`), not as an argument, because Linux refuses any single argument over 128 KiB and a long paste can be larger.
 Only PNG, JPEG, GIF and WebP images are accepted.
 Typing into the chat turns line breaks into spaces, as it does for the floater; a mailbox delivery keeps them.
 [desk-floater.md](desk-floater.md#how-transcripts-reach-firstmate) owns the full delivery rules.
@@ -182,6 +186,8 @@ Typing into the chat turns line breaks into spaces, as it does for the floater; 
   `open` signs in with a one-time code instead, kept only as a hash in `state/web/codes/` (owner-only), used up by its first visit and refused after two minutes.
 - Without the cookie, only the page saying how to get in, the page's look and rules, its icons and its manifest are served; none holds anything private.
 - A picture is served only by an opaque id that the shown conversation handed out, only for a file or pasted image in your own messages, and only when its bytes are a PNG, JPEG, GIF or WebP image.
+- A linked file is served read-only, only with the cookie, only when its path resolves, symlinks included, to an existing file of a listed type under the home's `data/` or `.lavish/` folder with no hidden part below it; a `../` or an absolute path in the address is refused.
+  A linked web page or drawing runs in a sandbox with an opaque origin, so it can neither read this page nor send through it, and a file it refers to by a relative address does not load.
 - Every request must carry a Host of `127.0.0.1:<port>`, so a page using DNS rebinding cannot reach it.
 - Every POST also needs the page's CSRF header, a same-origin Origin when the browser sends one, and no cross-site fetch metadata.
   A custom header cannot be sent cross-origin without a preflight the server never answers.

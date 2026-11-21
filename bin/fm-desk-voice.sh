@@ -3,7 +3,7 @@
 # floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--image <png>]... [--stdin | <transcript text...>]
 #   fm-desk-voice.sh delivery <client-id>
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
@@ -163,6 +163,11 @@
 # "Screenshots: <path> <path>...", and the JSON also lists them under "images".
 # A message may be screenshots alone.
 #
+# send and deliver --stdin read the transcript from standard input instead of
+# the arguments, so a message too long for one argument (Linux refuses any
+# single argument over 128 KiB) still arrives whole; bin/fm-web.py sends this
+# way.
+#
 # shot --stdin stores a PNG read from standard input instead of capturing one,
 # under the same name, folder and pruning as below; the Windows floater takes
 # its screenshots on the Windows side and hands them over this way. Input that
@@ -270,10 +275,12 @@ ensure_dirs() {
 }
 
 write_transcript_json() {  # <path> <stamp> <id> <source> <text> [<image>...]
-  python3 - "$@" <<'PY'
-import json, sys
-path, stamp, rid, source, text = sys.argv[1:6]
-images = sys.argv[6:]
+  python3 - "${@:1:4}" "${@:6}" 3< <(printf '%s' "$5") <<'PY'
+import json, os, sys
+path, stamp, rid, source = sys.argv[1:5]
+with os.fdopen(3, "rb") as fh:
+    text = fh.read().decode(sys.getfilesystemencoding(), "surrogateescape")
+images = sys.argv[5:]
 doc = {
     "schema": "fm-desk-voice-transcript.v1",
     "id": rid,
@@ -289,11 +296,12 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-# Parse "[--source <name>] [--image <png>]... [--] [<text...>]" into ARG_SOURCE,
+# Parse "[--source <name>] [--image <png>]... [--stdin | [--] [<text...>]]" into ARG_SOURCE,
 # ARG_IMAGES and ARG_TEXT (empty when the text is blank).
 parse_transcript_args() {
   ARG_SOURCE=desk-floater
   ARG_IMAGES=()
+  local from_stdin=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source)
@@ -311,12 +319,21 @@ parse_transcript_args() {
         ARG_IMAGES+=("$2")
         shift 2
         ;;
+      --stdin)
+        from_stdin=true
+        shift
+        ;;
       --) shift; break ;;
       -*) refuse "unexpected option: $1" ;;
       *) break ;;
     esac
   done
-  ARG_TEXT=$*
+  if [ "$from_stdin" = true ]; then
+    [ "$#" -eq 0 ] || refuse "--stdin takes no transcript arguments"
+    ARG_TEXT=$(cat) || refuse "cannot read the transcript from standard input"
+  else
+    ARG_TEXT=$*
+  fi
   case "$ARG_TEXT" in
     *[![:space:]]*) ;;
     *) ARG_TEXT='' ;;
@@ -411,11 +428,12 @@ composer_safe_line() {  # <line>
 }
 
 plain_line() {  # <text>
-  python3 -c '
+  printf '%s' "$1" | python3 -c '
 import sys, unicodedata
-text = "".join(" " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in sys.argv[1])
+raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateescape")
+text = "".join(" " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in raw)
 sys.stdout.write(" ".join(text.split()))
-' "$1"
+'
 }
 
 # The pane keys from process <pid>'s own environment, one KEY=VALUE per line.

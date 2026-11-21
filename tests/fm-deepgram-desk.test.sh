@@ -1695,6 +1695,25 @@ test_desk_voice_send_falls_back_without_a_live_primary() {
   pass "fm-desk-voice send: no live primary falls back to the mailbox"
 }
 
+# A message larger than one Linux argument (MAX_ARG_STRLEN, 131,072 bytes)
+# reaches send on standard input and lands in the mailbox byte for byte.
+test_desk_voice_send_reads_a_long_message_from_stdin() {
+  local home out path
+  home=$(desk_send_fixture send-stdin) || { desk_send_skip send-stdin; return 0; }
+  rm -f "$home/state/.lock"
+  python3 -c 'import sys; sys.stdout.write("caf\u00e9 line one\n" + "\U0001F600 transcript words " * 9000 + "\nlast line")' > "$home/long.txt"
+  [ "$(wc -c < "$home/long.txt" | tr -d ' ')" -gt 131072 ] || fail "the message must outgrow one Linux argument"
+  out=$(desk_send "$home" --stdin < "$home/long.txt") || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  path=${out#mailbox: }
+  python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1], encoding="utf-8"))["transcript"])' "$path" > "$home/kept.txt"
+  cmp -s "$home/long.txt" "$home/kept.txt" || fail "the mailbox must keep the whole message from standard input"
+  out=$(desk_send "$home" --stdin "extra words" < "$home/long.txt" 2>&1) && fail "--stdin with transcript arguments must be refused: $out"
+  assert_contains "$out" "--stdin takes no transcript arguments" "the refusal says why"
+  desk_send_done "$home"
+  pass "fm-desk-voice send --stdin: a message over one Linux argument arrives whole"
+}
+
 test_desk_voice_send_refuses_a_pane_not_hosting_the_primary() {
   local home out
   home=$(desk_send_fixture send-foreign-pane) || { desk_send_skip send-foreign-pane; return 0; }
@@ -3017,6 +3036,7 @@ test_desk_voice_send_types_words_never_keys
 test_desk_voice_send_finishes_when_its_caller_stops_it
 test_desk_voice_send_expect_home_types_only_for_that_home
 test_desk_voice_send_falls_back_without_a_live_primary
+test_desk_voice_send_reads_a_long_message_from_stdin
 test_desk_voice_send_refuses_a_pane_not_hosting_the_primary
 test_desk_voice_send_falls_back_when_the_pane_refuses_text
 test_desk_voice_send_never_doubles_an_unconfirmed_submit

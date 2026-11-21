@@ -30,11 +30,16 @@ pictures in the owner's messages (pasted images, and image paths) are served by
 an opaque id at /api/picture/<id>, only while the shown conversation holds
 them. The desk voice's "Screenshots:" paths and paths under its shots folder
 are taken out of the words; any other image path stays as the owner wrote it.
+A file the first mate's reply names under the home's data/ or .lavish/ folder
+is a link to /api/file/<home path>, served read-only in its own type
+(home_file owns which files qualify); a page or drawing runs sandboxed.
 
 Sending never types anywhere itself. Every message, with any pasted images
 saved into state/desk-voice/shots/, goes through
-`bin/fm-desk-voice.sh send --source web`, which types into the primary's own
-chat only when that is safe and otherwise uses the durable mailbox.
+`bin/fm-desk-voice.sh send --source web --stdin`, which types into the
+primary's own chat only when that is safe and otherwise uses the durable
+mailbox. The words go on standard input, never as one argument, so a long
+paste is not refused by the 128 KiB single-argument limit on Linux.
 
 While the first mate is ready, the conversation reading also carries the
 suggested next prompt Claude shows in its empty chat box, read in the
@@ -94,7 +99,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 LOOPBACK = "127.0.0.1"
 DEFAULT_PORT = 8767
@@ -107,7 +112,7 @@ TOOL_DETAIL_MAX = 6000
 SUMMARY_MAX = 140
 SEND_BODY_MAX = 24 * 1024 * 1024
 SEND_IMAGES_MAX = 8
-SEND_TEXT_MAX = 20000
+SEND_TEXT_MAX = 200000
 SEND_TIMEOUT_SECONDS = 90
 SCREEN_SCHEMA = "fm-factory-screen.v1"
 MIRROR_TTL_SECONDS = 2.0
@@ -176,6 +181,24 @@ IMAGE_PATH_RE = re.compile(
 PICTURE_MAX = 20 * 1024 * 1024
 PICTURE_ID_RE = re.compile(r"^[0-9a-f]{24}$")
 PICTURE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+# The files a reply may link: an existing file under one of these folders of
+# the home, named home-relative or absolute, with one of these types, and no
+# hidden part below the folder. The page opens one at /api/file/<home path>,
+# read-only; home_file owns the check, after every symlink is resolved.
+FILE_DIRS = ("data", ".lavish")
+FILE_TYPES = {
+    ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+    ".svg": "image/svg+xml", ".pdf": "application/pdf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".md": "text/plain; charset=utf-8", ".markdown": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8", ".csv": "text/plain; charset=utf-8", ".json": "text/plain; charset=utf-8",
+}
+# Types that can run script are served in a sandbox with an opaque origin, so
+# a page from the home can never read or send as this page.
+FILE_ACTIVE = (".html", ".htm", ".svg")
+FILE_MAX = 64 * 1024 * 1024
+FILE_HREF = "/api/file/"
+FILE_PATH_RE = re.compile(r"(?<![\w/.~-])((?:/|(?:data|\.lavish)/)[^\s<>\"'`()\[\]{}:]+)")
 SIGNIN_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{24,64}$")
 SIGNIN_CODE_SECONDS = 120
 
@@ -336,12 +359,14 @@ INLINE_TOKEN_RE = re.compile(
     r"(`[^`\n]+`)"
     r"|(\[[^\]\n]+\]\((?:https?://)[^\s<>()\"']+\))"
     r"|(https?://[^\s<>\"'`]+)"
+    r"|" + FILE_PATH_RE.pattern
 )
 BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
 ITALIC_RE = re.compile(r"(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])")
 STRIKE_RE = re.compile(r"~~(?=\S)(.+?)(?<=\S)~~")
 LINK_PARTS_RE = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
 TRAILING_PUNCT = ".,;:!?)"
+PATH_TRAILING = TRAILING_PUNCT + "*_"
 
 
 def _anchor(url: str, label_html: str) -> str:
@@ -357,26 +382,89 @@ def _emphasis(escaped: str) -> str:
     return STRIKE_RE.sub(r"<del>\1</del>", escaped)
 
 
-def render_inline(text: str) -> str:
+def home_file(home: Path, name: str) -> Optional[Tuple[str, Path]]:
+    """The home path and resolved file <name> names, when a reply may link it.
+
+    <name> is home-relative or absolute. It names a linkable file only when,
+    with every symlink resolved, it is an existing regular file of a FILE_TYPES
+    type under one of the home's FILE_DIRS with no hidden part below it; a ../
+    escape or a symlink out resolves elsewhere and is refused.
+    """
+    if not name or "\x00" in name or len(name) > 4096:
+        return None
+    try:
+        base = home.resolve(strict=True)
+        given = Path(name)
+        real = (given if given.is_absolute() else base / given).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    for folder in FILE_DIRS:
+        try:
+            rel = real.relative_to(base / folder)
+        except ValueError:
+            continue
+        if not rel.parts or any(part.startswith(".") for part in rel.parts):
+            return None
+        if real.suffix.lower() not in FILE_TYPES or not real.is_file():
+            return None
+        return (Path(folder) / rel).as_posix(), real
+    return None
+
+
+def file_linker(home: Path) -> Any:
+    """What render_markdown links a path with: its /api/file/ address, or None."""
+    def link(name: str) -> Optional[str]:
+        found = home_file(home, name)
+        return FILE_HREF + quote(found[0]) if found else None
+    return link
+
+
+def render_inline(text: str, link: Any = None) -> str:
     """Escape everything, then add code, links and emphasis.
 
-    Only http and https links become anchors; every other byte reaches the
-    page escaped, so no input can open a tag or an attribute. Code and links
-    stand in as placeholders while emphasis is applied to the whole line, so
-    bold or italic words that hold code or a link still render.
+    Only http and https links become anchors, and, with <link>, a path or a
+    code span that is only a path, when link(path) gives its address; every
+    other byte reaches the page escaped, so no input can open a tag or an
+    attribute. Code and links stand in as placeholders while emphasis is
+    applied to the whole line, so bold or italic words that hold code or a
+    link still render.
     """
     text = text.replace("\x00", "")
     out: List[str] = []
     tokens: List[str] = []
     pos = 0
-    for match in INLINE_TOKEN_RE.finditer(text):
+    seek = 0
+    while True:
+        match = INLINE_TOKEN_RE.search(text, seek)
+        if match is None:
+            break
+        code, markdown_link, bare, path = match.groups()
+        href = None
+        if path:
+            tail = ""
+            while path and path[-1] in PATH_TRAILING:
+                tail = path[-1] + tail
+                path = path[:-1]
+            href = link(path) if link and path else None
+            if href is None:
+                # Not a linked file: its words stay text, and a link or code
+                # that starts inside them is still found.
+                seek = match.start() + 1
+                continue
         out.append(html.escape(text[pos:match.start()], quote=True))
-        code, link, bare = match.groups()
+        seek = match.end()
+        if path:
+            tokens.append(_anchor(href, html.escape(path, quote=True)))
+            out.append(f"\x00{len(tokens) - 1}\x00" + html.escape(tail, quote=True))
+            pos = match.end()
+            continue
         if code:
-            tokens.append(f"<code>{html.escape(code[1:-1], quote=True)}</code>")
-        elif link:
-            parts = LINK_PARTS_RE.match(link)
-            label, url = (parts.group(1), parts.group(2)) if parts else (link, "")
+            shown = f"<code>{html.escape(code[1:-1], quote=True)}</code>"
+            href = link(code[1:-1].strip()) if link else None
+            tokens.append(_anchor(href, shown) if href else shown)
+        elif markdown_link:
+            parts = LINK_PARTS_RE.match(markdown_link)
+            label, url = (parts.group(1), parts.group(2)) if parts else (markdown_link, "")
             tokens.append(_anchor(url, _emphasis(html.escape(label, quote=True))))
         else:
             url = bare
@@ -408,7 +496,7 @@ def _table_cells(line: str) -> List[str]:
     return [cell.strip() for cell in line.split("|")]
 
 
-def _render_list(block: List[Tuple[int, str, str, int]]) -> str:
+def _render_list(block: List[Tuple[int, str, str, int]], link: Any = None) -> str:
     """Nested lists from (indent, ul|ol, text, number) rows; deeper indents
     nest inside the previous item, so bullets under a numbered step stay
     bullets. A numbered list starts at its first item's number."""
@@ -428,15 +516,16 @@ def _render_list(block: List[Tuple[int, str, str, int]]) -> str:
                 stack.append((indent, tag))
         else:
             out.append("</li>")
-        out.append("<li>" + "<br>".join(render_inline(part) for part in body_text.split("\n")))
+        out.append("<li>" + "<br>".join(render_inline(part, link) for part in body_text.split("\n")))
     while stack:
         out.append(f"</li></{stack.pop()[1]}>")
     return "".join(out)
 
 
-def render_markdown(text: str) -> str:
+def render_markdown(text: str, link: Any = None) -> str:
     """A small, safe Markdown subset: paragraphs, headings, lists, quotes,
-    rules, fenced code and pipe tables. All text is escaped first."""
+    rules, fenced code and pipe tables. All text is escaped first; <link>
+    links paths, as render_inline says."""
     lines = text.replace("\x00", "").replace("\r\n", "\n").split("\n")
     out: List[str] = []
     para: List[str] = []
@@ -444,7 +533,7 @@ def render_markdown(text: str) -> str:
 
     def flush() -> None:
         if para:
-            out.append("<p>" + "<br>".join(render_inline(item) for item in para) + "</p>")
+            out.append("<p>" + "<br>".join(render_inline(item, link) for item in para) + "</p>")
             para.clear()
 
     while i < len(lines):
@@ -468,7 +557,7 @@ def render_markdown(text: str) -> str:
         if heading:
             flush()
             level = min(6, len(heading.group(1)) + 2)
-            out.append(f"<h{level}>{render_inline(heading.group(2))}</h{level}>")
+            out.append(f"<h{level}>{render_inline(heading.group(2), link)}</h{level}>")
             i += 1
             continue
         if RULE_RE.match(line):
@@ -485,10 +574,10 @@ def render_markdown(text: str) -> str:
                 rows.append(_table_cells(lines[i]))
                 i += 1
             parts = ["<div class=\"table\"><table><thead><tr>"]
-            parts.extend(f"<th>{render_inline(cell)}</th>" for cell in head)
+            parts.extend(f"<th>{render_inline(cell, link)}</th>" for cell in head)
             parts.append("</tr></thead><tbody>")
             for row in rows:
-                parts.append("<tr>" + "".join(f"<td>{render_inline(cell)}</td>" for cell in row) + "</tr>")
+                parts.append("<tr>" + "".join(f"<td>{render_inline(cell, link)}</td>" for cell in row) + "</tr>")
             parts.append("</tbody></table></div>")
             out.append("".join(parts))
             continue
@@ -498,7 +587,7 @@ def render_markdown(text: str) -> str:
             while i < len(lines) and lines[i].lstrip().startswith(">"):
                 quote.append(lines[i].lstrip()[1:].lstrip())
                 i += 1
-            out.append("<blockquote>" + render_markdown("\n".join(quote)) + "</blockquote>")
+            out.append("<blockquote>" + render_markdown("\n".join(quote), link) + "</blockquote>")
             continue
         if BULLET_RE.match(line) or ORDERED_RE.match(line):
             flush()
@@ -516,7 +605,7 @@ def render_markdown(text: str) -> str:
                 else:
                     break
                 i += 1
-            out.append(_render_list(block))
+            out.append(_render_list(block, link))
             continue
         para.append(line)
         i += 1
@@ -669,8 +758,10 @@ def _starts_turn(text: str) -> bool:
 class Conversation:
     """Folds transcript entries into display items, oldest first."""
 
-    def __init__(self, shots: Optional[str] = None) -> None:
+    def __init__(self, shots: Optional[str] = None, link: Any = None) -> None:
         self.shots = shots
+        # Links the paths in the first mate's replies (render_inline).
+        self.link = link
         self.items: List[Dict[str, Any]] = []
         self.tools: Dict[str, Dict[str, Any]] = {}
         self.busy = False
@@ -831,7 +922,7 @@ class Conversation:
                 last = self.items[-1] if self.items else None
                 if last is not None and last["kind"] == "assistant" and self.last_assistant_msg == msg_id:
                     last["text"] += "\n\n" + text
-                    last["html"] = render_markdown(last["text"])
+                    last["html"] = render_markdown(last["text"], self.link)
                 else:
                     self._push(
                         {
@@ -839,7 +930,7 @@ class Conversation:
                             "kind": "assistant",
                             "ts": ts,
                             "text": text,
-                            "html": render_markdown(text),
+                            "html": render_markdown(text, self.link),
                         }
                     )
                     self.last_assistant_msg = msg_id
@@ -876,8 +967,8 @@ class Conversation:
         return {pid: ref for pid, ref in self.pictures.items() if pid in wanted}
 
 
-def parse_lines(lines: Iterable[str], shots: Optional[str] = None) -> Conversation:
-    conversation = Conversation(shots)
+def parse_lines(lines: Iterable[str], shots: Optional[str] = None, link: Any = None) -> Conversation:
+    conversation = Conversation(shots, link)
     for line in lines:
         line = line.strip()
         if not line:
@@ -890,7 +981,8 @@ def parse_lines(lines: Iterable[str], shots: Optional[str] = None) -> Conversati
     return conversation
 
 
-def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_ITEMS) -> Tuple[Conversation, bool]:
+def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_ITEMS,
+              link: Any = None) -> Tuple[Conversation, bool]:
     """Parse only the end of the transcript, widening until enough items show.
 
     Returns the conversation and whether older history exists before it.
@@ -905,15 +997,18 @@ def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_IT
         lines = data.decode("utf-8", "replace").split("\n")
         if start > 0:
             lines = lines[1:]
-        conversation = parse_lines(lines, shots)
+        conversation = parse_lines(lines, shots, link)
         if start == 0 or len(conversation.items) >= want_items or window >= TAIL_MAX_WINDOW:
             return conversation, start > 0
         window = min(window * 4, TAIL_MAX_WINDOW)
 
 
 class TranscriptCache:
-    def __init__(self, home: Path) -> None:
+    def __init__(self, home: Path, link_files: bool = False) -> None:
         self.home = home
+        # Only this server serves /api/file/, so only its reading links files;
+        # the conversation command's reader shows the paths as plain words.
+        self.link = file_linker(home) if link_files else None
         self.lock = threading.Lock()
         self.key: Optional[Tuple[str, int, int]] = None
         self.value: Optional[Dict[str, Any]] = None
@@ -961,7 +1056,8 @@ class TranscriptCache:
         key = (str(path), stat.st_size, stat.st_mtime_ns)
         with self.lock:
             if key != self.key or self.value is None:
-                conversation, older = read_tail(path, str(self.home / "state" / "desk-voice" / "shots"))
+                conversation, older = read_tail(path, str(self.home / "state" / "desk-voice" / "shots"),
+                                                link=self.link)
                 items = conversation.public_items(TAIL_ITEMS)
                 self.value = {
                     "items": items,
@@ -1463,18 +1559,17 @@ def desk_voice_send(home: Path, root: Path, text: str, images: List[Path]) -> Di
     argv = [str(script), "send", "--source", "web"]
     for image in images:
         argv.extend(["--image", str(image)])
-    argv.append("--")
-    if text:
-        argv.append(text)
+    argv.append("--stdin")
     env = dict(os.environ)
     env["FM_HOME"] = str(home)
     env["FM_ROOT_OVERRIDE"] = str(root)
     proc = subprocess.run(
         argv,
         env=env,
-        stdin=subprocess.DEVNULL,
+        input=text,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=SEND_TIMEOUT_SECONDS,
     )
     line = (proc.stdout or "").strip().splitlines()[-1:] or [""]
@@ -1502,7 +1597,7 @@ def decode_send_body(body: bytes) -> Tuple[str, List[bytes]]:
     if not isinstance(text, str):
         raise ValueError("text must be a string")
     if len(text) > SEND_TEXT_MAX:
-        raise ValueError("the message is too long")
+        raise ValueError(f"the message is too long: at most {SEND_TEXT_MAX:,} characters")
     raw_images = payload.get("images") or []
     if not isinstance(raw_images, list) or len(raw_images) > SEND_IMAGES_MAX:
         raise ValueError(f"attach at most {SEND_IMAGES_MAX} images")
@@ -1743,6 +1838,16 @@ def use_signin_code(home: Path, code: str) -> bool:
 # --- HTTP ------------------------------------------------------------------
 
 
+# A linked page or drawing runs in a sandbox without allow-same-origin: its
+# origin is opaque, so the sign-in cookie never goes with its requests and it
+# can neither read this page nor send through it. It may load what it needs
+# from anywhere, as it would opened from disk.
+FILE_SANDBOX_CSP = (
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; "
+    "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'"
+)
+
+
 def csp(nonce: str) -> str:
     return (
         "default-src 'none'; "
@@ -1766,7 +1871,7 @@ class WebState:
         self.cookie_name = f"{COOKIE_PREFIX}{port}"
         self.cookie_value = derive(token, "cookie")
         self.csrf = derive(token, "csrf")
-        self.transcript = TranscriptCache(home)
+        self.transcript = TranscriptCache(home, link_files=True)
         self.mirror = FleetCache(home, root)
         self.suggestion = suggestion_reader(home, root)
         self.send_lock = threading.Lock()
@@ -1824,13 +1929,13 @@ class WebHandler(BaseHTTPRequestHandler):
     # responses
 
     def _send(self, status: int, body: bytes, content_type: str, headers: Optional[List[Tuple[str, str]]] = None,
-              cache: str = "no-store") -> None:
+              cache: str = "no-store", policy: Optional[str] = None) -> None:
         nonce = getattr(self, "_nonce", "") or secrets.token_urlsafe(16)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
-        self.send_header("Content-Security-Policy", csp(nonce))
+        self.send_header("Content-Security-Policy", policy or csp(nonce))
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -1927,6 +2032,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._text(404, "not found")
             else:
                 self._send(200, found[0], found[1], cache="private, max-age=86400")
+        elif parsed.path.startswith(FILE_HREF):
+            self._file(unquote(parsed.path[len(FILE_HREF):]))
         elif parsed.path == "/api/conversation":
             try:
                 payload = STATE.transcript.get()
@@ -1954,6 +2061,28 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(200, payload)
         else:
             self._text(404, "not found")
+
+    def _file(self, name: str) -> None:
+        """One file a reply may link (home_file), read-only, in its own type."""
+        found = None
+        if not name.startswith("/") and ".." not in name.split("/"):
+            found = home_file(STATE.home, name)
+        data = None
+        if found is not None:
+            try:
+                fd = os.open(found[1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                with os.fdopen(fd, "rb") as handle:
+                    data = handle.read(FILE_MAX + 1)
+            except OSError:
+                data = None
+        if data is None or len(data) > FILE_MAX:
+            self._text(404, "not found")
+            return
+        suffix = found[1].suffix.lower()
+        policy = (FILE_SANDBOX_CSP if suffix in FILE_ACTIVE
+                  else "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+                       "object-src 'self'; frame-ancestors 'none'")
+        self._send(200, data, FILE_TYPES[suffix], policy=policy)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
@@ -2148,7 +2277,7 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 .state:empty{display:none}
 
 #log{flex:1;min-height:0;overflow-y:auto;padding:.25rem 1rem .75rem}
-.wrap{max-width:48rem;margin:0 auto}
+.wrap{max-width:var(--wrap,48rem);margin:0 auto}
 .msg{display:flex;margin:.625rem 0}
 .msg.user{justify-content:flex-end}
 .bubble{max-width:85%;padding:.5rem .75rem;border-radius:.875rem .875rem .25rem .875rem;background:var(--here-bg);overflow-wrap:anywhere}
@@ -2484,6 +2613,10 @@ SETTINGS_JS = r"""
   /* Text size steps, as a percentage of the browser's own size; Normal is the middle one. */
   var TEXT_STEPS = [80, 90, 100, 120, 145];
   var TEXT_NAMES = ['Smaller', 'Small', 'Normal', 'Large', 'Largest'];
+  /* The chat column's widest, in rem at Normal. Below Normal it keeps Normal's
+     width on the screen, so smaller text fits more words on a line; from
+     Normal up it scales with the text. */
+  var WRAP_REM = 48;
   /* Where each divider sits, as the share the first panel takes, and how far it may go. */
   var SPLITS = { split: [0.25, 0.75], splitTab: [0.3, 0.8], splitStack: [0.2, 0.8] };
   var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show',
@@ -2535,10 +2668,16 @@ SETTINGS_JS = r"""
     return kept;
   }
 
+  function wrapWidth(text) {
+    var step = TEXT_STEPS[text];
+    return Math.round(WRAP_REM * Math.max(1, 100 / step) * 100) / 100 + 'rem';
+  }
+
   /* Put the settings on the page's root element; the stylesheet does the rest. */
   function apply(element, settings) {
     var kept = clean(settings);
     element.style.fontSize = TEXT_STEPS[kept.text] + '%';
+    element.style.setProperty('--wrap', wrapWidth(kept.text));
     element.style.setProperty('--split', String(kept.split));
     element.style.setProperty('--split-tab', String(kept.splitTab));
     element.style.setProperty('--split-stack', String(kept.splitStack));
