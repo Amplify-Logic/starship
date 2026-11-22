@@ -99,6 +99,8 @@
 #   ready list  the tasks whose work read ready in the fold, which
 #               fm_owner_calls turned into the merges behind ready, so the
 #               Factory pane lists exactly the calls the overview counts.
+#   lost list   the tasks behind lost, so a surface that says how many have
+#               stopped can name and open them.
 #
 # working and stopped are separate readings of the same fleet rather than two
 # ends of one axis, and a task counts toward NEITHER unless its state was
@@ -319,7 +321,7 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 }
 
 # fm_owner_calls: the owner's calls - what really waits on the captain - one per
-# line, decisions first, then merges:
+# line, most pressing first: decisions first, then merges:
 #
 #   decision<TAB><id>   a decision held for the captain that waits on him now
 #   merge<TAB><id>      a PR or ready branch waiting for his merge word
@@ -344,6 +346,14 @@ fm_fleet_status_bucket() {  # <canonical line> [<meta>]
 # (fm_fleet_task_bucket), unless its row is done or it carries any captain hold
 # that is not done: the merge of held work waits on the answer, so it is one
 # call, not two, and never a call while that hold is not his call right now.
+#
+# The order is the one every surface shows, so the first line is the owner's
+# most urgent call and the first card the Factory pane and the web page show:
+# decisions longest waiting first, by the day each began waiting on him now
+# (the date it was put off to, once that date came, else the day it was held),
+# then by when it was held, else in backlog order; a decision with no day on
+# record comes after those with one. Merges follow in the order of <buckets>, and the second
+# mates' PRs come last.
 #
 # Nothing else is ever a call. A worker's question and an ask-user review
 # finding are firstmate's to answer (ask-user-authority) and reach the captain
@@ -381,7 +391,10 @@ fm_owner_calls() {  # <state-dir> [<buckets-file> [<backlog-file>]]
   if [ "$rc" = 0 ]; then
     out=$(jq -r --rawfile buckets "$buckets" '
       [(.records // [])[] | select(.structured == true and (.id | type) == "string")] as $rows
-      | [$rows[] | select(.state != "done" and .hold_bucket == "live") | .id] as $decisions
+      | ([$rows[] | select(.state != "done" and .hold_bucket == "live")
+          | {id, day: ((.hold_until // .hold_set // .since // "") | tostring | .[0:10]),
+             set: ((.hold_set // "") | tostring)}]
+        | sort_by([(.day == ""), .day, .set]) | map(.id)) as $decisions
       | (reduce ($rows[] | select(.state == "done" or .hold_bucket != null) | .id) as $id ({}; .[$id] = true)) as $taken
       | ($decisions[] | "decision\t\(.)"),
         ($buckets | split("\n")[] | split("\t") | select(length >= 2 and .[1] == "ready" and .[0] != "")
@@ -863,7 +876,7 @@ _fm_fleet_calls_refresh_detached() {  # <state-dir> <now> <ready-list> <signal>
 # ordinary task and print one reading:
 #   <stamp> <working> <stopped> <validating> <paused> <attention> <ready>
 #   <signature> <decisions> calls <failed> <lost> <night> <first-kind>
-#   <first-id> <first-title> <calls-signal> <ready-list>
+#   <first-id> <first-title> <calls-signal> <ready-list> <lost-list>
 #
 # <decisions> and the `calls` mark come after the older fields, and the overview's
 # readings (the header's failed, lost, night and first call) after the mark, so a
@@ -874,7 +887,8 @@ _fm_fleet_calls_refresh_detached() {  # <state-dir> <now> <ready-list> <signal>
 # fold read, so they can count a held decision that has no task record at all.
 # <calls-signal> is the owner's calls signal taken before the fold, and
 # <ready-list> the ids whose work read ready, which a calls-only refresh folds
-# again (_fm_fleet_calls_fold).
+# again (_fm_fleet_calls_fold), and <lost-list> the ids behind <lost>, both
+# space separated or `-` for none.
 #
 # Every task field but stopped claims a task for itself: working is a live agent
 # on a task no state field claimed. Done work spends no endpoint probe at all,
@@ -898,8 +912,8 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
   local working=0 stopped=0 validating=0 paused=0 attention=0 ready=0
   local decisions=0 asked=0 answered=0 calls calls_signal ready_list
   local failed=0 lost=0 night=- first_kind=- first_id=- first_title=- window ws we
-  local word
-  local ids=() ready_ids=()
+  local word lost_list
+  local ids=() ready_ids=() lost_ids=()
   [ -n "$probe" ] || probe=${FM_FLEET_STATE_PROBE:-_fm_fleet_probe_default}
   _fm_fleet_classify_ready || return 1
   # Taken before anything is read, so a call that changes during the fold
@@ -936,7 +950,7 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
         ;;
       stopped)
         stopped=$((stopped + 1))
-        [ "$word" = failed ] || lost=$((lost + 1))
+        [ "$word" = failed ] || { lost=$((lost + 1)); lost_ids+=("$id"); }
         ;;
     esac
   done
@@ -945,6 +959,11 @@ _fm_fleet_collect() {  # <state-dir> <now> <reader> [prober]
     ready_list="${ready_ids[*]}"
   else
     ready_list=-
+  fi
+  if [ "${#lost_ids[@]}" -gt 0 ]; then
+    lost_list="${lost_ids[*]}"
+  else
+    lost_list=-
   fi
   calls=$(_fm_fleet_calls_fold "$state" "$ready_list") || return 1
   IFS=$'\t' read -r ready decisions first_kind first_id first_title <<CALLS
@@ -959,10 +978,10 @@ WINDOW
       case "$night" in ''|*[!0-9]*) night=- ;; *) night="$night@$we" ;; esac
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tcalls\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
     "$now" "$working" "$stopped" "$validating" "$paused" "$attention" \
     "$ready" "$signature" "$decisions" "$failed" "$lost" "$night" \
-    "$first_kind" "$first_id" "$first_title" "$calls_signal" "$ready_list"
+    "$first_kind" "$first_id" "$first_title" "$calls_signal" "$ready_list" "$lost_list"
 }
 
 # _fm_fleet_refresh_detached: start at most ONE bounded refresh and return at
@@ -1010,7 +1029,7 @@ _fm_fleet_unknown() {  # <records> [decisions|overview]
   printf '%s\t0\t0\t0\t0\t0\t0\t0\t0' "$1"
   case "${2:-}" in
     decisions) printf '\t0' ;;
-    overview) printf '\t0\t-\t-\t-\t-\t-\t-\t-\t-' ;;
+    overview) printf '\t0\t-\t-\t-\t-\t-\t-\t-\t-\t-' ;;
   esac
 }
 
@@ -1026,13 +1045,14 @@ _fm_fleet_unknown() {  # <records> [decisions|overview]
 # With the word `overview` instead (`strip` is the older name for it), the
 # overview's readings follow those ten:
 #   <failed> <lost> <night> <first-kind> <first-id> <first-title> <calls-signal>
-#   <ready-list>
+#   <ready-list> <lost-list>
 # as the header and _fm_fleet_collect describe them. Each is `-` when the
 # reading has no such field, as one taken before the overview asked for them
 # does not, and such a reading is refreshed at once; the ten fields stand as
 # above. <calls-signal> is the owner's calls signal the shown calls were read
 # under, so a renderer that sees the signal move past it knows to draw again.
-# <ready-list> is the space-separated ids behind the merges in <ready>.
+# <ready-list> is the space-separated ids behind the merges in <ready>, and
+# <lost-list> those behind <lost>.
 # tab separated. <known> is 1 when the six live fields are a current reading of
 # THIS fleet, 2 when they are the last good reading but no longer current - it
 # aged past its maximum, or the fleet changed since - and 0 when no good reading
@@ -1051,7 +1071,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|overview]
   local cached='' stamp='' working='' stopped='' validating='' paused=''
   local attention='' ready='' signature='' decisions='' mark='' current known age fresh=1
   local failed='' lost='' night='' first_kind='' first_id='' first_title=''
-  local calls_signal='' ready_list='' now_signal shown_signal=- shown_list=- _newer
+  local calls_signal='' ready_list='' lost_list='' now_signal shown_signal=- shown_list=- _newer
   [ "$want" != strip ] || want=overview
   records=$(_fm_fleet_ids "$state" | grep -c '') || records=0
   now=$(_fm_fleet_now) || {
@@ -1077,7 +1097,7 @@ fm_fleet_status_counts() {  # <state-dir> [decisions|overview]
   if [ -n "$cached" ]; then
     IFS=$'\t' read -r stamp working stopped validating paused attention ready \
       signature decisions mark failed lost night first_kind first_id first_title \
-      calls_signal ready_list _newer <<READING
+      calls_signal ready_list lost_list _newer <<READING
 $cached
 READING
   fi
@@ -1103,7 +1123,13 @@ READING
   esac
   if [ -z "$failed" ] || [ -z "$night" ] || [ -z "$first_kind" ] || [ -z "$first_id" ] \
     || [ -z "$first_title" ]; then
-    failed=- lost=- night=- first_kind=- first_id=- first_title=-
+    failed=- lost=- night=- first_kind=- first_id=- first_title=- lost_list=-
+    [ "$want" != overview ] || fresh=0
+  fi
+  # A reading from before the lost tasks were named still counts them; it is
+  # refreshed now so the next frame names them too.
+  if [ -z "$lost_list" ]; then
+    lost_list=-
     [ "$want" != overview ] || fresh=0
   fi
   [ -n "$cached" ] || fresh=0
@@ -1166,8 +1192,8 @@ READING
   case "$want" in
     decisions) printf '\t%s' "$decisions" ;;
     overview)
-      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
-        "$first_kind" "$first_id" "$first_title" "$shown_signal" "$shown_list"
+      printf '\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$decisions" "$failed" "$lost" "$night" \
+        "$first_kind" "$first_id" "$first_title" "$shown_signal" "$shown_list" "$lost_list"
       ;;
   esac
 }

@@ -675,7 +675,9 @@ def overview_reading(home: str) -> Optional[Dict[str, Any]]:
     cache read that never waits on the workers. None when it cannot be read;
     `known` 0 when no good reading exists yet, 2 when it is the last good one
     but no longer current. `ready_list` is None when the reading predates the
-    list, and otherwise the tasks behind its merges.
+    list, and otherwise the tasks behind its merges. `failed` and `lost` are
+    the broken work the bridge strip's alert counts (None when the reading has
+    no such figures), and `lost_list` the tasks behind `lost`.
     """
     script = '. "$1/fm-fleet-status-lib.sh" && fm_fleet_status_counts "$2" overview'
     try:
@@ -699,8 +701,14 @@ def overview_reading(home: str) -> Optional[Dict[str, Any]]:
     ready_list = None
     if len(fields) >= 18 and fields[10] != "-" and fields[16] != "-":
         ready_list = sorted(x for x in fields[17].split(" ") if x and x != "-")
+    failed = lost = None
+    if len(fields) >= 12 and fields[10].isdigit() and fields[11].isdigit():
+        failed, lost = int(fields[10]), int(fields[11])
+    lost_list = sorted(x for x in fields[18].split(" ") if x and x != "-") if len(fields) >= 19 else []
     return {"known": known, "age": age if known else 0, "busy": working + validating,
-            "decisions": decisions, "ready_to_merge": ready - decisions, "ready_list": ready_list}
+            "decisions": decisions, "ready_to_merge": ready - decisions, "ready_list": ready_list,
+            "failed": failed if known else None, "lost": lost if known else None,
+            "lost_list": lost_list if known else []}
 
 
 def overview_ready_list(overview: Optional[Dict[str, Any]]) -> Optional[List[str]]:
@@ -725,10 +733,12 @@ def overview_counts(overview: Optional[Dict[str, Any]], idle: int) -> Dict[str, 
     """
     if not overview or not overview["known"]:
         return {"reading": "unknown", "age": 0, "busy": None, "decisions": None, "ready_to_merge": None,
-                "idle": idle}
+                "idle": idle, "failed": None, "lost": None, "lost_list": []}
     return {"reading": "current" if overview["known"] == 1 else "past", "age": overview["age"],
             "busy": overview["busy"], "decisions": overview["decisions"],
-            "ready_to_merge": overview["ready_to_merge"], "idle": idle}
+            "ready_to_merge": overview["ready_to_merge"], "idle": idle,
+            "failed": overview.get("failed"), "lost": overview.get("lost"),
+            "lost_list": list(overview.get("lost_list") or [])}
 
 
 def age_words(seconds: int) -> str:
@@ -759,6 +769,110 @@ def count_words(counts: Dict[str, Any], short: bool = False) -> List[Tuple[str, 
 
 def count_line_text(counts: Dict[str, Any]) -> str:
     return " · ".join(words for words, _colour in count_words(counts))
+
+
+def date_words(date: str) -> str:
+    """A YYYY-MM-DD date with its day of the week, as "Mon 23 Nov"."""
+    epoch = parse_iso(date)
+    return "%s %s" % (time.strftime("%a", time.gmtime(epoch)), day_words(date)) if epoch is not None else date
+
+
+def sentences(record: Dict[str, Any], now: int) -> List[Dict[str, str]]:
+    """The three sentences at the top of both screens, in place of rows of counts.
+
+    The first says how many things need the owner (the overview's calls, the
+    count NEEDS YOU lists) and how many more wait on its two shelves, so every
+    call that waits on him is counted once and named somewhere; the second
+    how many jobs run and how many stopped, the figures the bridge strip shows;
+    the third what went live and which reports came in since the last look.
+    Each has the part of the screen it speaks for: `needs`, `now` or `feed`.
+    """
+    counts = record.get("counts") or {}
+    older, later = len(record.get("older") or []), len(record.get("coming_back") or [])
+    calls = 0
+    if counts.get("busy") is None:
+        first = "Reading what needs you."
+        second = "Reading the crew."
+    else:
+        calls = (counts.get("decisions") or 0) + (counts.get("ready_to_merge") or 0)
+        first = "Nothing needs you." if not calls else "%s %s you." % (
+            plural(calls, "thing", "things"), "needs" if calls == 1 else "need")
+        shelves = []
+        if older:
+            shelves.append("%s %s still open" % (plural(older, "older question", "older questions"),
+                                                 "is" if older == 1 else "are"))
+        if later:
+            shelves.append("%d %s put off to a date" % (later, ("more " if older or calls else "") +
+                                                        ("is" if later == 1 else "are")))
+        if shelves:
+            first += " %s." % ", and ".join(shelves)
+        busy = counts["busy"]
+        second = "Nothing is running." if not busy else "%s %s running." % (
+            plural(busy, "job", "jobs"), "is" if busy == 1 else "are")
+        trouble = []
+        if counts.get("lost"):
+            trouble.append("%d %s stopped" % (counts["lost"], "has" if counts["lost"] == 1 else "have"))
+        if counts.get("failed"):
+            trouble.append("%d hit a problem" % counts["failed"])
+        if trouble:
+            many = len(trouble) > 1 or (counts.get("lost") or 0) + (counts.get("failed") or 0) > 1
+            second += " %s, and Starship is on %s." % (" and ".join(trouble), "them" if many else "it")
+        if counts.get("reading") == "past":
+            second = second[:-1] + " (%s)." % age_words(counts.get("age") or 0)
+    news = record.get("news") or {}
+    live, reports = news.get("went_live") or 0, news.get("report_ready") or 0
+    since = record.get("since_epoch")
+    when = {"12 hours": "in the last 12 hours", "48 hours": "in the last 48 hours"}.get(
+        record.get("since_from") or "", "since you looked at %s" % when_words(since, now) if since else "lately")
+    moved = []
+    if live:
+        moved.append("%s went live" % plural(live, "change", "changes"))
+    if reports:
+        moved.append("%s %s ready" % (plural(reports, "report", "reports"), "is" if reports == 1 else "are"))
+    third = ("%s %s." % (" and ".join(moved), when)) if moved else \
+        "Nothing went live and no report came in %s." % when
+    trouble = bool(counts.get("lost") or counts.get("failed"))
+    return [{"words": first, "to": "needs", "colour": "red" if calls else "mist"},
+            {"words": second, "to": "now", "colour": "amber" if trouble or counts.get("busy") else "mist"},
+            {"words": third[0].upper() + third[1:], "to": "feed", "colour": "green" if moved else "mist"}]
+
+
+def shelves(record: Dict[str, Any], now: int, fid: Optional[str] = None) -> Dict[str, Any]:
+    """The words of NEEDS YOU's two shelves, overall or for one factory.
+
+    `older` is every older question still open: a call that waited undated
+    past the snapshot's age and so left NEEDS YOU, oldest first. `coming` is
+    every call put off to a date, soonest first: the ones that come back this
+    week by name and date, the rest counted, and the date the next of those
+    comes back.
+    """
+    older = [o for o in record.get("older") or [] if fid in (None, o["factory"])]
+    later = [c for c in record.get("coming_back") or [] if fid in (None, c["factory"])]
+    week_end = time.strftime("%Y-%m-%d", time.gmtime(now + 7 * 86400))
+    soon = [c for c in later if c["until"] <= week_end]
+    rest = later[len(soon):]
+    oldest = next((o["since"] for o in older if o.get("since")), None)
+    coming = {"heading": "", "rest": "", "items": soon, "after": ""}
+    if later:
+        coming["heading"] = ("%s %s back this week" % (plural(len(soon), "thing", "things"),
+                                                       "comes" if len(soon) == 1 else "come")
+                             if soon else "Nothing comes back this week")
+        if rest:
+            coming["rest"] = "%d %s put off to %s." % (len(rest), ("more " if soon else "") +
+                                                       ("is" if len(rest) == 1 else "are"),
+                                                       "a later date" if len(rest) == 1 else "later dates")
+            coming["after"] = ("After that, the next is on %s." if soon else "The next is on %s.") % (
+                day_words(rest[0]["until"]))
+    return {"older": older,
+            "older_heading": "%s %s still open" % (plural(len(older), "older question", "older questions"),
+                                                   "is" if len(older) == 1 else "are") if older else "",
+            "older_note": ("%s Needs you after waiting with no date set" % ("It left" if len(older) == 1 else "They left") +
+                           (", %s since %s." % ("waiting" if len(older) == 1 else "the oldest", day_words(oldest))
+                            if oldest else ".")) if older else "",
+            "coming": coming}
+
+
+OLDER_ASKED = {"revive": "you asked to bring it back", "drop": "you said it is no longer needed"}
 
 
 def axi_backlog(home: str) -> Dict[str, Any]:
@@ -1317,7 +1431,7 @@ def queue_counts(jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "in_line": words.count("in line"), "on_hold": words.count("on hold"),
             "waits_on_other_work": words.count("waits on other work"),
             "waits_on_you": words.count("waits on you") + words.count("older call") + words.count("deferred"),
-            "deferred": words.count("deferred")}
+            "deferred": words.count("deferred"), "older": words.count("older call")}
 
 
 def parked_words(count: int, dates: List[Optional[str]]) -> str:
@@ -1486,6 +1600,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     if calls is None:
         calls = read_calls(home, overview_call_buckets(overview, buckets), backlog, known_shapes)
     decision_ids, merge_ids, adapter_rows, shapes, mate_prs = calls
+    # The tasks the overview reads as stopped, the ones behind the bridge
+    # strip's "N stopped", so the job that stopped says so on its row.
+    lost = set(overview_counts(overview, 0)["lost_list"])
     known = {r["id"] for r in rows}
     # The adapter is the backlog's own reading of what is held and what still
     # waits on other work, the one the owner's calls are counted from. The
@@ -1628,6 +1745,10 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             job.update(state="stopped")
         else:
             job.update(state="no reading")
+        # A job the checks still carry is busy without its worker, so only one
+        # with nothing carrying it reads stopped.
+        if task["id"] in lost and job["state"] not in ("busy", "ready to merge", "finished", "with Starship"):
+            job.update(state="stopped", step=None)
         if row and row["id"] in decision_ids:
             needs.append(hold_need(row, fid))
             if job["state"] in ("stopped", "no reading", "with Starship", "ready to merge", "needs a look"):
@@ -1679,7 +1800,12 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             if job["step"] != "checking" and job["last_sign_of_life"] and now - job["last_sign_of_life"] >= quiet_after:
                 job["quiet"] = True
 
-    # Queued work and held work items with no live worker.
+    # Queued work and held work items with no live worker. The owner's calls
+    # that left NEEDS YOU go on its two shelves: an older question (undated,
+    # waiting past the snapshot's age) and one put off to a date, which comes
+    # back on that date.
+    older: List[Dict[str, Any]] = []
+    coming_back: List[Dict[str, Any]] = []
     for row in rows:
         if row["id"] in task_factory or row.get("state") == "done":
             continue
@@ -1696,6 +1822,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                "read": read_sources(home, row["id"], (row.get("hold_reason"),))}
         if job["queue"] == "parked":
             job["parked_until"] = row.get("hold_until")
+        if job["queue"] == "older call":
+            held = str(row.get("hold_set") or row.get("since") or "")[:10] or None
+            older.append({"id": row["id"], "factory": fid, "title": card_words(plain_words(title)) or row["id"],
+                          "since": held, "asking": held or "0"})
+        elif job["queue"] == "deferred" and row.get("hold_until"):
+            coming_back.append({"id": row["id"], "factory": fid,
+                                "title": card_words(plain_words(title)) or row["id"], "until": row["hold_until"]})
         if row["id"] in decision_ids:
             job["state"] = "decision for you"
             needs.append(hold_need(row, fid))
@@ -1834,7 +1967,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                          "text": ("You steer %s now." if who == "you" else "Starship steers %s again.")
                          % by_id[fid]["name"]})
     note_words = {"answer": "answered", "keep": "asked to keep", "change": "asked for changes", "talk": "said",
-                  "settled": "asked to check"}
+                  "settled": "asked to check", "revive": "asked to bring back", "drop": "said no longer needed"}
     for note in notes:
         parts = (note.get("request_id") or "").split(".")
         if len(parts) < 3 or parts[1] not in by_id:
@@ -1873,12 +2006,26 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
     # run, and a call it put to the owner, still show as usual.
     feed = [e for e in feed if not (e.get("job") in routine_of and e["word"] in ROUTINE_QUIET_WORDS)]
     feed.sort(key=lambda e: (e["at"] if e["at"] is not None else (parse_iso(e["date"]) or 0)), reverse=True)
+    # What moved since the last look, counted before the feed is cut short.
+    news = {"went_live": len([e for e in feed if e["word"] == "went live"]),
+            "report_ready": len([e for e in feed if e["word"] == "report ready"])}
     feed = feed[:FEED_CAP]
 
-    # Questions first, then finished work; a worker waiting before a held item; newest first.
-    live_ids = {j["id"] for f in factories for j in f["jobs"] if j["started"]}
-    needs.sort(key=lambda n: (0 if n["kind"] == "question" else 1, 0 if n["id"] in live_ids else 1,
-                              -(n["since"] or 0)))
+    # Most pressing first, in the one order fm_owner_calls gives the owner's
+    # calls, so the first card is the most urgent call the bridge strip names.
+    pressing = {ident: index for index, ident in enumerate(
+        decision_ids + merge_ids + ["%s:%s" % (pr["mate"], pr["child"]) for pr in mate_prs])}
+    needs.sort(key=lambda n: pressing.get(n["id"], len(pressing)))
+    # Whether the owner already asked to bring an older question back or said it is no longer needed.
+    for item in older:
+        stem = "factory.%s." % item["factory"]
+        kinds = {request_id_of("%s%s.%s.%s" % (stem, kind, item["id"], item["asking"])): kind
+                 for kind in ("revive", "drop")}
+        found = [{"at": parse_iso(note.get("at")), "what": kinds[note.get("request_id")]}
+                 for note in notes if note.get("request_id") in kinds]
+        item["asked"] = max(found, key=lambda mark: mark["at"] or 0) if found else None
+    older.sort(key=lambda item: (item["since"] or "9999", item["title"]))
+    coming_back.sort(key=lambda item: (item["until"], item["title"]))
     for factory in factories:
         factory["needs"] = [n["id"] for n in needs if n["factory"] == factory["id"]]
         running = [j for j in factory["jobs"] if j["state"] == "busy" and not routine_folds(j)]
@@ -1914,6 +2061,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         "queue": queue,
         "queue_line": " · ".join(words for _key, words in queue_parts(queue)),
         "needs_you": needs,
+        "older": older,
+        "coming_back": coming_back,
+        "news": news,
         "factories": [{k: f[k] for k in ("id", "name", "about", "projects", "steered_by", "state",
                                          "idle_since", "crew", "needs", "jobs", "next", "queue", "rules",
                                          "learned", "talk", "routine", "routine_runs")}
@@ -2527,18 +2677,20 @@ def flow(width: int, lead, text: str, colour: str = "ice", bold: bool = False, i
 
 STATE_COLOUR = {"busy": "amber", "decision for you": "red", "ready to merge": "green", "needs a look": "amber",
                 "failed": "amber",
-                "waiting": "amber", "stopped": "faint", "no worker": "faint", "no reading": "faint",
+                "waiting": "amber", "stopped": "amber", "no worker": "faint", "no reading": "faint",
                 "with Starship": "mist", "finished": "green", "next": "mist", "later": "faint"}
 # What a job's row says for a state whose word alone leaves out whose turn it is
 # or that the work is finished. The record keeps the state word, which the
 # count line and the status bar count by (docs/status-bar.md).
-STATE_WORDS = {"needs a look": "waiting on Starship", "with Starship": "finished, now with Starship"}
+STATE_WORDS = {"needs a look": "waiting on Starship", "with Starship": "finished, now with Starship",
+               "stopped": "stopped, Starship is on it"}
 # How long after its start a busy job that has named no step reads `just started`.
 JUST_STARTED = 300
 FEED_COLOUR = {"finished": "green", "report ready": "green", "PR ready": "green", "went live": "green",
                "closed": "mist", "settled": "mist", "asked you": "red", "failed": "amber",
                "took the helm": "cyan", "handed back": "cyan", "replied": "cyan",
-               "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan"}
+               "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan",
+               "asked to bring back": "cyan", "said no longer needed": "cyan"}
 
 
 def asking(need: Dict[str, Any]) -> str:
@@ -2574,6 +2726,9 @@ class View:
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
         self.unfolded: Optional[str] = None   # the factory whose folded jobs are listed
+        # The older questions shelf listed: "" on the overview, else the factory whose page shows it.
+        self.older_open: Optional[str] = None
+        self.older_asked: Dict[str, Dict[str, Any]] = {}   # older questions asked about here a moment ago
         # An item the highlight was asked to go to (--item, or the focus file),
         # held until the record has it, for at most WANT_SECONDS.
         self.wanted: Optional[Tuple[str, float]] = (item, time.time()) if item else None
@@ -2594,19 +2749,28 @@ class View:
         if self.unfolded and (self.unfolded != self.opened
                               or not any(self.page_jobs(self.factory(self.unfolded))[1].values())):
             self.unfolded = None
+        if self.older_open is not None and (self.older_open != (self.opened or "")
+                                            or not self.older(self.opened)):
+            self.older_open = None
         talk = self.talking
         if talk is not None and not (self.has_factory(talk["factory"]) and (
                 "item" not in talk or self.need(talk["item"]))):
             talk["gone"] = True
         confirm = self.confirm
         if confirm is not None:
-            need = self.need(confirm["item"])
-            if need is None or asking(need) != confirm["asked"]:
+            if confirm.get("older"):
+                item = self.older_item(confirm["item"])
+                gone = item is None or item["asking"] != confirm["asked"]
+            else:
+                need = self.need(confirm["item"])
+                gone = need is None or asking(need) != confirm["asked"]
+            if gone:
                 self.confirm = None
                 self.notice = ("Not sent: this was settled elsewhere before you confirmed %s." % confirm["what"],
                                "amber", time.time() + 12)
         asked = {(n["id"], asking(n)) for n in record.get("needs_you") or []}
         self.answered = {key: mark for key, mark in self.answered.items() if key in asked}
+        self.older_asked = {ident: mark for ident, mark in self.older_asked.items() if self.older_item(ident)}
 
     # ---- record lookups ----------------------------------------------------
 
@@ -2625,6 +2789,25 @@ class View:
     def need(self, ident: str) -> Optional[Dict[str, Any]]:
         return next((n for n in self.record["needs_you"] if n["id"] == ident), None)
 
+    def older(self, fid: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The older questions still open, oldest first: all of them, or one factory's."""
+        return [o for o in self.record.get("older") or [] if fid in (None, o["factory"])]
+
+    def older_item(self, ident: str) -> Optional[Dict[str, Any]]:
+        return next((o for o in self.record.get("older") or [] if o["id"] == ident), None)
+
+    def older_asked_of(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """What the owner asked of an older question: from the record, or from this pane a moment ago if newer."""
+        known, here = item.get("asked"), self.older_asked.get(item["id"])
+        if known and here:
+            return here if (here["at"] or 0) >= (known["at"] or 0) else known
+        return known or here
+
+    def first_up(self) -> Optional[str]:
+        """The most pressing of the owner's calls, the first card on the overview."""
+        needs = self.needs()
+        return needs[0]["id"] if needs else None
+
     def answered_of(self, need: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """When the owner answered a need, and how: from the record, or from this pane a moment ago if newer."""
         known, here = need.get("answered"), self.answered.get((need["id"], asking(need)))
@@ -2632,13 +2815,25 @@ class View:
             return here if (here["at"] or 0) >= (known["at"] or 0) else known
         return known or here
 
+    def older_stops(self, fid: Optional[str]) -> List[Tuple[str, str]]:
+        """The older questions shelf: its line, and each question while it is listed."""
+        older = self.older(fid)
+        if not older:
+            return []
+        stops = [("older", fid or "")]
+        if self.older_open == (fid or ""):
+            stops += [("old", o["id"]) for o in older]
+        return stops
+
     def stops(self) -> List[Tuple[str, str]]:
         if self.opened:
-            stops = [("need", n["id"]) for n in self.needs(self.opened)] or [("factory", self.opened)]
+            stops = [("need", n["id"]) for n in self.needs(self.opened)] + self.older_stops(self.opened)
+            stops = stops or [("factory", self.opened)]
             if any(self.page_jobs(self.factory(self.opened))[1].values()):
                 stops.append(("fold", self.opened))   # the line the rest of its queue folds into
             return stops
-        return [("need", n["id"]) for n in self.needs()] + [("factory", f["id"]) for f in self.ordered()]
+        return [("need", n["id"]) for n in self.needs()] + self.older_stops(None) + \
+            [("factory", f["id"]) for f in self.ordered()]
 
     def want(self, item: str) -> None:
         """Move the highlight to one item of NEEDS YOU, now or once the record has it."""
@@ -2722,8 +2917,8 @@ class View:
         folded: Dict[str, List[Dict[str, Any]]] = {word: [] for word in QUEUE_WORDS}
         carded = set(fac.get("needs") or ())   # its card under NEEDS YOU is the job's row on this page
         for job in fac["jobs"]:
-            if job["state"] == "finished" or job["id"] in carded:
-                continue
+            if job["state"] == "finished" or job["id"] in carded or job.get("queue") in ("older call", "deferred"):
+                continue   # a call of the owner's that left NEEDS YOU is on its shelves
             word = job.get("queue")
             if word is None and not job["started"] and (
                     job["state"].startswith("on hold") or job["state"] == "waits on other work"):
@@ -2746,22 +2941,29 @@ class View:
     # ---- pieces --------------------------------------------------------------
 
     def count_line(self, width: int) -> List[Row]:
-        counts = self.record["counts"]
-
-        def summary(short: bool):
-            segs = []
-            for words, colour in count_words(counts, short):
-                segs += ([S("  ·  ", "faint")] if segs else []) + [S(words, colour)]
-            return segs
-
-        head = [S(" S T A R S H I P ", "cyan", True), S(" │  ", "faint")] + summary(False)
-        if seg_len(head) + 10 > width:
-            head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(False)
-        if seg_len(head) + 10 > width:
-            head = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")] + summary(True)
-        line = row(width, head, [S(self.clock_words(), "mist")])
-        line.hull = True
-        return [line] + self.queue_rows(width)
+        """The top of the screen: the wordmark, the three sentences (sentences()) and the time."""
+        clock = self.clock_words()
+        rows: List[Row] = []
+        mark = [S(" S T A R S H I P ", "cyan", True), S(" │  ", "faint")]
+        if width < 100:
+            mark = [S(" STARSHIP ", "cyan", True), S(" │  ", "faint")]
+        if width < 72:
+            # A narrow pane gives the sentences the whole width under the wordmark.
+            rows.append(row(width, [S(" STARSHIP", "cyan", True)], [S(clock, "mist")]))
+            mark = [S(" ")]
+        indent = seg_len(mark)
+        for said in sentences(self.record, self.now()):
+            first = not rows
+            lines = wrap(said["words"], max(width - indent - (len(clock) + 3 if first else 1), 16))
+            if len(lines) > 1:
+                # Only the first row makes room for the time.
+                lines = lines[:1] + wrap(" ".join(lines[1:]), max(width - indent - 1, 16))
+            for line in lines:
+                rows.append(row(width, (mark if not rows else [S(" " * indent)]) + [S(line, said["colour"])],
+                                [S(clock, "mist")] if not rows else []))
+        for line in rows:
+            line.hull = True
+        return rows
 
     def queue_rows(self, width: int, queue: Optional[Dict[str, int]] = None, lead: str = " ",
                    hull: bool = True) -> List[Row]:
@@ -2813,6 +3015,8 @@ class View:
             right = [S(fac["name"], "mist"), S(" · ", "faint")] + right
         if need.get("checking"):
             right = [S("checking", "amber"), S(" · ", "faint")] + right
+        if not full and need["id"] == self.first_up():
+            right = [S("first up", "red", True), S(" · ", "faint")] + right
         lead = [S(" "), self.mark("need", need["id"]),
                 S("● ", "cyan" if sent else ("red" if question else "green"))]
         return lead, need["ask"], right
@@ -2891,6 +3095,61 @@ class View:
             line.stop = ("need", need["id"])
         return rows
 
+    def older_rows(self, width: int, fid: Optional[str] = None) -> List[Row]:
+        """The older questions shelf: one line that says how many and since when; enter lists them.
+
+        A listed question is a stop of its own, where `b` asks Starship to
+        bring it back into NEEDS YOU and `n` says it is no longer needed.
+        """
+        words = shelves(self.record, self.now(), fid)
+        if not words["older"]:
+            return []
+        stop = ("older", fid or "")
+        listed = self.older_open == stop[1]
+        head = flow(width, [S("   "), self.mark(*stop), S("· ", "faint")],
+                    "%s. %s" % (words["older_heading"], words["older_note"]), "mist")
+        for line in head:
+            line.band, line.stop = self.here(*stop), stop
+        rows = head
+        if not listed:
+            return rows + [row(width)]
+        names = max(len(self.factory(o["factory"])["name"]) for o in words["older"]) if fid is None else 0
+        for item in words["older"]:
+            here = self.here("old", item["id"])
+            asked = self.older_asked_of(item)
+            lead = [S("     "), self.mark("old", item["id"])]
+            if fid is None:
+                lead.append(S(self.factory(item["factory"])["name"].ljust(names + 2), "mist"))
+            right = [S("since %s" % day_words(item["since"]), "mist")] if item.get("since") else []
+            lines = [row(width, lead + [S(item["title"], "ice", here)], right, band=here)]
+            pad = S(" " * (seg_len(lead)))
+            if asked:
+                lines.append(row(width, [pad, S("%s, waiting for Starship" % OLDER_ASKED[asked["what"]], "cyan")]))
+            elif here:
+                lines.append(row(width, [pad, S("b", "cyan", True), S("  Bring back    ", "ice"),
+                                         S("n", "cyan", True), S("  No longer needed", "ice")]))
+            for line in lines:
+                line.stop = ("old", item["id"])
+            rows += lines
+        return rows + [row(width)]
+
+    def coming_rows(self, width: int, fid: Optional[str] = None) -> List[Row]:
+        """The calls put off to a date: the ones back this week by date, then how many more and the next date."""
+        coming = shelves(self.record, self.now(), fid)["coming"]
+        if not coming["heading"]:
+            return []
+        rows = flow(width, [S("   "), S("↺ ", "faint")],
+                    "%s.%s" % (coming["heading"], " " + coming["rest"] if coming["rest"] else ""), "mist")
+        for item in coming["items"]:
+            right = [S(self.factory(item["factory"])["name"], "mist")] if fid is None else []
+            rows.append(row(width, [S("       "), S(date_words(item["until"]).ljust(12), "faint"),
+                                    S(item["title"], "ice")], right))
+        if coming["after"] and coming["items"]:
+            rows.append(row(width, [S("       "), S(coming["after"], "faint")]))
+        elif coming["after"]:
+            rows += flow(width, [S("     ")], coming["after"], "faint")
+        return rows + [row(width)]
+
     def track(self, job: Dict[str, Any], width: int = 0, links: int = 5):
         current = STEPS.index(job["step"]) if job.get("step") in STEPS else 1
         lit = self.tick % links
@@ -2948,7 +3207,8 @@ class View:
                     row(width, [S("       ")] + self.track(job, width)),
                     row(width, [S("       "), S(words, "amber" if quiet else "mist")])]
         colour = STATE_COLOUR.get(state, "faint")
-        dot = "● " if state in ("decision for you", "ready to merge", "needs a look", "failed", "waiting") else "· "
+        dot = "● " if state in ("decision for you", "ready to merge", "needs a look", "failed", "waiting",
+                                "stopped") else "· "
         return [row(width, [S("     "), S(dot, colour), S(job["title"], "ice" if full else "mist")],
                     [S(words, colour)])]
 
@@ -3172,7 +3432,7 @@ class View:
     def action_stop(self) -> Optional[Tuple[str, str]]:
         """The row an open confirmation or talk box is about, while the record still holds it."""
         if self.confirm is not None:
-            return ("need", self.confirm["item"])
+            return ("old" if self.confirm.get("older") else "need", self.confirm["item"])
         if self.talking is not None and not self.talking.get("gone"):
             return self.talking.get("stop")
         return None
@@ -3211,9 +3471,13 @@ class View:
                 keys.append("k keep · c changes")
         if kind == "fold" and self.unfolded != ident:
             keys.append("enter list them")
+        if kind == "older" and self.older_open != ident:
+            keys.append("enter list them")
+        if kind == "old":
+            keys.append("b bring back · n no longer needed")
         if self.readable():
             keys.append("r read")
-        if self.unfolded:
+        if self.unfolded or self.older_open is not None:
             keys.append("esc hide the list")
         elif not self.opened or not self.in_tab:
             keys.append("enter open" if not self.opened else "esc back")
@@ -3235,10 +3499,11 @@ class View:
         rows: List[Row] = []
         needs = self.needs()
         if needs:
-            rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
+            rows += [row(width, [S(" NEEDS YOU", "red", True), S("  most pressing first", "faint")]), row(width)]
             rows += self.need_list(width, needs, full=False)
         else:
             rows += [row(width, [S(" NOTHING NEEDS YOU", "green", True)]), row(width)]
+        rows += self.older_rows(width) + self.coming_rows(width)
         rows += [row(width, [S(" RIGHT NOW", "mist", True)]), row(width)]
         if not needs and not self.record.get("history", True) and \
                 not any(f["jobs"] for f in self.record["factories"]):
@@ -3269,6 +3534,7 @@ class View:
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
             rows += self.need_list(width, needs, full=True)
+        rows += self.older_rows(width, fac["id"]) + self.coming_rows(width, fac["id"])
         rows += [row(width, [S(" WORK, IN ORDER", "mist", True)]), row(width)]
         if not fac["jobs"]:
             rows.append(row(width, [S("     Nothing in line.", "faint")]))
@@ -3404,6 +3670,20 @@ def screen(view: View) -> Dict[str, Any]:
                                             "colour": FEED_COLOUR.get(e["word"].split(" ·")[0], "amber")}
                                            for stamp, e in events]}
 
+    def shelves_of(fid: Optional[str]) -> Dict[str, Any]:
+        words = shelves(record, view.now(), fid)
+        coming = words["coming"]
+        return {"older": {"heading": words["older_heading"], "note": words["older_note"],
+                          "items": [{"id": o["id"], "asking": o["asking"], "factory": o["factory"],
+                                     "factory_name": view.factory(o["factory"])["name"], "title": o["title"],
+                                     "since": "since %s" % day_words(o["since"]) if o.get("since") else "",
+                                     "asked": OLDER_ASKED[view.older_asked_of(o)["what"]]
+                                     if view.older_asked_of(o) else ""} for o in words["older"]]},
+                "coming": {"heading": coming["heading"], "rest": coming["rest"], "after": coming["after"],
+                           "items": [{"id": c["id"], "factory": c["factory"],
+                                      "factory_name": view.factory(c["factory"])["name"], "title": c["title"],
+                                      "when": date_words(c["until"])} for c in coming["items"]]}}
+
     def factory_of(fac: Dict[str, Any]) -> Dict[str, Any]:
         idle = fac["state"] == "idle"
         nxt = None if idle else fac.get("next")
@@ -3432,11 +3712,21 @@ def screen(view: View) -> Dict[str, Any]:
                 "rules": list(fac["rules"]), "rules_size": rules_words,
                 "rules_mark": {"red": "over", "amber": "near"}.get(rules_colour, ""),
                 "learned": [{"when": stamp, "what": what} for stamp, what in view.learned(fac)],
+                "shelves": shelves_of(fac["id"]),
                 "feed": feed_of(fac["id"], 8),
                 "talk": [{"when": stamp, "who": who, "said": said} for stamp, who, said in view.talk(fac)]}}
 
+    # The jobs that stopped, the ones behind the bridge strip's "N stopped" first.
+    lost = record["counts"].get("lost_list") or []
+    stopped = sorted(({"id": job["id"], "factory": fac["id"], "title": job["title"]}
+                      for fac in record["factories"] for job in fac["jobs"] if job["state"] == "stopped"),
+                     key=lambda job: 0 if job["id"] in lost else 1)
     return {"schema": SCREEN_SCHEMA, "as_of": record.get("as_of"),
             "clock": view.clock_words(),
+            "sentences": sentences(record, view.now()),
+            "first_up": view.first_up(),
+            "shelves": shelves_of(None),
+            "stopped": stopped,
             "counts": record["counts"], "count_words": [{"words": words, "colour": colour}
                                                      for words, colour in count_words(record["counts"])],
             "queue": [words for _key, words in queue_parts(record["queue"])] if record.get("queue") else [],
@@ -3463,7 +3753,7 @@ def kept_record(home: str) -> Dict[str, Any]:
     return record
 
 
-ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read")
+ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "revive", "drop")
 
 
 def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
@@ -3472,7 +3762,8 @@ def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
     <ask> names the action and what it is about: `answer` (item, option),
     `keep` (item), `change` and `discuss` (item, text), `talk` (factory,
     text), `settled` (item), `steer` (factory, who: you or Starship), `read`
-    (item, or factory and job). An `asking` beside an item is the
+    (item, or factory and job), and `revive` and `drop` (item: an older
+    question, which `b` and `n` send in the pane). An `asking` beside an item is the
     asking the screen showed; when the record's differs the call was settled
     or asked again since, and nothing is sent. The answer says whether it went
     (`ok`) and the words the pane would say (`said`). Every action is a look,
@@ -3486,6 +3777,16 @@ def act(home: str, ask: Dict[str, Any]) -> Dict[str, Any]:
     if ask.get("in_tab") is not True:
         note_look(home, now)
     view = View(first_record(home))
+    if action in ("revive", "drop"):
+        item = view.older_item(ask.get("item") or "")
+        if item is None or ask.get("asking") not in (None, item["asking"]):
+            return {"ok": False, "said": "Not sent: this older question was settled or brought back elsewhere."}
+        note = older_note(view.factory(item["factory"]), item, action)
+        ok, why = send_note(home, note["request_id"], note["body"])
+        if not ok:
+            return {"ok": False, "said": "✗ NOT SENT: %s. Nothing reached Starship." % why.rstrip(".")}
+        refresh_in_background(home)
+        return {"ok": True, "said": "✓ SENT to Starship: %s" % note["done"]}
     need = view.need(ask["item"]) if ask.get("item") else None
     if ask.get("item") and action != "read" and (need is None or ask.get("asking") not in (None, asking(need))):
         return {"ok": False, "said": "Not sent: this was settled elsewhere."}
@@ -3632,6 +3933,20 @@ def keep_note(fac: Dict[str, Any], need: Dict[str, Any]) -> Dict[str, Any]:
             need["title"], need["id"], ", " + need["pr"] if need.get("pr") else ""),
         "done": "keep %s and land it" % need["title"],
         "mark": {"item": need["id"], "key": None}}
+
+
+def older_note(fac: Dict[str, Any], item: Dict[str, Any], what: str) -> Dict[str, Any]:
+    """The note an older question's button sends: `revive` brings it back into NEEDS YOU, `drop` says it is
+    no longer needed. Starship acts on either, as on every other note."""
+    if what == "revive":
+        body = "Bring back: %s. Hold it for me again so it is back in Needs you." % item["title"]
+        done = "bring back %s" % item["title"]
+    else:
+        body = "No longer needed: %s. Close it; I do not need to decide it any more." % item["title"]
+        done = "%s is no longer needed" % item["title"]
+    return {"request_id": "factory.%s.%s.%s.%s" % (fac["id"], what, item["id"], item["asking"]),
+            "body": body + "\n\n(from the Factory pane; item %s)" % item["id"], "done": done,
+            "mark": {"older": item["id"], "what": what}}
 
 
 def talk_note(fac: Dict[str, Any], talk: Dict[str, Any], text: str, spoken: bool, now: int) -> Dict[str, Any]:
@@ -4105,6 +4420,9 @@ class Pane:
             return ident
         if kind == "need":
             return self.view.need(ident)["factory"]
+        if kind == "old":
+            item = self.view.older_item(ident)
+            return item["factory"] if item else None
         return None
 
     def need_at(self) -> Optional[Dict[str, Any]]:
@@ -4141,7 +4459,9 @@ class Pane:
             self.not_sent("%s. Nothing reached Starship; press the key again." % why.rstrip("."))
             return False
         self.say("✓ SENT to Starship: %s" % done, "green")
-        if mark:
+        if mark and mark.get("older"):
+            self.view.older_asked[mark["older"]] = {"at": now_epoch(), "what": mark["what"]}
+        elif mark:
             need = self.view.need(mark["item"])
             if need is not None:
                 self.view.answered[(need["id"], asking(need))] = {"at": now_epoch(), "key": mark.get("key")}
@@ -4351,9 +4671,31 @@ class Pane:
             fid = view.at()[1]
             view.unfolded = None if view.unfolded == fid else fid
             view.follow = True
+        elif key == "enter" and view.at()[0] == "older":
+            # The older questions shelf lists each question, or hides them again.
+            shelf = view.at()[1]
+            view.older_open = None if view.older_open == shelf else shelf
+            view.follow = True
         elif key == "esc" and view.unfolded:
             view.unfolded = None
             view.follow = True
+        elif key == "esc" and view.older_open is not None:
+            if view.at()[0] == "old":
+                view.selected = ("older", view.older_open)
+            view.older_open = None
+            view.follow = True
+        elif view.at()[0] == "old" and lower in ("b", "n"):
+            item = view.older_item(view.at()[1])
+            what = "revive" if lower == "b" else "drop"
+            if item:
+                view.confirm = dict(older_note(view.factory(item["factory"]), item, what),
+                                    item=item["id"], asked=item["asking"], older=True,
+                                    what="bring back" if what == "revive" else "no longer needed",
+                                    title="%s · %s" % ("Bring back" if what == "revive" else "No longer needed",
+                                                       item["title"]),
+                                    prompt=("Ask Starship to bring %s back into Needs you." if what == "revive"
+                                            else "Tell Starship %s is no longer needed.") % item["title"])
+                view.follow = True
         elif key == "enter":
             fid = self.factory_of_stop()
             if fid and not view.opened:

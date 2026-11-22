@@ -20,7 +20,7 @@ It shows the STARSHIP wordmark, three lamps for the crew, the owner's most urgen
 A lamp with nothing to count stays unlit, so the row keeps its shape.
 `decisions for you` and `ready to merge` are the owner's calls, the one count the [Factory pane](factory-pane.md) and the tap page also show; `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns it.
 A worker's question, an ask-user review finding, a worker's pause, and an aged, deferred, or blocked hold are never counted there.
-The counts are the status bar's figures in the status bar's words, and the Factory pane's count line shows the same ones; [status-bar.md](status-bar.md#fleet-words) owns the words, what each figure means, and how the reading is taken.
+The counts are the status bar's figures in the status bar's words, and the Factory pane's sentences count from the same ones; [status-bar.md](status-bar.md#fleet-words) owns the words, what each figure means, and how the reading is taken.
 The strip reads that same cached reading, so it costs the fleet nothing extra.
 The strip redraws every 5 seconds, and within a second of the owner's calls changing.
 A decision answered, parked, released, closed or added changes no worker, so the owner's calls do not wait for the slow worker reading: whenever their change signal moves, they are read again on their own and the strip shows the next call within about two seconds.
@@ -39,7 +39,7 @@ It selects a light or dark hull and text without changing the words or layout: t
 
 ### The most urgent call
 
-After the lamps the strip names the owner's most urgent call: the first of his calls as `fm_owner_calls` lists them, his held decisions before work ready to land.
+After the lamps the strip names the owner's most urgent call: the first of his calls as `fm_owner_calls` lists them, most pressing first: his held decisions, longest waiting first, before work ready to land.
 A decision reads `Decide: <title>` and work ready to land `Merge: <title>`, with the title of its work item, else the task's recorded outcome, else its id.
 The title is made plain text, so a dash, a quote, or an ellipsis becomes its plain form and any other run of characters outside plain text becomes one `?`.
 Clicking the name opens the [Factory pane](factory-pane.md) beside the pane below the strip with its highlight on that call; a Factory pane already showing in the tab moves its highlight there instead.
