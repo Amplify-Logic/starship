@@ -1115,19 +1115,27 @@ def file_path(match: "re.Match[str]") -> str:
     return token
 
 
-def tidy(text: Optional[str], limit: Optional[int] = 170, card: bool = False) -> str:
-    """Prose for the screen: no paths, links or run ids, and with a limit, one or two sentences.
+def card_words(text: Optional[str]) -> str:
+    """Card text, a call's title, reason and suggestion, without file paths or a work item's id or revision mark in brackets.
 
-    Card text, a call's title, reason and suggestion, also drops a path under
-    the home and a work item's id or revision mark in brackets.
+    A web address stays as written, so a screen can still offer its link.
     """
+    parts = re.split(r"(https?://\S+)", text or "")
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", "", parts[index])
+        # A path under the home: its first part holds no dot, so a web address written without its scheme is none.
+        part = re.sub(r"(?<![\w./~@+-])[\w@+-]+(?:/[\w.@+-]+)+/?", file_path, part)
+        parts[index] = re.sub(INTERNAL_NAME, "", part)
+    text = re.sub(r"\(\s*[,;]?\s*\)", "", "".join(parts))
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip(" ,;:")
+
+
+def tidy(text: Optional[str], limit: Optional[int] = 170) -> str:
+    """Prose for the screen: no paths, links or run ids, and with a limit, one or two sentences."""
     text = text or ""
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", "", text)
-    if card:
-        # A path under the home: its first part holds no dot, so a web address written without its scheme is none.
-        text = re.sub(r"(?<![\w./~@+-])[\w@+-]+(?:/[\w.@+-]+)+/?", file_path, text)
-        text = re.sub(INTERNAL_NAME, "", text)
     text = re.sub(r"\b(?:run|commit)\s+[0-9A-Za-z]{7,}\b", "", text)
     text = re.sub(r"\(\s*[,;]?\s*\)", "", text)
     text = re.sub(r"\(\s*[,;]\s*", "(", text)
@@ -1513,7 +1521,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         # The options and recommendation are the ones its tap card shows; with
         # none recorded the question is shown plainly, never as a stand-in word.
         shape = shapes.get(row["id"]) or {}
-        title = tidy(plain_words(shape.get("title")) or plain_words(row.get("title")), None, card=True) or row["id"]
+        title = card_words(plain_words(shape.get("title")) or plain_words(row.get("title"))) or row["id"]
         question = plain_words(shape.get("question")) if shape else plain_words(row.get("hold_reason"))
         labels = [plain_words(o) for o in shape.get("options") or []]
         labels = [label for label in labels if label][:9]
@@ -1535,9 +1543,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         checking = requested is not None and (since_at is None or requested >= since_at
                                               or settled_notes.get(row["id"], -1) >= since_at)
         return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
-                "why": tidy(question, None, card=True), "options": options,
+                "why": tidy(card_words(question), None), "options": options,
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
-                "recommendation": tidy(recommendation, None, card=True) or None,
+                "recommendation": tidy(card_words(recommendation), None) or None,
                 "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url"),
                 "checking": checking,
                 "read": read_sources(home, row["id"], (row.get("hold_reason"), shape.get("question")))}

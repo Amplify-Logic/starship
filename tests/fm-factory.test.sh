@@ -931,6 +931,18 @@ test_an_open_card_reads_whole_and_names_no_path_or_internal_id() {
   assert_equals "$(q '[.needs_you[] | select(.id == "shop-provider") | .options[].label] | join("; ")')" \
     "the current one (r2); the one in data/shop-fees-x2/page.html; wait until after the holidays" \
     "an option's words were changed"
+  # A web address in a title stays, so the web card can still offer its link.
+  reset_case
+  write_registry
+  write_world
+  shapes=$(jq '(.decisions[] | select(.id == "shop-provider")) |= (
+      .title = "Merge https://github.com/a/b/pull/7 before the sale (shop-plans-page-p1), as data/shop-fees-x2/notes.md says?")' \
+    "$HOME_FIX/shapes.json") || fail "could not put an address in the title"
+  printf '%s\n' "$shapes" > "$HOME_FIX/shapes.json"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .title')" \
+    "Merge https://github.com/a/b/pull/7 before the sale, as says?" \
+    "a title lost its web address, or kept a path or an internal id"
   pass "factory card: an open card shows its whole reason and suggestion, and no path or internal id"
 }
 
