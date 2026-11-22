@@ -972,6 +972,13 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   post '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' >/dev/null
   assert_equals "$(sed -n '4p' "$home/act.asks" | jq -c .)" \
     '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' "a project tab's button says it was on a tab"
+  # An older question's Bring back and No longer needed buttons send what
+  # bin/fm-factory.py act takes for them (revive and drop, docs/factory-pane.md).
+  post '{"action":"revive","item":"recipe-units","asking":"2026-10-01"}' >/dev/null
+  post '{"action":"drop","item":"recipe-units","asking":"2026-10-01"}' >/dev/null
+  assert_equals "$(sed -n '5,6p' "$home/act.asks" | jq -c .)" \
+    '{"action":"revive","item":"recipe-units","asking":"2026-10-01"}
+{"action":"drop","item":"recipe-units","asking":"2026-10-01"}' "an older question's two buttons do not reach the factory script"
   printf '{"ok": false, "said": "\\u2717 NOT SENT: the inbox is locked. Nothing reached Starship."}' > "$home/act.answer"
   assert_equals "$(post '{"action":"keep","item":"garden-share"}' | jq -c .)" \
     '{"ok":false,"said":"Not sent: the inbox is locked. Nothing reached Starship."}' "a note that did not go says so"
