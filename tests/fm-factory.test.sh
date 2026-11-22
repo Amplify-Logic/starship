@@ -2194,6 +2194,33 @@ test_a_busy_machine_spaces_rebuilds_out() {
   pass "factory pane: a busy machine spaces rebuilds out ($idle reads idle, $busy busy)"
 }
 
+# On 2026-11-22 two panes left open for days on a laptop whose workers wrote
+# their records every few seconds refreshed whole about every 20 seconds:
+# a three-job fleet started about seven fleet readings and twelve job-state
+# reads a minute, each whole refresh several seconds of processor time. The
+# workers' records keep moving here too, yet two open panes refresh whole only
+# once the record is a minute old, and then once between them.
+test_open_panes_on_a_busy_fleet_refresh_whole_once_a_minute() {
+  local toucher
+  reset_case
+  write_registry
+  write_world
+  toucher="touch '$HOME_FIX/state/shop-search.status' '$HOME_FIX/state/shop-search.busy-state'"
+  export FM_FACTORY_INBOX="$BINDIR/counting-inbox"
+  FM_FACTORY_NOW=$(($(date +%s) - 30)) python3 "$FACTORY" refresh >/dev/null \
+    || fail "the first record could not be built"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' open_panes 2 6 "$toucher" || fail "the panes could not be opened"
+  assert_equals "0" "$(reads_after_mark)" "two panes refreshed a half-minute-old record whole while the workers moved"
+  FM_FACTORY_NOW=$(($(date +%s) - 65)) python3 "$FACTORY" refresh >/dev/null \
+    || fail "the older record could not be built"
+  : > "$HOME_FIX/reads"
+  FM_FACTORY_NOW='' open_panes 2 6 "$toucher" || fail "the panes could not be opened"
+  export FM_FACTORY_INBOX="$BINDIR/inbox"
+  assert_equals "1" "$(reads_after_mark)" "two panes did not share one whole refresh of a minute-old record"
+  pass "factory pane: open panes on a busy fleet refresh whole once a minute, between them"
+}
+
 # A question held since the last whole refresh has its options read once, not
 # again by every rebuild of the owner's calls, and the screen stays the same.
 test_a_question_held_since_the_last_refresh_is_read_once() {
@@ -3831,6 +3858,7 @@ fm_test_run \
   test_open_panes_never_rebuild_side_by_side \
   test_a_whole_refresh_waits_for_a_change_in_what_it_reads \
   test_a_busy_machine_spaces_rebuilds_out \
+  test_open_panes_on_a_busy_fleet_refresh_whole_once_a_minute \
   test_a_question_held_since_the_last_refresh_is_read_once \
   test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved \
   test_talking_never_changes_who_steers \

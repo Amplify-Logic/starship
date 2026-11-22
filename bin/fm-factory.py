@@ -130,6 +130,12 @@ a status, record or backlog file changed since the last one began
 unless the machine is busy (machine_busy). That safety refresh exists because
 a worker's pane activity, a job gone quiet and a change merged elsewhere are
 recorded in no file, so without it the pane would go stale.
+FM_FACTORY_TTL is a minute because a busy fleet writes those files every few
+seconds, so the pane refreshed whole about as often as it allowed: at 20
+seconds two open panes on a three-job fleet started about seven fleet
+readings and twelve job-state reads a minute, and each whole refresh costs
+several seconds of processor time; at a minute it is about two and four, however
+many panes are open. The owner's calls do not wait on it (below).
 A full refresh reads its slow inputs side by side, the held questions' options
 beside the fleet reading since they need only the backlog, and keeps those
 options from the last one while the owner's calls have not moved (kept_shapes).
@@ -178,7 +184,7 @@ Environment:
   FM_TERMINAL_THEME           auto (default), light or dark; see
                               bin/fm_terminal_theme.py for detection
   FM_FACTORY_TTL              seconds a cached record is used before a refresh
-                              is started (default 20)
+                              is started (default 60)
   FM_FACTORY_MAX_AGE          seconds after which a refresh is started even
                               though no file it reads changed, unless the
                               machine is busy (default 300)
@@ -2197,7 +2203,7 @@ def refresh_due(home: str, record: Dict[str, Any]) -> bool:
     a job gone quiet.
     """
     age = snapshot_age(record)
-    if age <= env_int("FM_FACTORY_TTL", 20):
+    if age <= env_int("FM_FACTORY_TTL", 60):
         return False
     if age > env_int("FM_FACTORY_MAX_AGE", 300) and not machine_busy():
         return True
