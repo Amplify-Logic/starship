@@ -11,14 +11,15 @@ Run it again and it changes nothing, so it is safe to run whenever you sit down.
 It links neither over another command by that name, such as the starship.rs shell prompt, already in that folder or on your PATH, since the link would hide that one or be hidden by it; the setup names the one it kept and still succeeds.
 
 **New to Starship:** run `onboard-starship`.
-It sets your desk up one step at a time, says in a sentence what each step does, and waits for Enter before taking it:
+With nothing to press or choose, it brings up the whole desk at once:
 
-1. Herdr with your first mate in one pane, and on a Mac one Terminal window on it; elsewhere it tells you to open another terminal window and type `herdr` to see it. Your first mate then leads its first conversation with you.
-2. The [bridge strip](bridge-strip.md).
-3. The [Factory pane](factory-pane.md).
+1. Herdr with your first mate in one pane, the [bridge strip](bridge-strip.md) across its top and the [Factory pane](factory-pane.md) beside it.
+2. On a Mac, your [web page](web.md), through `bin/fm-web.sh open`; one already running for this home is left as it is, and one that cannot open is named in a note without stopping the rest.
+3. On a Mac, one Terminal window on the desk, opened last so it is in front for Claude Code's first questions; elsewhere it tells you to open another terminal window and type `herdr` to see it.
 4. A starter `config/desk-layout` for that desk, so plain `starship` opens it from then on.
 
-Stop whenever you like and run it again: a step already in place is skipped, and with a layout already there it changes nothing.
+Your first mate then leads its first conversation with you.
+If it stops partway, run it again: what is already there is kept, and with a layout already there it changes nothing.
 
 **Already set up the way you like:** with your desk open, `starship layout --save` reads it from the running Herdr session into `config/desk-layout`, writing the file only once the reading succeeded; then fill in the first mate's launch command, such as `firstmate claude-opus`, which a reading cannot tell.
 
