@@ -28,13 +28,13 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
 
  RIGHT NOW
 
-   Sample Shop   8 queued · 4 in line                                      Starship steers
+   Sample Shop   8 queued · 4 in line
      ● Search that forgives typos                                                   47 min
        ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge
        running the search tests: 41 of 58 passed
        next  Gift wrap at checkout · then 3 more
 
-   Recipe Box   idle since 06:46 · nothing queued                          Starship steers
+   Recipe Box   idle since 06:46 · nothing queued
 
  SINCE YOU LAST LOOKED, 03:46
 
@@ -59,7 +59,7 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs are in the `needs a look` state the status bar counts, which a job's row spells `waiting on Starship`.
   A question shows its why, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
   The open card shows the whole why and the whole suggestion, wrapped to the pane's width and never cut short.
-  In both, a file path reads as what it names, such as `the report` for a report's file or `the photos folder` for a folder, and a work item's id or a revision mark alone in brackets is left out; `Read the report` still opens the file.
+  In a call's title, why and suggestion, a file path is left out, and so is a work item's id or a revision mark such as `(r2)` alone in brackets; any other bracketed words stay, and `Read the report` still opens the file. Options, the feed and the talk keep their words as written.
   Those options come only from the hold's recorded marks or an `Options:` list in its reason, never from a title or a sentence cut into pieces.
   A question with no options recorded shows only its plain words and `Talk it through`.
   Finished work with a pull request shows that PR's In short, See it, You need to and Risk lines from its description above `k  keep it`, the short section every pipeline PR opens with ([PR text](fork-configuration.md#pr-text)), so the merge word can be given here in a minute; a PR opened without those sections, or one that cannot be read, shows none, and each PR is read once every half hour.
@@ -67,7 +67,7 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   A call with something to read shows an `r  Read the report` line; see [Reading the work](#reading-the-work).
   Only the highlighted one opens as a card, every word of its title and each option wrapped to the pane's width, and the highlight starts on the first; every other one stays one line with its factory and how long it has waited, its title shortened on a whole word with an ellipsis, so a long list still leaves room for the floor.
   A call you already answered, or finished work you asked to keep, says so in place of its wait (`answered 14:02, waiting for Starship`) and marks the option you picked, also after a restart, until the call is settled and leaves the list.
-- RIGHT NOW lists each factory with who steers it and its own queue: how many of its jobs have not started, and how many of those are in line.
+- RIGHT NOW lists each factory with its own queue: how many of its jobs have not started, and how many of those are in line; a factory the owner steers also says `you steer`, and one Starship steers says nothing.
   A busy job shows its title, how long it has run, the four steps (planning, building, checking, ready to merge), and what it is doing this minute.
   One that has named no step yet reads `just started` for its first five minutes and `at work` after that.
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.

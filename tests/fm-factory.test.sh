@@ -604,7 +604,7 @@ test_the_plain_screen_is_the_record_as_text() {
   has_line "$out" " ● Sharper cup photos waiting on Starship" "a blocked job"
   has_line "$out" " ● Print shipping labels waiting · tries again 09:30" "a waiting job"
   has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
-  has_line "$out" " Recipe Box idle since 06:00 · nothing queued Starship steers" "an idle factory is one row"
+  has_line "$out" " Recipe Box idle since 06:00 · nothing queued" "an idle factory is one row, and one Starship steers says nothing of it"
   has_line "$out" " 06:00 Recipe Box finished Calmer start screen is finished." "feed row"
   has_line "$out" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "a PR ready row"
   local feed
@@ -684,7 +684,7 @@ test_the_whole_queue_is_counted_in_sight() {
   assert_equals "$(printf '%s\n' "$out" | sed -n 2p)" \
     " 6 queued  ·  2 in line  ·  1 on hold  ·  3 wait on you, 1 of them deferred to a date" \
     "the queue is not the line under the count line"
-  has_line "$out" " Sample Shop 5 queued · 2 in line Starship steers" "a factory at work does not say its own queue"
+  has_line "$out" " Sample Shop 5 queued · 2 in line" "a factory at work does not say its own queue"
   # In a narrow pane the line wraps between counts, never inside one.
   out=$(python3 "$FACTORY" --plain --width 60 --height 30) || fail "--plain failed"
   assert_equals "$(printf '%s\n' "$out" | sed -n 2,3p)" \
@@ -898,7 +898,7 @@ test_an_open_card_reads_whole_and_names_no_path_or_internal_id() {
       | .recommendation = "Stay with the current one until the holidays are over, then move to the cheaper one in January (r2), when a week more before a payout matters least and there is time to tell every customer with a saved card.")' \
     "$HOME_FIX/shapes.json") || fail "could not lengthen the question"
   printf '%s\n' "$shapes" > "$HOME_FIX/shapes.json"
-  want_why="On the shop plans page, agreed 10 Nov 2026. From the report section 3. Saved cards need a provider, and the current one (v2) takes 2.9 percent of every sale and/or a flat fee, while the cheaper one takes 1.4 percent but pays out a week later. Changing provider means every customer with a saved card types it in once more, three weeks before the holiday rush."
+  want_why="On the shop plans page, agreed 10 Nov 2026. From section 3. Saved cards need a provider, and the current one (v2) takes 2.9 percent of every sale and/or a flat fee, while the cheaper one takes 1.4 percent but pays out a week later. Changing provider means every customer with a saved card types it in once more, three weeks before the holiday rush."
   want_tip="Stay with the current one until the holidays are over, then move to the cheaper one in January, when a week more before a payout matters least and there is time to tell every customer with a saved card."
   take_record
   why=$(q '.needs_you[] | select(.id == "shop-provider") | .why')
@@ -911,19 +911,27 @@ test_an_open_card_reads_whole_and_names_no_path_or_internal_id() {
   assert_contains "$out" "to tell every customer with a saved card." "the open card does not show the end of its suggestion"
   assert_equals "$(python3 "$FACTORY" --screen | jq -r '.needs[] | select(.id == "shop-provider") | .why')" "$want_why" \
     "a second screen is not handed the whole reason"
-  # A file anywhere in the home, or outside it, reads the same way, and a folder as a folder.
+  # A path anywhere in the home, or outside it, is left out of the title and
+  # the reason; ordinary bracketed words stay, and an option keeps its words.
   reset_case
   write_registry
   write_world
   shapes=$(jq '(.decisions[] | select(.id == "shop-provider")) |= (
-      .question = "Read /srv/shop/notes/price-list.md and the pictures in ~/shop/photos/ first; data/shop-fees-x2/page.html has the fees."
-      | .recommendation = "")' "$HOME_FIX/shapes.json") || fail "could not name the files"
+      .title = "Which payment provider (x2) for the shop data/shop-fees-x2/"
+      | .question = "The fees in /srv/shop/notes/price-list.md and data/shop-fees-x2/page.html rise (x2) next year (see the second page)."
+      | .options = ["the current one (r2)", "the one in data/shop-fees-x2/page.html", "wait until after the holidays"]
+      | .recommended_option = "" | .recommendation = "")' "$HOME_FIX/shapes.json") || fail "could not name the files"
   printf '%s\n' "$shapes" > "$HOME_FIX/shapes.json"
   take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .title')" \
+    "Which payment provider (x2) for the shop" "a title names a path, or lost its own bracketed words"
   assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .why')" \
-    "Read the price list and the pictures in the photos folder first; the page has the fees." \
-    "a file or a folder does not read as what it is"
-  pass "factory card: an open card shows its whole reason and suggestion, a file as what it is, and no internal id"
+    "The fees in and rise (x2) next year (see the second page)." \
+    "a reason names a path, or lost its own bracketed words"
+  assert_equals "$(q '[.needs_you[] | select(.id == "shop-provider") | .options[].label] | join("; ")')" \
+    "the current one (r2); the one in data/shop-fees-x2/page.html; wait until after the holidays" \
+    "an option's words were changed"
+  pass "factory card: an open card shows its whole reason and suggestion, and no path or internal id"
 }
 
 # Merges are answered on the Factory pane, so finished work shows the short
@@ -2703,9 +2711,9 @@ test_talking_never_changes_who_steers() {
   reset_case
   write_registry
   write_world
-  drive_keys DOWN DOWN DOWN t "Price on the first line" ENTER
+  drive_keys DOWN DOWN DOWN t "Price on the first line (x2), as in data/shop/prices.md" ENTER
   assert_contains "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.sample-shop.talk." "talk note"
-  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "To the Sample Shop crew: Price on the first line" \
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "To the Sample Shop crew: Price on the first line (x2), as in data/shop/prices.md" \
     "talk body"
   assert_absent "$HOME_FIX/state/factory/steer.log" "talking changed who steers"
   drive_keys DOWN DOWN DOWN s
@@ -2714,10 +2722,12 @@ test_talking_never_changes_who_steers() {
     "Starship is told"
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "you" "the record shows who steers"
+  has_line "$(python3 "$FACTORY" --plain --width 92 --height 40)" " Sample Shop 5 queued · 2 in line you steer" \
+    "a factory the owner steers says so on its row"
   assert_equals "$(q '[.feed[] | select(.actor == "you") | .word][0]')" "took the helm" \
     "the change shows in the feed"
   assert_equals "$(q '[.factories[0].talk[] | "\(.who): \(.said)"] | join(" | ")')" \
-    "you: Price on the first line" "the talk keeps its history"
+    "you: Price on the first line (x2), as in data/shop/prices.md" "the talk keeps its history, word for word"
   drive_keys DOWN DOWN DOWN s
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "Starship" "s hands it back"

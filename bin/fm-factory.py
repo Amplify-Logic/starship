@@ -1100,46 +1100,35 @@ def steer_log(home: str) -> List[Tuple[int, str, str]]:
 # Plain words from prose
 # --------------------------------------------------------------------------
 
-# A file's name at the end of a path: its stem, then one or more extensions.
-FILE_NAME = re.compile(r"([\w@+-]+?)((?:\.[A-Za-z][A-Za-z0-9]{0,4})+)$")
 # A work item's own id alone in brackets, such as (shop-plans-page-p1), or a
-# bare revision mark such as (r2): names the fleet files work under, which tell
-# the owner nothing. A version in brackets, (v2), is the writer's own word.
-INTERNAL_NAME = r"\(\s*(?:(?:[a-z0-9]+-){2,}[a-z]{1,2}\d{1,3}|[a-uw-z]\d{1,2})\s*\)"
+# revision mark such as (r2): names the fleet files work under, which tell the
+# owner nothing. Any other bracketed words, (v2) or (x2), are the writer's own.
+INTERNAL_NAME = r"\(\s*(?:(?:[a-z0-9]+-){2,}[a-z]{1,2}\d{1,3}|r\d{1,2})\s*\)"
 
 
-def path_words(match: "re.Match[str]") -> str:
-    """A path in prose as what it names: `the report` for data/x/report.md, `the photos folder` for ~/shop/photos/.
-
-    A path that starts at the root or the home folder and names neither is
-    left out. Any other run of words with slashes between them, such as
-    and/or, is no path and stays as written.
-    """
+def file_path(match: "re.Match[str]") -> str:
+    """A path under the home, such as data/x/report.md or src/photos/, left out; words with a slash, such as and/or, stay."""
     token = match.group(0)
     path = token.rstrip(".")           # a sentence's own full stop is not the path's
-    rooted = path[:1] in ("/", "~")
-    name = path.rstrip("/").rsplit("/", 1)[-1]
-    found = FILE_NAME.match(name)
-    if found:
-        words = re.sub(r"[-_]+", " ", found.group(1)).strip()
-    elif path.endswith("/") and re.fullmatch(r"[\w@+-]+", name):
-        words = re.sub(r"[-_]+", " ", name).strip() + " folder"
-    else:
-        return "" if rooted else token
-    article = "" if re.search(r"\b(?:the|a|an|this|that|its|his|her|their|your|our)\s+$", match.string[:match.start()],
-                              re.I) else "the "
-    return article + words + token[len(path):]
+    if path.endswith("/") or re.search(r"\.[A-Za-z][A-Za-z0-9]{0,4}$", path.rsplit("/", 1)[-1]):
+        return token[len(path):]
+    return token
 
 
-def tidy(text: Optional[str], limit: Optional[int] = 170) -> str:
-    """Prose for the screen: no paths, links, run ids or internal names, and with a limit, one or two sentences."""
+def tidy(text: Optional[str], limit: Optional[int] = 170, card: bool = False) -> str:
+    """Prose for the screen: no paths, links or run ids, and with a limit, one or two sentences.
+
+    Card text, a call's title, reason and suggestion, also drops a path under
+    the home and a work item's id or revision mark in brackets.
+    """
     text = text or ""
     text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", path_words, text)
-    # A path under the home: its first part holds no dot, so a web address written without its scheme is none.
-    text = re.sub(r"(?<![\w./~@+-])[\w@+-]+(?:/[\w.@+-]+)+/?", path_words, text)
+    text = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", "", text)
+    if card:
+        # A path under the home: its first part holds no dot, so a web address written without its scheme is none.
+        text = re.sub(r"(?<![\w./~@+-])[\w@+-]+(?:/[\w.@+-]+)+/?", file_path, text)
+        text = re.sub(INTERNAL_NAME, "", text)
     text = re.sub(r"\b(?:run|commit)\s+[0-9A-Za-z]{7,}\b", "", text)
-    text = re.sub(INTERNAL_NAME, "", text)
     text = re.sub(r"\(\s*[,;]?\s*\)", "", text)
     text = re.sub(r"\(\s*[,;]\s*", "(", text)
     text = re.sub(r"\s+([,.;:])", r"\1", text)
@@ -1524,7 +1513,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         # The options and recommendation are the ones its tap card shows; with
         # none recorded the question is shown plainly, never as a stand-in word.
         shape = shapes.get(row["id"]) or {}
-        title = plain_words(shape.get("title")) or plain_words(row.get("title")) or row["id"]
+        title = tidy(plain_words(shape.get("title")) or plain_words(row.get("title")), None, card=True) or row["id"]
         question = plain_words(shape.get("question")) if shape else plain_words(row.get("hold_reason"))
         labels = [plain_words(o) for o in shape.get("options") or []]
         labels = [label for label in labels if label][:9]
@@ -1546,9 +1535,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         checking = requested is not None and (since_at is None or requested >= since_at
                                               or settled_notes.get(row["id"], -1) >= since_at)
         return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
-                "why": tidy(question, None), "options": options,
+                "why": tidy(question, None, card=True), "options": options,
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
-                "recommendation": tidy(recommendation, None) or None,
+                "recommendation": tidy(recommendation, None, card=True) or None,
                 "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url"),
                 "checking": checking,
                 "read": read_sources(home, row["id"], (row.get("hold_reason"), shape.get("question")))}
@@ -3024,7 +3013,8 @@ class View:
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
         idle = fac["state"] == "idle"
         words = self.idle_words(fac) if idle else self.queue_brief(fac)
-        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac), band=band)]
+        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac) if fac["steered_by"] == "you" else [],
+                    band=band)]
         for job in self.overview_jobs(fac):
             rows += self.job_rows(width, job, full=False)
         rows += self.routine_rows(width, fac)
