@@ -142,6 +142,7 @@ The best way in is as an app of its own, over the whole screen, with no address 
 FM_HOME=/path/to/home bin/fm-web.sh open
 ```
 
+`onboard-starship` runs this once for you as part of the first start ([desk.md](desk.md)).
 `open` starts the page if it is not running and opens it as its own window, full screen where the browser allows it, through Chrome's app mode (or Chromium or Edge), else in the default browser.
 It signs that window in with a link that works once, within two minutes, so the home's token never sits on a command line; `open --print` prints such a link instead, for the first mate to hand over.
 Once in, the browser offers to keep it as an installed app: in Chrome, Install Starship from the menu; in Safari, File, then Add to Dock.

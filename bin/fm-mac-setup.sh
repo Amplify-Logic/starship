@@ -275,7 +275,11 @@ one still has the old settings. In the new window:
      stay signed in.
 
   3. onboard-starship
-     Starts Herdr with your first mate in it. Say hello; it takes it from there.
+     Opens everything at once: your first mate in Herdr with the bridge
+     strip and the Factory pane, your Starship web page, and a Terminal
+     window in front. Answer the two questions Claude Code asks there
+     the first time (ONBOARDING.md step 3), then say hello; it takes it
+     from there.
 
 To keep the checklist above open while you work, ticking itself off, open
 one more Terminal window and run:

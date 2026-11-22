@@ -675,7 +675,7 @@ Without the file, or with a line of any other shape, the strip shows no night sh
 
 ## Desk layout (config/desk-layout)
 
-The optional local `config/desk-layout` is what the [desk](desk.md) command `starship` opens; without it, `starship` opens nothing and points at `onboard-starship`, which ends by writing a starter one.
+The optional local `config/desk-layout` is what the [desk](desk.md) command `starship` opens; without it, `starship` opens nothing and points at `onboard-starship`, which opens a new desk at once and ends by writing a starter one.
 `starship layout` prints the running session in this format as a starting file, and `starship layout --save` writes it to `config/desk-layout` only once the reading succeeded.
 One setting per line as `key = value`; blank lines and lines starting with `#` are ignored, and an unknown key or a bad value stops the command with its line number.
 

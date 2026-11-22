@@ -9,6 +9,8 @@ A release's notes are exactly its own section here, and a home on the [release c
 
 ## Unreleased
 
+- **`onboard-starship` now opens a new desk all at once, web page included.** On a Mac it starts your first mate in Herdr with the bridge strip and the Factory pane, opens your Starship web page, and brings a Terminal window to the front, with no step-by-step questions; it no longer waits for Enter before each part ([desk](docs/desk.md)). Off a Mac it opens the web page too, or prints its address when there is no browser.
+  Nothing changes for a home already set up: with a `config/desk-layout` it still changes nothing, and `~/starship/bin/fm-web.sh open` opens the web page whenever you want it.
 - **A weekly plain "what changed" page is available.** Nothing changes until you opt in: put `enabled = true` in `~/starship/config/weekly-changes` and run `bin/fm-weekly-changes-schedule.sh install`, and every Monday morning a local page lists each project's changes from the week by their short summary, with the changelog highlights and a link to each change ([configuration](docs/fork-configuration.md#weekly-changes-page-configweekly-changes)).
   The newest page is `data/weekly-changes/latest.html`, and the web page's This week button opens it.
 - **Merges are now answered on the Factory pane, and the phone tap page no longer carries them.** A PR waiting for your merge word shows its In short, See it, You need to and Risk lines right beside the keep choice, on the pane and on the web mirror; the tap page lists ready merges as not on it, and a merge tap from an older page changes nothing.

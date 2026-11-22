@@ -186,6 +186,7 @@ Herdr then shows a shell, with a sidebar on the left where each worker will appe
 
 Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, in Herdr's shell, and go on through your first project's report in step 5.
 Skip step 2 of that guide and the first part of step 3 (the `git clone` and `bin/fm-herdr-setup.sh` lines): the setup script did those.
+To open your Starship web page, a plain-words view of the same desk ([docs/web.md](docs/web.md)), run `~/starship/bin/fm-web.sh open` in Ubuntu; with no browser to open it in, `~/starship/bin/fm-web.sh open --print` prints its address instead.
 
 When the first mate's startup checks run, it also tells you if anything sits under `/mnt/`, if Ubuntu has no network, or if `localhost` cannot reach Windows.
 

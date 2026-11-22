@@ -173,6 +173,9 @@ tmux new -s firstmate
 Continue with [ONBOARDING.md step 3, get Starship and start your first mate](ONBOARDING.md#3-get-starship-and-start-your-first-mate) at **Start your first mate**, inside this session, and go on through your first project's report in step 5.
 Skip step 2 of that guide and the first part of step 3 (the `git clone` and `bin/fm-herdr-setup.sh` lines, and opening Herdr): the setup script cloned Starship, and a server uses tmux.
 Workers open as tmux windows; `Ctrl-b` then `w` lists them.
+Your Starship web page, the plain-language view ([docs/web.md](docs/web.md)), is meant for a desktop.
+On a server with no screen it runs on the server itself: `~/starship/bin/fm-web.sh open --print` starts it and prints its address, which opens only on the server.
+The sign-in link in that address expires after two minutes.
 
 To leave everything running, press `Ctrl-b` then `d`.
 Next time: `ssh <you>@<server>` and `tmux attach -t firstmate`.

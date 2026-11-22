@@ -175,6 +175,25 @@ with open(os.path.join(records, fid), "w") as record:
     record.write("%s\n%s\n" % (tab, os.environ.get("HERDR_SOCKET_PATH", "")))
 PY
 
+# The fake web page launcher stands in for bin/fm-web.sh: status answers from
+# a marker file, and open logs the call and starts it; with no browser it
+# starts it but cannot open it, as the real one, and open --print prints a link.
+cat > "$FAKE/tools/fm-web.sh" <<'SH'
+#!/usr/bin/env bash
+echo "web $* home=${FM_HOME:-}" >> "$FAKE_HERDR_CALLS"
+case "$1" in
+  status) [ -e "$FAKE_WEB_RUNNING" ] ;;
+  open)
+    [ -z "${FAKE_WEB_FAILS:-}" ] || { echo "fm-web: port in use" >&2; exit 1; }
+    : > "$FAKE_WEB_RUNNING"
+    if [ "${2:-}" = --print ]; then echo "http://127.0.0.1:8765/?code=fake"
+    elif [ -n "${FAKE_WEB_NO_BROWSER:-}" ]; then echo "fm-web: no browser found; open it yourself" >&2; exit 1
+    else echo "opened Starship as its own window"; fi ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x "$FAKE/tools/fm-web.sh"
+
 # --- fake process list and Terminal -----------------------------------------
 cat > "$FAKE/bin/osascript" <<'PY'
 #!/usr/bin/env python3
@@ -220,11 +239,11 @@ new_case() {  # <running:true|false>
   C="$TMP_ROOT/case$CASE"
   mkdir -p "$C/home/config" "$C/home/state"
   export FM_HOME="$C/home" FAKE_HERDR_STATE="$C/state.json" FAKE_HERDR_CALLS="$C/calls" \
-    FAKE_PS="$C/ps" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" FAKE_FACTORY_JOBS="$C/jobs" \
+    FAKE_PS="$C/ps" FAKE_WEB_RUNNING="$C/web-running" FAKE_TERMINAL_TABS="$C/terminal" FAKE_FACTORY_NAMES="$C/factories" FAKE_FACTORY_JOBS="$C/jobs" \
     HERDR_BIN_PATH="$FAKE/bin/herdr" HERDR_CONFIG_PATH="$C/herdr-config.toml" \
     FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" FM_DESK_WAIT=3 \
     FM_DESK_OPEN="$FAKE/bin/open" FM_DESK_MACOS=26.0
-  unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION HERDR_ENV
+  unset FAKE_WEB_FAILS FAKE_WEB_NO_BROWSER HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION HERDR_ENV
   printf '{"session": "default", "running": %s, "workspaces": [], "n": 0}\n' "$1" > "$FAKE_HERDR_STATE"
   : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"; : > "$FAKE_FACTORY_JOBS"
   printf 'sample-shop=Sample Shop\nrecipe-box=Recipe Box\ngarden-journal=Garden Journal\n' > "$FAKE_FACTORY_NAMES"
@@ -912,58 +931,82 @@ PY
   pass "desk: a missing plugin is installed before its pane shows"
 }
 
-# onboard-starship builds the same desk a step at a time, each only after
-# Enter, and ends with a starter layout that plain `starship` then opens as is.
-test_onboard_builds_the_desk_one_step_at_a_time() {
+# onboard-starship is a new person's first start: with no key pressed it
+# brings up the whole desk (Herdr, the first mate, the bridge strip and the
+# Factory pane), the plain-language web page, and on a Mac one Terminal
+# window on the desk, opened last so it is in front for Claude Code's first
+# questions; it ends with a starter layout that plain `starship` then opens as is.
+test_onboard_brings_up_the_whole_desk_and_the_web_page_at_once() {
   new_case false
   local out path="$FM_HOME/config/desk-layout"
-  out=$(printf '\n\n\n\n' | desk onboard) || fail "onboard failed: $out"
-  assert_contains "$out" "Step 1 of 4, Herdr and your first mate." "step 1 was not explained"
+  out=$(desk onboard < /dev/null) || fail "onboard failed: $out"
   assert_contains "$out" "  done: start Herdr
   done: create the workspace starship
-  done: start the first mate (cd " "step 1 did not start Herdr with the first mate"
-  assert_contains "$out" "  done: open view 1 in Terminal" "step 1 did not open a window on a Mac"
-  assert_not_contains "$out" "type \`herdr\`" "on a Mac step 1 asked for another window although it opened one"
-  assert_contains "$out" "Step 2 of 4, The bridge strip." "step 2 was not explained"
-  assert_contains "$out" "  done: show the Starship bridge" "step 2 did not show the bridge"
-  assert_contains "$out" "  done: show the Factory pane" "step 3 did not show the Factory pane"
-  assert_contains "$out" "  done: wrote $path" "step 4 did not write the layout"
+  done: start the first mate (cd " "onboard did not start Herdr with the first mate"
+  assert_contains "$out" "  done: show the Starship bridge" "onboard did not show the bridge strip"
+  assert_contains "$out" "  done: show the Factory pane" "onboard did not show the Factory pane"
+  assert_contains "$out" "  done: open your Starship web page" "onboard did not open the web page"
+  assert_contains "$out" "  done: open view 1 in Terminal" "onboard did not open a window on a Mac"
+  assert_not_contains "$out" "Press Enter" "onboard waited for a key"
+  assert_grep "web open home=$FM_HOME" "$FAKE_HERDR_CALLS" "the web page was not opened for this home"
+  local web view
+  web=$(grep -n "^web open" "$FAKE_HERDR_CALLS" | cut -d: -f1)
+  view=$(grep -n "^terminal open" "$FAKE_HERDR_CALLS" | cut -d: -f1)
+  [ -n "$web" ] && [ -n "$view" ] && [ "$web" -lt "$view" ] || fail "the Terminal window did not open after the web page"
   assert_contains "$(cat "$path")" "workspace = starship
 firstmate = cd $ROOT && FM_HOME=$FM_HOME bin/fm-primary.sh opus
 view =" "the starter layout is not the desk onboarding built"
   : > "$FAKE_HERDR_CALLS"
   out=$(desk open) || fail "open on the starter layout failed: $out"
   assert_contains "$out" "nothing changed" "the starter layout does not describe the desk onboarding built"
-  pass "desk: onboard builds the desk one step at a time and leaves a layout starship opens unchanged"
+  pass "desk: onboard brings up the whole desk and the web page at once, and leaves a layout starship opens unchanged"
 }
 
-test_onboard_picks_up_where_the_person_stopped() {
+# A running web page is never opened a second time, a web page that cannot
+# start is a note rather than a failure, and an existing layout means the
+# home is set up, so onboard changes nothing at all.
+test_onboard_never_duplicates_what_is_already_there() {
   new_case false
   local out
-  FM_DESK_MACOS="" && export FM_DESK_MACOS
-  out=$(printf '\n' | desk onboard) || fail "the first onboard run failed: $out"
-  assert_contains "$out" "  done: start the first mate" "step 1 was not taken"
-  assert_not_contains "$out" "show the Starship bridge" "a step was taken without Enter"
-  assert_contains "$out" "Stopped. Run \`onboard-starship\` again to pick up here." "stopping did not say how to go on"
-  assert_not_contains "$out" "open view" "off macOS onboarding opened a Terminal window"
-  assert_contains "$out" "Open another terminal window and type \`herdr\` to see your first mate." "off macOS step 1 did not say how to see the first mate"
-  [ ! -e "$FM_HOME/config/desk-layout" ] || fail "a stopped onboarding wrote a layout"
+  : > "$FAKE_WEB_RUNNING"
+  out=$(desk onboard < /dev/null) || fail "onboard failed: $out"
+  assert_contains "$out" "your Starship web page is already running; it was left as it is" "a running web page was not named"
+  assert_no_grep "^web open" "$FAKE_HERDR_CALLS" "a running web page was opened again"
+  rm -f "$FM_HOME/config/desk-layout" "$FAKE_WEB_RUNNING"
   : > "$FAKE_HERDR_CALLS"
-  out=$(printf '\n' | desk onboard) || fail "the second onboard run failed: $out"
-  assert_contains "$out" "Step 1 of 4, Herdr and your first mate: already done." "a finished step was not skipped"
-  assert_contains "$out" "  done: show the Starship bridge" "the re-run did not go on with step 2"
-  assert_no_regex ' (workspace create|pane run) ' "$FAKE_HERDR_CALLS" "the re-run redid step 1"
-  out=$(printf '\n\n' | desk onboard) || fail "the third onboard run failed: $out"
-  assert_contains "$out" "The bridge strip: already done." "the bridge step was not skipped"
-  assert_not_contains "$(cat "$FM_HOME/config/desk-layout")" "view =" "off macOS the starter layout names a window"
+  out=$(FAKE_WEB_FAILS=1 desk onboard < /dev/null) || fail "a web page that cannot start failed onboarding: $out"
+  assert_contains "$out" "note: your Starship web page did not open" "a web page that cannot start was not named"
+  assert_no_regex ' (workspace create|pane run) ' "$FAKE_HERDR_CALLS" "a second onboard redid the desk"
+  [ -e "$FM_HOME/config/desk-layout" ] || fail "onboard did not write the layout although the desk is up"
   printf 'workspace = mine\n' > "$FM_HOME/config/desk-layout"
   : > "$FAKE_HERDR_CALLS"
   out=$(desk onboard < /dev/null) || fail "onboard with a layout failed: $out"
   assert_contains "$out" "Your desk is already set up" "onboard did not see the existing layout"
   assert_equals "workspace = mine" "$(cat "$FM_HOME/config/desk-layout")" "onboard changed an existing layout"
-  [ ! -s "$FAKE_HERDR_CALLS" ] || fail "onboard reached Herdr although the desk is set up"
-  unset FM_DESK_MACOS
-  pass "desk: onboard skips finished steps, stops cleanly, and never touches an existing layout"
+  [ ! -s "$FAKE_HERDR_CALLS" ] || fail "onboard reached Herdr or the web page although the desk is set up"
+  pass "desk: onboard never opens a running web page again, survives one that cannot start, and leaves a set-up home alone"
+}
+
+# Off a Mac there is no Terminal window to open: the desk still comes up,
+# the web page opens in a browser when there is one, its address is printed
+# when there is none, and onboarding says how to see the first mate.
+test_onboard_off_macos_brings_up_the_desk_and_the_web_page() {
+  new_case false
+  local out
+  out=$(FM_DESK_MACOS="" desk onboard < /dev/null) || fail "onboard off macOS failed: $out"
+  assert_contains "$out" "  done: start the first mate" "off macOS onboard did not start the first mate"
+  assert_contains "$out" "  done: show the Starship bridge" "off macOS onboard did not show the bridge strip"
+  assert_not_contains "$out" "open view" "off macOS onboarding opened a Terminal window"
+  assert_contains "$out" "  done: open your Starship web page" "off macOS onboarding did not open the web page"
+  assert_grep "web open home=$FM_HOME" "$FAKE_HERDR_CALLS" "off macOS the web page was not opened for this home"
+  assert_contains "$out" "Open another terminal window and type \`herdr\` to see your first mate." "off macOS onboard did not say how to see the first mate"
+  assert_not_contains "$(cat "$FM_HOME/config/desk-layout")" "view =" "off macOS the starter layout names a window"
+  rm -f "$FM_HOME/config/desk-layout" "$FAKE_WEB_RUNNING"
+  out=$(FM_DESK_MACOS="" FAKE_WEB_NO_BROWSER=1 desk onboard < /dev/null) || fail "onboard with no browser failed: $out"
+  assert_contains "$out" "  note: no browser opened here; your Starship web page runs on this machine at http://127.0.0.1:8765/?code=fake, an address that opens only on this machine, and its sign-in link expires after two minutes" "with no browser onboarding did not print the web page's address"
+  assert_not_contains "$out" "done: open your Starship web page" "with no browser onboarding claimed the web page opened"
+  [ -e "$FM_HOME/config/desk-layout" ] || fail "with no browser onboarding did not finish"
+  pass "desk: off macOS onboard brings up the desk, opens the web page or prints its address"
 }
 
 test_onboard_starship_runs_onboarding_by_its_name() {
@@ -972,7 +1015,8 @@ test_onboard_starship_runs_onboarding_by_its_name() {
   out=$(PATH="/usr/bin:/bin" FM_DESK_COMMAND_DIR="$dir" python3 "$DESK" install-command) || fail "install-command failed: $out"
   [ -L "$dir/onboard-starship" ] || fail "install-command did not link onboard-starship"
   out=$("$dir/onboard-starship" < /dev/null) || fail "onboard-starship failed: $out"
-  assert_contains "$out" "Step 1 of 4, Herdr and your first mate." "onboard-starship did not start onboarding"
+  assert_contains "$out" "  done: start the first mate" "onboard-starship did not start onboarding"
+  rm -f "$FM_HOME/config/desk-layout"
   out=$(desk open 2>&1)
   assert_contains "$out" "run \`onboard-starship\` to set your desk up" "a missing layout does not point at onboard-starship"
   pass "desk: onboard-starship runs onboarding, and a missing layout points at it"
@@ -980,8 +1024,9 @@ test_onboard_starship_runs_onboarding_by_its_name() {
 
 fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
-  test_onboard_builds_the_desk_one_step_at_a_time \
-  test_onboard_picks_up_where_the_person_stopped \
+  test_onboard_brings_up_the_whole_desk_and_the_web_page_at_once \
+  test_onboard_never_duplicates_what_is_already_there \
+  test_onboard_off_macos_brings_up_the_desk_and_the_web_page \
   test_onboard_starship_runs_onboarding_by_its_name \
   test_views_open_in_cream_while_the_workspace_is_light \
   test_a_second_run_changes_nothing \

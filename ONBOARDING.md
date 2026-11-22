@@ -76,7 +76,20 @@ To keep it open while you work, open one more Terminal window and run:
 
 Your first mate and its workers run inside [Herdr](https://herdr.dev), a terminal view made for AI agents: every worker shows up in its sidebar, with whether it is working or waiting for you.
 
-On a Mac, step 2 already got Starship and set up Herdr; start at **Prefer a guided start?** below.
+**On a Mac, one command opens everything.** Step 2 already got Starship and set up Herdr.
+Open a **new** Terminal window and type:
+
+```sh
+onboard-starship
+```
+
+With nothing else to type or choose, it starts Herdr with your first mate, the bridge strip across the top and the Factory pane beside it, then opens your Starship web page, a plain-words view of the same desk ([docs/web.md](docs/web.md)), as its own window.
+Last, it opens a Terminal window on the desk and brings it to the front, because Claude Code asks two questions there the first time (below).
+The web page is one swipe or Command-Tab away; it shows your first mate's chat once those questions are answered.
+The first time, Herdr shows a short welcome in that window; press Enter, then Esc to close the settings it opens.
+
+You should see: a Terminal window with your first mate's pane, the bridge strip across its top and the Factory pane beside it, and a Starship window in your browser.
+
 Coming from [ONBOARDING-windows.md](ONBOARDING-windows.md)? Its setup script already did the first part, and its step 8 opened Herdr; start at **Start your first mate**, in Herdr's shell.
 Coming from [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md)? A server runs in tmux instead; start at **Start your first mate**, inside your tmux session.
 
@@ -89,23 +102,9 @@ bin/fm-herdr-setup.sh
 ```
 
 It installs Herdr, adds Herdr's Claude Code integration so Herdr can show what each Claude is doing, sets this Starship to run in Herdr, and adds the `starship` and `onboard-starship` commands ([docs/desk.md](docs/desk.md)).
+You should see: `Herdr is ready.`; then run `onboard-starship` in a new Terminal window, as above.
 
-You should see: `Herdr is ready.`
-
-**Prefer a guided start?** Open a **new** Terminal window and type `onboard-starship` instead of the two steps below.
-It starts Herdr with your first mate and opens a Terminal window on it for you (off a Mac, it tells you to open another terminal window and type `herdr`), then adds the rest of your desk one step at a time, waiting for you before each; what follows about Claude Code's first launch still applies.
-
-**Open Herdr:** open a **new** Terminal window, so `herdr` is found, and type:
-
-```sh
-herdr
-```
-
-The first time, Herdr shows a short welcome; press Enter, and it opens its settings on the agent integrations, where `claude` is already ticked.
-Press Esc to close them; you can open them again later with `Ctrl-b`, then `s`.
-Herdr then shows a shell, with a sidebar on the left.
-
-**Start your first mate:** in that shell, type:
+**Start your first mate** (Windows and Linux servers; on a Mac, `onboard-starship` already did this): in Herdr's shell, or your tmux session, type:
 
 ```sh
 cd ~/starship && bin/fm-primary.sh opus
@@ -113,7 +112,7 @@ cd ~/starship && bin/fm-primary.sh opus
 
 That launches Claude Code on Opus, with its permission prompts turned off so the first mate can run its own scripts; [its house rules](docs/handbook.md#how-it-works-in-plain-words) are what keep it safe.
 
-The first time, Claude Code asks two questions, and both start with **No, exit** selected, so pressing Enter alone quits.
+**Claude Code's first two questions.** Both start with **No, exit** selected, so pressing Enter alone quits.
 For each, press the down arrow once, then Enter:
 
 1. "Is this a project you created or one you trust?": choose **Yes, I trust this folder**.
@@ -138,9 +137,9 @@ The words, from lightest to deepest, are `low`, `medium`, `high`, `xhigh` and `m
 Each worker your first mate starts appears in Herdr's sidebar as its own space while it works, and goes away when it is cleaned up.
 Click one to watch it, or press `Ctrl-b`, then `w`, to pick one; come back to your first mate the same way.
 
-**Every day after this, on a Mac:** open Terminal and type `herdr`.
-Herdr keeps running when you close the window (or press `Ctrl-b`, then `q`, to leave it), so this brings back your first mate as you left it.
-After the Mac restarts, Herdr reopens your spaces; if your first mate's space shows only a shell, run `cd ~/starship && bin/fm-primary.sh opus` there again, and it picks up its work from where it stopped.
+**Every day after this, on a Mac:** open Terminal and type `starship`.
+It opens your desk again as you left it, and after the Mac restarts it starts your first mate, the bridge strip and the Factory pane again too; it changes nothing that is already open.
+To open the web page again, run `~/starship/bin/fm-web.sh open`.
 On Windows, follow the daily steps in [ONBOARDING-windows.md step 9](ONBOARDING-windows.md#9-finish-with-the-shared-steps) instead, because closing Ubuntu stops Herdr there.
 
 **Prefer tmux?** Herdr is the default, and tmux still works: run `echo tmux > ~/starship/config/backend`, start the first mate inside `tmux new -s firstmate`, and workers open as tmux windows instead ([docs/tmux-backend.md](docs/tmux-backend.md)).

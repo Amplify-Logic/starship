@@ -17,16 +17,18 @@ Usage:
                                 once the reading succeeded. Off macOS it lists
                                 no Terminal views, since there is no Terminal
                                 to ask.
-  fm-desk.py onboard            a new person's guided first start, also run as
-                                `onboard-starship`: one step at a time, each
-                                explained and taken only after Enter, it starts
-                                Herdr with the first mate in one pane (and, on
-                                a Mac, one Terminal window on it), adds the
-                                bridge strip, then the Factory pane, and ends
-                                by writing a starter config/desk-layout. A step
-                                already in place is skipped, so a re-run picks
-                                up where the person stopped; with a layout
-                                already there it changes nothing.
+  fm-desk.py onboard            a new person's first start, also run as
+                                `onboard-starship`: with no key to press, it
+                                starts Herdr with the first mate, the bridge
+                                strip and the Factory pane, then opens the web
+                                page (bin/fm-web.sh open, unless it is already
+                                running; with no browser it prints the address)
+                                and, on a Mac, last one Terminal window on the
+                                desk, so that window is in front; it ends by
+                                writing a starter config/desk-layout. A web
+                                page that cannot open is a note, not a
+                                failure. With a layout already there it
+                                changes nothing.
   fm-desk.py install-command    put `starship` and `onboard-starship` on PATH:
                                 each in ~/.local/bin becomes a link to this
                                 script, unless another command by that name is
@@ -87,8 +89,9 @@ Environment:
   HERDR_BIN_PATH          the Herdr binary (default: herdr on PATH)
   HERDR_CONFIG_PATH       Herdr's config file (default ~/.config/herdr/config.toml)
 Test seams:
-  FM_DESK_BIN             directory holding fm-bridge-strip.sh, fm-factory-pane.sh
-                          and fm-factory.py (default: this script's directory)
+  FM_DESK_BIN             directory holding fm-bridge-strip.sh, fm-factory-pane.sh,
+                          fm-factory.py and fm-web.sh (default: this script's
+                          directory)
   FM_DESK_PS              process lister printing `pid tty command` lines
                           (default: ps -axo pid=,tty=,command=)
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
@@ -1243,46 +1246,37 @@ def starter_text(layout: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Each onboarding step: its title, what it does in a sentence or two, the desk
-# steps it takes (None for writing the layout file), and what to do after it.
-ONBOARD_STEPS = [
-    ("Herdr and your first mate",
-     "Herdr is the window your first mate and its workers live in. "
-     "This starts it with your first mate in one pane, and on a Mac opens a window on it.",
-     {"start", "workspace", "firstmate", "view"},
-     "The first time, Herdr shows a short welcome; press Enter through it. "
-     "Your first mate then leads a short first conversation with you; have it, then come back here."),
-    ("The bridge strip",
-     "A slim strip across the top of your first mate's pane, showing at a glance what is busy and what needs you.",
-     {"plugin:bridge", "bridge"}, ""),
-    ("The Factory pane",
-     "A pane beside your first mate showing each part of your work and its workers at a glance; `enter` on one opens its own tab.",
-     {"plugin:factory", "factory"}, ""),
-    ("Save your desk",
-     "This writes config/desk-layout, the list of what your desk holds, "
-     "so from now on one command, `%s`, opens all of it." % ME,
-     None, ""),
-]
-
-
-def missing(layout: Dict[str, Any], home: str, kinds: set) -> List[Dict[str, Any]]:
-    """The desk steps of <kinds> still missing, read without acting."""
-    found = survey(Herdr(), layout, home)
-    steps = plan(layout, found, read_sidebar())[0]
-    return [item for item in steps if step_kind(item) in kinds]
+# Every desk step onboarding takes before the web page opens; the Terminal
+# window comes after it, so that window, where Claude Code asks its first
+# questions, ends up in front.
+ONBOARD_DESK_KINDS = {"sidebar", "start", "workspace", "firstmate", "plugin:bridge", "bridge",
+                      "bridge-revive", "plugin:factory", "factory", "factory-revive"}
 
 
 def step_kind(item: Dict[str, Any]) -> str:
     return "plugin:%s" % item["plugin"] if item["kind"] == "plugin" else item["kind"]
 
 
-def wait_for_person(prompt: str) -> bool:
-    """Wait for Enter; False when the person stops (Ctrl-C, Ctrl-D, or nothing left to read)."""
-    try:
-        input(prompt)
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return True
+def open_web_page(home: str) -> None:
+    """Open this home's plain-language web page (bin/fm-web.sh), unless it is already running."""
+    script = os.path.join(bin_dir(), "fm-web.sh")
+    env = dict(os.environ, FM_HOME=home)
+    if subprocess.run(["bash", script, "status"], env=env, capture_output=True).returncode == 0:
+        say("  note: your Starship web page is already running; it was left as it is")
+        return
+    out = subprocess.run(["bash", script, "open"], env=env, capture_output=True, text=True)
+    if out.returncode != 0:
+        link = subprocess.run(["bash", script, "open", "--print"], env=env, capture_output=True, text=True)
+        if link.returncode == 0 and link.stdout.strip():
+            say("  note: no browser opened here; your Starship web page runs on this machine at %s, "
+                "an address that opens only on this machine, and its sign-in link expires after two minutes"
+                % link.stdout.strip().splitlines()[-1])
+            return
+        why = (out.stderr.strip() or "no reason given").splitlines()[-1]
+        say("  note: your Starship web page did not open (%s); `%s open` opens it later"
+            % (why, os.path.join(ROOT, "bin", "fm-web.sh")))
+        return
+    say("  done: open your Starship web page")
 
 
 def cmd_onboard() -> int:
@@ -1292,32 +1286,25 @@ def cmd_onboard() -> int:
         say("Your desk is already set up (%s); run `%s` to open it." % (path, ME))
         return 0
     layout = starter_layout(home)
-    total = len(ONBOARD_STEPS)
-    say("Welcome to Starship. This sets your desk up one step at a time; stop whenever you like "
-        "and run `%s` again to pick up where you left off." % ONBOARD)
-    for number, (title, what, kinds, after) in enumerate(ONBOARD_STEPS, 1):
-        if kinds is not None and not missing(layout, home, kinds):
-            say("\nStep %d of %d, %s: already done." % (number, total, title))
-            continue
-        say("\nStep %d of %d, %s.\n  %s" % (number, total, title, what))
-        if not wait_for_person("Press Enter to do it, or Ctrl-C to stop here. "):
-            say("\nStopped. Run `%s` again to pick up here." % ONBOARD)
-            return 0
-        if kinds is None:
-            write_layout(path, starter_text(layout))
-            say("  done: wrote %s" % path)
-        else:
-            for note in fill(layout, home, kinds)[1]:
-                say("  note: %s" % note)
-            if "view" in kinds and not layout["views"]:
-                say("  Open another terminal window and type `herdr` to see your first mate.")
-        if after:
-            say("  %s" % after)
+    say("Welcome to Starship. This opens your whole desk: Herdr with your first mate, the bridge strip "
+        "across the top and the Factory pane beside it, then your Starship web page%s." % (
+            " and a Terminal window on the desk" if macos_major() > 0 else ""))
+    notes = fill(layout, home, ONBOARD_DESK_KINDS)[1]
+    open_web_page(home)
+    notes += fill(layout, home)[1]
+    for note in dict.fromkeys(notes):
+        say("  note: %s" % note)
+    write_layout(path, starter_text(layout))
+    say("  done: wrote %s" % path)
+    if not layout["views"]:
+        say("Open another terminal window and type `herdr` to see your first mate.")
+    say("The first time, Herdr shows a short welcome; press Enter through it. "
+        "Your first mate then leads a short first conversation with you.")
     command = ME
     found = shutil.which(ME)
     if not found or os.path.realpath(found) != SCRIPT:
         command = shlex.quote(os.path.join(ROOT, "bin", "fm-desk.py"))
-    say("\nYour desk is set up. From now on, run `%s` whenever you sit down; it opens all of it again." % command)
+    say("From now on, run `%s` whenever you sit down; it opens your desk again." % command)
     return 0
 
 
