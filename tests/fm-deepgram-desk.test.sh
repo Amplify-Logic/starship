@@ -2415,7 +2415,7 @@ test_desk_voice_send_keeps_the_stash_when_paste_outlives_proof() {
 }
 
 test_desk_voice_send_never_submits_a_draft_left_stashed() {
-  local home out backend
+  local home out backend path
   for backend in herdr tmux; do
     home=$(desk_send_fixture "send-after-stash-$backend" "$backend") \
       || { desk_send_skip "send-after-stash-$backend"; return 0; }
@@ -2700,6 +2700,81 @@ test_desk_voice_dictation_front_check_on_tmux() {
 
 # The Windows floater cannot name a terminal device, so it asks whether the
 # chat's tmux client has its terminal's focus (docs/desk-floater-windows.md).
+# --- desk-voice send --front: the "Look here" line ---------------------------
+
+test_desk_voice_send_adds_the_front_line_after_the_words() {
+  local home out shot
+  home=$(desk_send_fixture front-line) || { desk_send_skip front-line; return 0; }
+  shot="$home/one.png"
+  printf PNG > "$shot"
+  out=$(desk_send "$home" -- "What does this error mean") || fail "send without --front failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "pane send-text w7:p3 What does this error mean --session" \
+    "without --front the words go alone"
+  assert_no_grep "Front:" "$home/fixture/herdr.log" "without --front no Front line may be typed"
+  : > "$home/fixture/herdr.log"
+  out=$(desk_send "$home" --front $'Xcode|com.apple.dt.Xcode|Build log\nline two' --image "$shot" \
+    -- "What does this error mean") || fail "send with --front failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "a message with a Front line is typed"
+  assert_contains "$(herdr_calls "$home" pane send-text)" \
+    "pane send-text w7:p3 What does this error mean Front: Xcode (com.apple.dt.Xcode) - \"Build log line two\" Screenshots: $shot --session" \
+    "the Front line follows the words, before the screenshots, as one plain line"
+  : > "$home/fixture/herdr.log"
+  out=$(desk_send "$home" --front "Notes" -- "Read this back") || fail "send with a name alone failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "pane send-text w7:p3 Read this back Front: Notes --session" \
+    "an unreadable window title leaves the app name alone"
+  : > "$home/fixture/herdr.log"
+  out=$(desk_send "$home" --front "Notes|com.apple.Notes|shopping list" --image "$shot" --) \
+    || fail "send of a screenshot with --front failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "pane send-text w7:p3 Screenshots: $shot --session" \
+    "screenshots alone get no Front line"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: --front adds one Front line after the words, never to screenshots alone"
+}
+
+test_desk_voice_send_keeps_the_front_line_in_the_mailbox() {
+  local home out path
+  home=$(desk_send_fixture front-mailbox) || { desk_send_skip front-mailbox; return 0; }
+  rm -f "$home/state/.lock"
+  out=$(desk_send "$home" --front "Notes|com.apple.Notes|todo" -- "Read this back") \
+    || fail "send failed: $out"
+  case "$out" in mailbox:\ *) ;; *) fail "expected a mailbox delivery, got: $out" ;; esac
+  path=${out#mailbox: }
+  assert_equals $'Read this back\nFront: Notes (com.apple.Notes) - "todo"' \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["transcript"])' "$path")" \
+    "the mailbox keeps the Front line on its own line after the words"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: the Front line reaches the mailbox too"
+}
+
+test_desk_voice_send_leaves_out_the_front_line_for_the_first_mates_terminal() {
+  local home out backend path
+  for backend in herdr tmux; do
+    home=$(desk_send_fixture "front-own-$backend" "$backend") || { desk_send_skip "front-own-$backend"; return 0; }
+    desk_front_fixture "$home" /dev/ttys042
+    out=$(desk_send "$home" --front "Terminal|com.apple.Terminal|firstmate" \
+      --front-pid "$(cat "$home/fixture/app-pid")" -- "Status please") || fail "$backend: send failed: $out"
+    assert_no_grep "Front:" "$home/fixture/herdr.log" \
+      "$backend: the first mate's own terminal in front must add no Front line"
+    if [ "$backend" = tmux ]; then
+      path=${out#mailbox: }
+      assert_no_grep "Front:" "$path" "$backend: the mailbox copy must carry no Front line either"
+    fi
+    : > "$home/fixture/herdr.log"
+    out=$(desk_send "$home" --front "Terminal|com.apple.Terminal|other" \
+      --front-pid "$(cat "$home/fixture/server-pid")" -- "Status please") || fail "$backend: send failed: $out"
+    if [ "$backend" = tmux ]; then
+      path=${out#mailbox: }
+      assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["transcript"])' "$path")" \
+        'Front: Terminal (com.apple.Terminal) - "other"' "$backend: another app in front keeps its Front line"
+    else
+      assert_contains "$(herdr_calls "$home" pane send-text)" 'Front: Terminal (com.apple.Terminal) - "other"' \
+        "$backend: another app in front keeps its Front line"
+    fi
+    desk_front_done "$home"
+  done
+  pass "fm-desk-voice send: no Front line while the first mate's own terminal is in front"
+}
+
 test_desk_voice_dictation_front_focused_on_tmux() {
   local home out
   home=$(desk_send_fixture front-focused tmux) || { desk_send_skip front-focused; return 0; }
@@ -3074,6 +3149,9 @@ test_desk_voice_dictation_elsewhere_is_left_to_paste
 test_desk_voice_dictation_keeps_the_send_checks
 test_desk_voice_dictation_front_check_on_tmux
 test_desk_voice_dictation_front_focused_on_tmux
+test_desk_voice_send_adds_the_front_line_after_the_words
+test_desk_voice_send_keeps_the_front_line_in_the_mailbox
+test_desk_voice_send_leaves_out_the_front_line_for_the_first_mates_terminal
 test_desk_voice_dictation_refuses_bad_front_arguments
 test_desk_voice_shot_captures_the_named_display
 test_desk_voice_shot_capture_file_name_has_no_leading_dot

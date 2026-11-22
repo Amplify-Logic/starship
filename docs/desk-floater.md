@@ -21,6 +21,8 @@ Exactly one fleet brain remains: the primary already running in this home.
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
 - Stop, Repeat and Mute controls for that spoken voice, a voice-volume level of its own, and a list of the recent spoken replies to hear any of them again.
+- Firstmate's newest reply in a small caption beside the floater, whether the voice is muted or not (see [Reply caption](#reply-caption)).
+- A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
 - A dictation mode that types what you say into whatever text box has the cursor, and sends it when that text box is the Firstmate chat.
 - Quick screenshots sent to Firstmate on their own or together with a voice message (see [Screenshots](#screenshots)).
 
@@ -59,8 +61,8 @@ Drag the floater by its dark backing plate or the status line under the buttons.
 | Large round button | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. |
 | Stop (square) | Stops the reply being spoken now, and drops any reply queued to be spoken after it. Runs `bin/fm-speak.sh --stop`. |
 | Repeat (circular arrow) | Speaks the last spoken reply again. Runs `bin/fm-speak.sh --repeat`; the status line says "Nothing to repeat" when nothing has been spoken yet, and "Voice muted" (without repeating) while the voice is muted. |
-| Recent replies (dropdown arrow, right edge) | Opens a list of the last 10 spoken replies, newest first, each with its time and the start of its text; hover over one to read all of it. Click a reply to hear it again. Stop and Mute work on it as on Repeat, and while muted a click stays silent and the status line says "Voice muted". Click the arrow again to close the list. Runs `bin/fm-speak.sh --history` and `--replay <number>`. |
-| Mute (speaker) | Toggles voice off and on. While muted the icon is a crossed-out speaker on an orange circle, every reply stays text-only, and a reply playing at the moment you mute stops. Runs `bin/fm-speak.sh --mute` / `--unmute`; the setting is per home and survives restarting the floater. |
+| Recent replies (dropdown arrow, right edge) | Opens a list of the last 10 replies, spoken or kept as text while muted, newest first, each with its time and the start of its text; hover over one to read all of it. Click a reply to hear it again. Stop and Mute work on it as on Repeat, and while muted a click stays silent and the status line says "Voice muted". Click the arrow again to close the list. Runs `bin/fm-speak.sh --history` and `--replay <number>`. |
+| Mute (speaker) | Toggles voice off and on. While muted the icon is a crossed-out speaker on an orange circle, every reply stays text-only and still shows in the caption and the recent list, and a reply playing at the moment you mute stops. Runs `bin/fm-speak.sh --mute` / `--unmute`; the setting is per home and survives restarting the floater. |
 | Voice volume (right-click or Control-click the speaker) | Opens a slider below the controls that sets how loud the voice is compared with everything else on the Mac: 100% is the system volume, lower is quieter than other audio, and up to 200% is louder. The Mac's own volume is never changed, the new level applies from the next spoken line, and Reset returns to 100%. Right-click or Control-click again to close it. Runs `bin/fm-speak.sh --volume` / `--volume <percent>`; the level is per home and survives restarting the floater. |
 | Camera (bottom right of the small controls) | Takes a screenshot for Firstmate. See [Screenshots](#screenshots). A number on it counts the shots waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking it asks again. |
 
@@ -71,6 +73,14 @@ The last 10 replies and their audio are kept in this home's private `state/`, re
 Muting affects voice only.
 Firstmate's text replies stay the authoritative ones, and nothing about how Firstmate handles your transcripts changes.
 `bin/fm-speak.sh`'s header owns how stop, repeat, the reply history, mute and the voice volume behave.
+
+### Reply caption
+
+When Firstmate's spoken lead for a reply arrives, it shows in a calm card under the floater for about 15 seconds: "Firstmate" with the time, and the first two lines of the reply.
+It shows the same way while the voice is muted, with a small crossed-out speaker beside the time, so muted becomes a quiet text mode rather than silence.
+Click the reply or its arrow to read all of it; an expanded caption stays until you collapse it or click the cross to dismiss it.
+The caption shows the newest entry of the reply history that `bin/fm-speak.sh --history` lists, the same lead the voice speaks; replies kept before the floater started are never shown as new.
+It only shows words: it never acts, clicks or decides anything.
 
 You can talk while a reply is being spoken.
 The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.
@@ -208,8 +218,28 @@ The pane must also show its chat input, read as empty or holding a draft.
 A pane showing a shell or a screen that cannot be read counts as unreachable, because typed words there would become keypresses.
 So does a pane showing a selection dialog, such as a permission prompt, a question, or a picker: a pointer on a numbered option, or an `Enter to select` or `Esc to cancel` footer, sends the transcript to the mailbox so it cannot pick an option.
 
-The transcript is sent as the captain's plain words, with no label or marker.
+The transcript is sent as the captain's plain words, with no label or marker other than the Front and Screenshots lines below.
 Line breaks and control characters become spaces, so a transcript cannot submit early or press keys.
+
+### The Front line
+
+When you start talking, the floater notes the app in front, its bundle id and the title of its front window, and the message gains one line after your words:
+
+```
+What does this error mean
+Front: Xcode (com.apple.dt.Xcode) - "build log"
+```
+
+Typed into the chat, the line follows your words on the same line, as everything typed there does; in the mailbox it stays on a line of its own.
+Firstmate can then read that window by its bundle id rather than asking which one you meant.
+The title is read with the permissions the floater already has, Accessibility or else Screen Recording; when neither can read it, the line names the app alone.
+The line is left out when the app in front is the terminal showing Firstmate's own chat, and a message of screenshots alone carries none.
+Several talks joined into one message keep the first talk's line.
+`bin/fm-desk-voice.sh`'s header owns the format.
+
+Privacy: window titles can hold private text, such as an email subject or a file path.
+The line stays on this Mac and goes only to Firstmate, typed into its chat or saved in its mailbox like your words, and from there to Firstmate's model provider, the same path your words and screenshots take.
+Nothing new goes to Deepgram, which still receives only the audio.
 
 Claude's grey suggested prompt is not typed text, so a chat box showing only that counts as empty and the message goes straight in.
 A message of screenshots alone, with no words, never goes past a draft: while the chat box holds text you have not sent, it goes to the mailbox instead, so a screenshot never interrupts your typing.

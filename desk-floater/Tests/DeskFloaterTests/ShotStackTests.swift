@@ -29,6 +29,25 @@ final class ShotStackTests: XCTestCase {
         XCTAssertTrue(stack.isEmpty)
     }
 
+    func testHeldWordsKeepTheFrontmostOfTheFirstTalk() {
+        let xcode = Frontmost(pid: 41, name: "Xcode", bundleID: "com.apple.dt.Xcode", title: "build log")
+        let notes = Frontmost(pid: 42, name: "Notes", bundleID: nil, title: nil)
+        var stack = ShotStack()
+        stack.shotStarted(at: at(0))
+        stack.shotFinished("/shots/a.png", at: at(0.1))
+        XCTAssertTrue(stack.hold("Set the width", front: xcode))
+        XCTAssertTrue(stack.hold("to 1280", front: notes))
+        let message = stack.take()
+        XCTAssertEqual(message.front, xcode)
+        XCTAssertNil(stack.take().front, "a taken message leaves no front window behind")
+    }
+
+    func testFrontmostArgumentSplitsIntoNameBundleAndTitle() {
+        XCTAssertEqual(Frontmost(pid: 1, name: "Xcode", bundleID: "com.apple.dt.Xcode", title: "build log").argument,
+                       "Xcode|com.apple.dt.Xcode|build log")
+        XCTAssertEqual(Frontmost(pid: 1, name: "Notes", bundleID: nil, title: nil).argument, "Notes||")
+    }
+
     func testTalkWithNothingStackedGoesAtOnce() {
         var stack = ShotStack()
         stack.talkEnded(at: at(0))

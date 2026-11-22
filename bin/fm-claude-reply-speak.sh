@@ -76,7 +76,8 @@
 #   - a home that is not opted in: after the plain-language check below, the
 #     hook asks bin/fm-speak.sh --enabled and does nothing else at all, so a
 #     home without config/speak pays no settle wait and writes no state;
-#   - a muted home: bin/fm-speak.sh owns the mute and exits 0 without a sound.
+#   - a muted home: bin/fm-speak.sh owns the mute; it keeps the shaped line
+#     as text for the desk floater's caption and plays no sound.
 #
 # Recorded address and tone: docs/fork-configuration.md "Address and tone" owns the
 # format. The "## Address and tone" section of the home's own data/captain.md

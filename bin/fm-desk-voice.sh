@@ -3,11 +3,11 @@
 # floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--image <png>]... [--stdin | <transcript text...>]
+#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--front <name>|<bundle-id>|<title> [--front-pid <pid>]] [--image <png>]... [--stdin | <transcript text...>]
 #   fm-desk-voice.sh delivery <client-id>
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
-#   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh deliver [--source <name>] [--front <name>|<bundle-id>|<title>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh ring <line>
 #   fm-desk-voice.sh shot [--display <n> | --stdin]
 #   fm-desk-voice.sh keep [--purpose firstmate|dictate] [--reason <text>] <audio-file>
@@ -163,6 +163,22 @@
 # "Screenshots: <path> <path>...", and the JSON also lists them under "images".
 # A message may be screenshots alone.
 #
+# send and deliver --front "<name>|<bundle-id>|<title>" name the app and
+# window that were in front when the captain started talking, so the first
+# mate knows what "this" or "here" means. The value splits at its first two
+# "|": the app's name, its bundle id and the front window's title, of which
+# only the name is required. A message with words then gains one line after
+# them, before any screenshots line:
+#   Front: <name> (<bundle-id>) - "<title>"
+# leaving out the parts that are empty. Each part is made one plain line first.
+# A message of screenshots alone gets no Front line. send --front-pid <pid>
+# names that app's process: when a client of the primary's own multiplexer
+# session (tmux, or herdr by the socket facts described under --front-app
+# below) runs beneath it, the captain is looking at the first mate's own
+# terminal and the Front line is left out, typed and in the mailbox alike. The
+# line stays on this machine: it is typed into the primary's chat or saved in
+# its mailbox like the words, and goes nowhere else.
+#
 # send and deliver --stdin read the transcript from standard input instead of
 # the arguments, so a message too long for one argument (Linux refuses any
 # single argument over 128 KiB) still arrives whole; bin/fm-web.py sends this
@@ -296,10 +312,14 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-# Parse "[--source <name>] [--image <png>]... [--stdin | [--] [<text...>]]" into ARG_SOURCE,
-# ARG_IMAGES and ARG_TEXT (empty when the text is blank).
+# Parse "[--source <name>] [--front <name>|<bundle-id>|<title>] [--front-pid <pid>]
+# [--image <png>]... [--stdin | [--] [<text...>]]" into ARG_SOURCE, ARG_FRONT
+# (the --front value), ARG_FRONT_PID, ARG_IMAGES and ARG_TEXT (empty when the
+# text is blank).
 parse_transcript_args() {
   ARG_SOURCE=desk-floater
+  ARG_FRONT=''
+  ARG_FRONT_PID=''
   ARG_IMAGES=()
   local from_stdin=false
   while [ "$#" -gt 0 ]; do
@@ -307,6 +327,19 @@ parse_transcript_args() {
       --source)
         [ "$#" -ge 2 ] || refuse "--source needs a name"
         ARG_SOURCE=$2
+        shift 2
+        ;;
+      --front)
+        [ "$#" -ge 2 ] || refuse "--front needs <name>|<bundle-id>|<title>"
+        ARG_FRONT=$2
+        shift 2
+        ;;
+      --front-pid)
+        [ "$#" -ge 2 ] || refuse "--front-pid needs a pid"
+        case "$2" in
+          ''|0*|*[!0-9]*) refuse "--front-pid needs a pid: $2" ;;
+        esac
+        ARG_FRONT_PID=$2
         shift 2
         ;;
       --image)
@@ -340,10 +373,33 @@ parse_transcript_args() {
   esac
 }
 
+# The "Front: ..." line for --front value <value>, or nothing when it names no
+# app (see the header).
+front_line() {  # <value>
+  local name bundle title rest
+  name=${1%%|*}
+  rest=${1#"$name"}
+  rest=${rest#|}
+  bundle=${rest%%|*}
+  title=${rest#"$bundle"}
+  title=${title#|}
+  name=$(plain_line "$name") || return 1
+  [ -n "$name" ] || return 0
+  bundle=$(plain_line "$bundle") || return 1
+  title=$(plain_line "$title") || return 1
+  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - \"$title\"}"
+}
+
 # The message the parsed arguments make: the transcript, if any, then one
+# "Front: ..." line when --front names an app and there are words, then one
 # "Screenshots: <path>..." line when images are attached.
 message_text() {
-  local text=$ARG_TEXT
+  local text=$ARG_TEXT front
+  if [ -n "$text" ] && [ -n "$ARG_FRONT" ]; then
+    front=$(front_line "$ARG_FRONT") || return 1
+    text="$text${front:+
+$front}"
+  fi
   if [ "${#ARG_IMAGES[@]}" -gt 0 ]; then
     text="${text:+$text
 }Screenshots: ${ARG_IMAGES[*]}"
@@ -355,7 +411,7 @@ deliver() {
   local source text id stamp path tmp
   parse_transcript_args "$@"
   source=$ARG_SOURCE
-  text=$(message_text)
+  text=$(message_text) || die "cannot prepare transcript"
   [ -n "$text" ] || refuse "nothing to deliver"
 
   ensure_dirs
@@ -798,6 +854,31 @@ EOF
   return 1
 }
 
+# True when a client of the proven primary's own multiplexer session runs
+# beneath app <pid>: that app is the first mate's own terminal. Unproven
+# counts as not. Its subshell scopes the pane environment.
+front_hosts_primary() (  # <pid> [expect-home]
+  local clients client info
+  prove_primary_pane "${2:-}" || return 1
+  case "$PANE_BACKEND" in
+    herdr)
+      [ -n "${HERDR_SOCKET_PATH:-}" ] || return 1
+      clients=$(herdr_client_pids "$HERDR_SOCKET_PATH" "$PANE_ROOT") || return 1
+      ;;
+    tmux)
+      info=$(tmux display-message -p -t "$PANE_TARGET" '#{session_id} #{window_active}#{pane_active}' 2>/dev/null) \
+        || return 1
+      clients=$(tmux list-clients -t "${info% *}" -F '#{client_pid} #{client_tty}' 2>/dev/null | awk '{ print $1 }') \
+        || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  for client in $clients; do
+    pid_within "$client" "$1" && return 0
+  done
+  return 1
+)
+
 # True when tmux <target> is the active pane of its session's active window
 # and a client attached to that session reports that its terminal has focus.
 # tmux tracks focus only for a client that attached while focus-events was
@@ -1100,7 +1181,7 @@ send_once() {
         front_tty=$2
         shift 2
         ;;
-      --source|--image)
+      --source|--image|--front|--front-pid)
         [ "$#" -ge 2 ] || break
         rest+=("$1" "$2")
         shift 2
@@ -1123,7 +1204,13 @@ send_once() {
   parse_transcript_args "$@"
   source=$ARG_SOURCE
   text=$ARG_TEXT
-  line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
+  # The captain looking at the first mate's own terminal says nothing a Front
+  # line could add.
+  if [ -n "$ARG_FRONT" ] && [ -n "$ARG_FRONT_PID" ] && front_hosts_primary "$ARG_FRONT_PID" "$expect_home"; then
+    ARG_FRONT=''
+  fi
+  line=$(message_text) || die "cannot prepare transcript"
+  line=$(plain_line "$line") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
   line=$(composer_safe_line "$line")
 
@@ -1166,6 +1253,7 @@ send_once() {
   for image in ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; do
     image_args+=(--image "$image")
   done
+  [ -z "$ARG_FRONT" ] || image_args+=(--front "$ARG_FRONT")
   path=$(deliver --source "$source" ${image_args[@]+"${image_args[@]}"} -- "$text") \
     || die "cannot save to the mailbox"
   printf 'mailbox: %s\n' "$path"
