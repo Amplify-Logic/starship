@@ -5,7 +5,8 @@ A calm localhost page that mirrors the terminal workspace for someone who does n
 
 ## What it is
 
-The page is the workspace's regions in the same places, in plain words and with buttons where the terminal has keys.
+The page is the workspace's regions, in plain words and with buttons where the terminal has keys.
+It shows the same facts as the terminal and may lay them out its own way; [What the page lays out its own way](#what-the-page-lays-out-its-own-way) lists where it does.
 Apart from the weekly page below, it adds nothing the terminal does not show.
 
 | In the terminal | On the page |
@@ -15,12 +16,12 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the counts, Needs you, Right now, Since you last looked |
-| A factory's own tab: its page, and its workers beside it | The project's tab: its page, and Workers at work beside it |
+| A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, in one column |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
-The line between two side-by-side panels can be dragged to make either one as big as you like, as in the terminal; a double-click puts it back, and with the line focused the arrow keys move it.
+On Control Centre the line between Firstmate and Factories can be dragged to make either one as big as you like, as in the terminal; a double-click puts it back, and with the line focused the arrow keys move it.
 Each browser remembers where you left it.
-In a narrow window the two sides stack, Control Centre gets a switch between Firstmate and Factories, and a project's tab can be resized between its page and its workers the same way.
+In a narrow window Control Centre gets a switch between Firstmate and Factories, a project's tab is one page that scrolls as a whole, and the row of tabs scrolls sideways, bringing a newly chosen tab into sight.
 
 ### The chat
 
@@ -49,11 +50,21 @@ The page is another window onto the one primary session, not a second first mate
 ### The band and the projects
 
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
-The page chooses no call, counts nothing and orders nothing itself, so it cannot disagree with the terminal; a worker whose checks are running counts as busy in the lamps and the counts, as it does on the worker's own row ([factory-pane.md](factory-pane.md)).
+The page chooses no call and counts nothing itself, so it cannot disagree with the terminal; a worker whose checks are running counts as busy in the lamps and the counts, as it does on the worker's own row ([factory-pane.md](factory-pane.md)).
 It reads them again about every three seconds while visible. Opening the page is not a look for Since you last looked; pressing one of its buttons or keys on Factories is, as a key press in the pane is, and one on a project tab is not, as a key in a factory's own tab is not.
 A worker shows the step it is on and the one line it says about what it is doing, not a copy of its terminal.
-A long title shows on one or two lines; click it to read the rest.
+A long title shows on one or two lines; click it to read the rest, and a call's title shows whole once its card is open.
 A web address in a title or the feed reads as a short label, such as `the pull request`, that opens the link.
+
+#### What the page lays out its own way
+
+- A project's tab has no list of workers beside its page: its Work list already names each worker with the step it is on, so a second list would only repeat it.
+  Watch this worker, on a busy job in Right now, opens that project's tab and marks the job in its Work list.
+- A call on its own project's tab does not repeat the project's name beside its title.
+- Who steers has its switch on the project's own tab only.
+  A project's row in Right now says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
+- A project's conversation reads newest first.
+- On a screen worked by touch, the key hints on the buttons and the line of keys at the bottom are not shown.
 
 Words that are already plain are the terminal's own.
 Only these change, and only where the pane or the strip wrote them; a job's title, and what a worker says it is doing, are never reworded:
@@ -61,7 +72,6 @@ Only these change, and only where the pane or the strip wrote them; a job's titl
 | Terminal | Page |
 | --- | --- |
 | ready to merge, PR ready, has its PR ready | ready for your OK |
-| landed | went live |
 | land it | make it live |
 | queued | waiting to start |
 | deferred | put off |
@@ -109,7 +119,7 @@ The page has the Factory pane's keys, and each one does exactly what its button 
 | `?` | List every key |
 
 The keys work only while no typing box has the keyboard, so typing a message is never taken for a key.
-Each button carries its key as a small hint, and a line of keys sits at the bottom, as in the pane; both can be hidden in Settings.
+Each button carries its key as a small hint, and a line of keys sits at the bottom, as in the pane; both can be hidden in Settings, and neither is shown on a screen worked by touch.
 
 ### Settings
 
@@ -120,9 +130,9 @@ The Settings button opens one small panel:
 - **Light or dark**: Auto follows the system setting; Light is a warm cream.
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
 - **Show key hints**: the small key letters on the buttons and the line of keys at the bottom.
-- **Put the panels back**: returns every divider to where it started.
+- **Put the panels back**: returns the line between Firstmate and Factories to where it started.
 
-Settings and the panel sizes are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
+Settings and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.
 
 ### This week

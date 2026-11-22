@@ -269,6 +269,35 @@ test_shapes_reads_each_question_as_its_card_does() {
   pass "shapes reads each held question exactly as its tap card does, a plain question stays plain, and only recorded options are options"
 }
 
+# A suggestion is read whole. A full stop inside a number, such as a version,
+# does not end its sentence: a reason that suggested "Blue 5.3 (recommended) or
+# Green 4.1 Quick" once showed as "3 (recommended) or Green 4." And what follows
+# `Recommendation:` ends only at a pointer that starts a new sentence or carries
+# its own label, never at the word "see" or "report" inside it: "wait and see
+# how the first batch sells" once showed as "wait and".
+test_a_suggestion_is_read_whole() {
+  new_home whole
+  hold hold pick-glaze --title "Which glaze for the new cups" \
+    --reason "Two glazes passed the dishwasher test. 1 Glaze for the first batch: Blue 5.3 (recommended) or Green 4.1 Quick. 2 Fire one test batch first." \
+    --repo sample >/dev/null
+  hold hold pick-price --title "What should a cup cost" \
+    --reason "The cups cost 4.20 to make. We recommend 9.50 a cup. A lower price loses money on shipping." --repo sample >/dev/null
+  hold hold pick-shelf --title "A second shelf of cups" \
+    --reason "The new shelf holds 40 cups. Recommendation: wait and see how the first batch sells, then read the report on returns. See the sales sheet. Evidence: last month's orders." \
+    --repo sample >/dev/null
+  local out
+  out=$(desk shapes pick-glaze pick-price pick-shelf) || fail "shapes failed"
+  printf '%s' "$out" | node -e '
+    let s = ""; process.stdin.on("data", (c) => s += c).on("end", () => {
+      const by = Object.fromEntries(JSON.parse(s).decisions.map((d) => [d.id, d]));
+      const check = (ok, code) => { if (!ok) { console.error(s); process.exit(code); } };
+      check(by["pick-glaze"].recommendation === "1 Glaze for the first batch: Blue 5.3 (recommended) or Green 4.1 Quick.", 2);
+      check(by["pick-price"].recommendation === "We recommend 9.50 a cup.", 3);
+      check(by["pick-shelf"].recommendation === "wait and see how the first batch sells, then read the report on returns.", 4);
+    });' || fail "a suggestion was cut inside a number or inside its own sentence"
+  pass "a suggestion is read whole: a full stop inside a number does not end it, and neither does a word inside its own sentence"
+}
+
 # On 2026-11-14 the bridge strip, the Factory pane and the tap page showed 0 to
 # 2, 17 to 36 and 112 calls for the owner at the same moment. All three now
 # show the one count of his calls, and the pane shows each question with the
@@ -610,6 +639,7 @@ fm_test_run \
   test_export_lists_decisions_and_ready_merges \
   test_mark_records_explicit_fields_and_refuses_unsafe_marks \
   test_shapes_reads_each_question_as_its_card_does \
+  test_a_suggestion_is_read_whole \
   test_the_strip_the_pane_and_the_page_show_one_count \
   test_route_answers_keeps_and_saves_reasons \
   test_route_refuses_stale_unknown_and_away_releases \

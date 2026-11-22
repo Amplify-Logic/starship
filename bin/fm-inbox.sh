@@ -69,6 +69,8 @@
 # `progress` publishes a short update on a note still being worked, before the
 # one reply: any number of lines, in order, refused once the reply exists.
 # Receipts list them per note as progress[] ({at, body}).
+# `reply` reads no option after the note id, so a reply whose first word is
+# `--text` or `--file` is refused rather than recorded as the words.
 # A newly created and announced note also rings the primary (ring_primary
 # below): a short labelled line typed into its chat pane so a busy primary sees
 # the note within seconds. The queued wake is still the delivery; the watcher
@@ -658,6 +660,9 @@ cmd_reply() {
     body=$(cat; printf .)
     body=${body%.}
   else
+    case "$1" in
+      --text | --file) die "fm-inbox.sh reply reads no option after the note id, so $1 would be recorded as the words" ;;
+    esac
     body="$*"
   fi
   [ -n "${body//[[:space:]]/}" ] || die "refusing to record an empty reply"

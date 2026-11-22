@@ -85,7 +85,8 @@ The queue is every work item nobody has started, counted in that same pass by
 what will start it (queue_word below); what is held and what still waits on
 other work is read as the backlog's own adapter reads it. A closed work item
 reads as finished work only when landed_delivery in bin/fm-landed-lib.sh finds
-its merged change, landing or report; closed without one, it reads closed.
+its merged change, landing or report; closed without one, it reads closed,
+or settled when it was a call of the owner's.
 The rest are event records the home already keeps: the [at=] times on status
 lines, the turn times in state/<id>.busy-state, state/<id>.turn-ended, the
 optional one-line state/<id>.step a worker may write to say what it is doing,
@@ -1099,8 +1100,39 @@ def steer_log(home: str) -> List[Tuple[int, str, str]]:
 # Plain words from prose
 # --------------------------------------------------------------------------
 
-def tidy(text: Optional[str], limit: int = 170) -> str:
-    """Prose for the screen: no paths, links or run ids, one or two sentences."""
+# A work item's own id alone in brackets, such as (shop-plans-page-p1), or a
+# revision mark such as (r2): names the fleet files work under, which tell the
+# owner nothing. Any other bracketed words, (v2) or (x2), are the writer's own.
+INTERNAL_NAME = r"\(\s*(?:(?:[a-z0-9]+-){2,}[a-z]{1,2}\d{1,3}|r\d{1,2})\s*\)"
+
+
+def file_path(match: "re.Match[str]") -> str:
+    """A path under the home, such as data/x/report.md or src/photos/, left out; words with a slash, such as and/or, stay."""
+    token = match.group(0)
+    path = token.rstrip(".")           # a sentence's own full stop is not the path's
+    if path.endswith("/") or re.search(r"\.[A-Za-z][A-Za-z0-9]{0,4}$", path.rsplit("/", 1)[-1]):
+        return token[len(path):]
+    return token
+
+
+def card_words(text: Optional[str]) -> str:
+    """Card text, a call's title, reason and suggestion, without file paths or a work item's id or revision mark in brackets.
+
+    A web address stays as written, so a screen can still offer its link.
+    """
+    parts = re.split(r"(https?://\S+)", text or "")
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", "", parts[index])
+        # A path under the home: its first part holds no dot, so a web address written without its scheme is none.
+        part = re.sub(r"(?<![\w./~@+-])[\w@+-]+(?:/[\w.@+-]+)+/?", file_path, part)
+        parts[index] = re.sub(INTERNAL_NAME, "", part)
+    text = re.sub(r"\(\s*[,;]?\s*\)", "", "".join(parts))
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip(" ,;:")
+
+
+def tidy(text: Optional[str], limit: Optional[int] = 170) -> str:
+    """Prose for the screen: no paths, links or run ids, and with a limit, one or two sentences."""
     text = text or ""
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"(?<![\w.])(?:~|/)[\w.@+-]*(?:/[\w.@+-]+)+/?", "", text)
@@ -1109,7 +1141,7 @@ def tidy(text: Optional[str], limit: int = 170) -> str:
     text = re.sub(r"\(\s*[,;]\s*", "(", text)
     text = re.sub(r"\s+([,.;:])", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip(" ,;:")
-    if len(text) > limit:
+    if limit and len(text) > limit:
         cut = text[:limit]
         end = max(cut.rfind(". "), cut.rfind("; "))
         text = (cut[:end + 1] if end > limit // 2 else cut.rsplit(" ", 1)[0] + "…").strip()
@@ -1362,7 +1394,7 @@ def request_id_of(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._:-]", "-", text)[:128]
 
 
-ROUTINE_QUIET_WORDS = ("finished", "PR ready", "landed", "closed")
+ROUTINE_QUIET_WORDS = ("finished", "report ready", "PR ready", "went live", "closed", "settled")
 
 
 def routine_folds(job: Dict[str, Any]) -> bool:
@@ -1489,7 +1521,7 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         # The options and recommendation are the ones its tap card shows; with
         # none recorded the question is shown plainly, never as a stand-in word.
         shape = shapes.get(row["id"]) or {}
-        title = plain_words(shape.get("title")) or plain_words(row.get("title")) or row["id"]
+        title = card_words(plain_words(shape.get("title")) or plain_words(row.get("title"))) or row["id"]
         question = plain_words(shape.get("question")) if shape else plain_words(row.get("hold_reason"))
         labels = [plain_words(o) for o in shape.get("options") or []]
         labels = [label for label in labels if label][:9]
@@ -1511,9 +1543,9 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         checking = requested is not None and (since_at is None or requested >= since_at
                                               or settled_notes.get(row["id"], -1) >= since_at)
         return {"id": row["id"], "factory": fid, "kind": "question", "ask": title, "title": title,
-                "why": tidy(question), "options": options,
+                "why": tidy(card_words(question), None), "options": options,
                 "suggested_by": "Starship" if any(o["suggested"] for o in options) else None,
-                "recommendation": tidy(recommendation, 140) or None,
+                "recommendation": tidy(card_words(recommendation), None) or None,
                 "holds_up": holds_up(row["id"]), "since": since_at, "for": "you", "pr": row.get("pr_url"),
                 "checking": checking,
                 "read": read_sources(home, row["id"], (row.get("hold_reason"), shape.get("question")))}
@@ -1644,8 +1676,6 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                 job["last_sign_of_life"], job["sign_of_life_from"] = min(at, now), word
             if step_words and (not job["started"] or (step_at or 0) >= job["started"]):
                 job["doing"], job["doing_from"] = step_words, "the worker"
-            if not job["doing"]:
-                job["doing"], job["doing_from"] = "at work, no step reported yet", None
             if job["step"] != "checking" and job["last_sign_of_life"] and now - job["last_sign_of_life"] >= quiet_after:
                 job["quiet"] = True
 
@@ -1759,17 +1789,21 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
         text, title = item.pop("line")["text"], item.pop("title")
         if kind == "ship" and re.search(r"https?://\S+/(?:pull|merge_requests)/\d+", text):
             feed.append(dict(item, word="PR ready", text="%s has its PR ready." % title))
-        else:
+        elif kind == "ship":
             feed.append(dict(item, word="finished", text="%s is finished." % title))
+        else:
+            feed.append(dict(item, word="report ready", text=title))
     for need in needs:
         if need["kind"] == "question" and need.get("since") and since <= need["since"] <= now:
             feed.append({"at": need["since"], "date": None, "actor": by_id[need["factory"]]["name"],
                          "factory": need["factory"], "job": need["id"], "word": "asked you",
                          "text": "%s needs your call." % need["title"]})
     # A closed work item is finished work only on the backlog's own evidence:
-    # a merged change or a local landing is in, a report is finished, and one
-    # closed with neither was only closed.
-    finished_in_feed = {e["job"] for e in feed if e["word"] == "finished"}
+    # a merged change or a local landing went live, a report is ready, and one
+    # closed with neither was only closed; a call of the owner's that was
+    # closed is settled. Each of those rows leads with what happened and then
+    # names the work, so its text is the title alone.
+    finished_in_feed = {e["job"] for e in feed if e["word"] in ("finished", "report ready")}
     since_day = time.strftime("%Y-%m-%d", time.localtime(since))
     closed = [r for r in rows if r.get("state") == "done" and ((r.get("completion") or {}).get("date") or "") >= since_day]
     delivered = delivered_ids(closed)
@@ -1783,14 +1817,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
             if completion.get("date") == local_today:
                 note_run(fid, kind, row["id"])
         if row["id"] not in delivered:
-            word = "closed"
-            text = "%s was closed." if "captain" in (row.get("kind"), row.get("hold_kind")) else \
-                "%s was closed; no change or report on record."
+            word, text = ("settled", "%s") if "captain" in (row.get("kind"), row.get("hold_kind")) else \
+                ("closed", "%s was closed; no change or report on record.")
         elif completion.get("verb") == "reported" or (row.get("kind") == "scout" and row.get("report_path")):
-            word, text = "finished", "%s is finished."
+            word, text = "report ready", "%s"
         else:
-            word, text = "landed", "%s is in."
-        if word == "finished" and row["id"] in finished_in_feed:
+            word, text = "went live", "%s"
+        if word == "report ready" and row["id"] in finished_in_feed:
             continue
         feed.append({"at": None, "date": completion["date"], "actor": by_id[fid]["name"], "factory": fid,
                      "job": row["id"], "word": word, "text": text % title})
@@ -2427,14 +2460,14 @@ def clip(segs, width: int):
 
 
 def rules_size_words(size: int, cap: int) -> Tuple[str, str]:
-    """A factory's rules size against the cap, and the colour to show it in:
-    marked from nine tenths of the cap, and over it the rules reach no job."""
+    """A factory's rules size against the cap once it matters, and the colour to show it in:
+    said from nine tenths of the cap, and over it the rules reach no job. Under that, no words."""
     words = "rules {:,} / {:,} characters".format(size, cap)
     if size > cap:
         return words + " · over the cap, so its jobs get none of these rules", "red"
     if size * 10 >= cap * 9:
         return words + " · near the cap; past it its jobs get none of these rules", "amber"
-    return words, "faint"
+    return "", "faint"
 
 
 def row(width: int, left=(), right=(), band: bool = False) -> Row:
@@ -2496,8 +2529,14 @@ STATE_COLOUR = {"busy": "amber", "decision for you": "red", "ready to merge": "g
                 "failed": "amber",
                 "waiting": "amber", "stopped": "faint", "no worker": "faint", "no reading": "faint",
                 "with Starship": "mist", "finished": "green", "next": "mist", "later": "faint"}
-FEED_COLOUR = {"finished": "green", "PR ready": "green", "landed": "green", "closed": "mist", "asked you": "red",
-               "failed": "amber",
+# What a job's row says for a state whose word alone leaves out whose turn it is
+# or that the work is finished. The record keeps the state word, which the
+# count line and the status bar count by (docs/status-bar.md).
+STATE_WORDS = {"needs a look": "waiting on Starship", "with Starship": "finished, now with Starship"}
+# How long after its start a busy job that has named no step reads `just started`.
+JUST_STARTED = 300
+FEED_COLOUR = {"finished": "green", "report ready": "green", "PR ready": "green", "went live": "green",
+               "closed": "mist", "settled": "mist", "asked you": "red", "failed": "amber",
                "took the helm": "cyan", "handed back": "cyan", "replied": "cyan",
                "answered": "cyan", "asked to keep": "cyan", "asked for changes": "cyan", "said": "cyan"}
 
@@ -2674,14 +2713,16 @@ class View:
 
     @staticmethod
     def page_jobs(fac: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-        """The jobs a factory's own page shows, and the rest that folds away, per queue word."""
-        # Everything moving or waiting on your answer, then the head of the
-        # line; the rest of the queue folds into one count per queue word.
+        """The jobs a factory's own page shows under its work, and the rest that folds away, per queue word."""
+        # Everything moving, then the head of the line; the rest of the queue
+        # folds into one count per queue word. A call of the owner's is a card
+        # above, never a second row here.
         shown: List[Dict[str, Any]] = []
         shown_line = 0
         folded: Dict[str, List[Dict[str, Any]]] = {word: [] for word in QUEUE_WORDS}
+        carded = set(fac.get("needs") or ())   # its card under NEEDS YOU is the job's row on this page
         for job in fac["jobs"]:
-            if job["state"] == "finished":
+            if job["state"] == "finished" or job["id"] in carded:
                 continue
             word = job.get("queue")
             if word is None and not job["started"] and (
@@ -2884,10 +2925,13 @@ class View:
             elapsed = minutes_words((now - job["started"]) // 60) if job.get("started") else ""
             if job.get("quiet") and job.get("last_sign_of_life"):
                 return "quiet for %d min, no sign of life" % ((now - job["last_sign_of_life"]) // 60), elapsed, True
-            return job.get("doing") or "at work", elapsed, False
+            fresh = job.get("started") and now - job["started"] < JUST_STARTED
+            return job.get("doing") or ("just started" if fresh else "at work"), elapsed, False
         if job["state"] == "waiting" and job.get("until"):
             return "waiting · tries again %s" % clock(job["until"]), "", False
-        return job["state"], "", False
+        if job["state"] == "with Starship" and job.get("kind") == "scout":
+            return "finished, its report is with Starship", "", False
+        return STATE_WORDS.get(job["state"], job["state"]), "", False
 
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
         rows = self.job_lines(width, job, full)
@@ -2977,7 +3021,8 @@ class View:
         head = [S(" "), self.mark("factory", fac["id"]), S(fac["name"], "ice", True)]
         idle = fac["state"] == "idle"
         words = self.idle_words(fac) if idle else self.queue_brief(fac)
-        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac), band=band)]
+        rows = [row(width, head + [S("   " + words, "faint")], self.steer(fac) if fac["steered_by"] == "you" else [],
+                    band=band)]
         for job in self.overview_jobs(fac):
             rows += self.job_rows(width, job, full=False)
         rows += self.routine_rows(width, fac)
@@ -3254,7 +3299,8 @@ class View:
         else:
             words, colour = rules_size_words(fac.get("rules_size", profile_size(fac["rules"])),
                                              self.record.get("rules_cap", PROFILE_CAP))
-            rows += flow(width, [S("   ")], words, colour) + [row(width)]
+            if words:
+                rows += flow(width, [S("   ")], words, colour) + [row(width)]
         for rule in fac["rules"]:
             for index, line in enumerate(wrap(rule, max(width - 8, 20))):
                 rows.append(row(width, [S("     " if index else "   · ", "faint"), S(line, "mist")]))

@@ -1087,7 +1087,7 @@ class TranscriptCache:
 
 # The page's own words for the pane's and the strip's jargon. Every other word
 # on the page is theirs; docs/web.md lists these.
-PLAIN_WORDS = {"ready to merge": "ready for your OK", "PR ready": "ready for your OK", "landed": "went live"}
+PLAIN_WORDS = {"ready to merge": "ready for your OK", "PR ready": "ready for your OK"}
 PLAIN_PHRASES = (
     ("nothing queued", "nothing waiting to start"),
     ("queued", "waiting to start"),
@@ -1235,7 +1235,6 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
             "needs": list(page.get("needs") or []),
             "queue": [plain_phrase(part) for part in page.get("queue") or []],
             "jobs": [_job_model(job) for job in page.get("jobs") or []],
-            "workers": [_job_model(job) for job in page.get("workers") or []],
             "folded": [
                 {
                     "words": plain_phrase(group.get("words")),
@@ -1253,9 +1252,10 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
                 {"when": item.get("when") or "", "what": item.get("what") or ""} for item in page.get("learned") or []
             ],
             "feed": _feed_model(page.get("feed") or {}),
+            # The pane lists what was said oldest first, above its keys line; the page reads from the top.
             "talk": [
                 {"when": line.get("when") or "", "who": line.get("who") or "", "said": line.get("said") or ""}
-                for line in page.get("talk") or []
+                for line in reversed(page.get("talk") or [])
             ],
         },
     }
@@ -2265,7 +2265,9 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 
 /* The two sides, with a divider that moves between them. */
 .main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,calc((100% - .75rem) * var(--split,.55))) .75rem minmax(0,1fr);padding:.5rem .625rem .375rem}
-#project.main{grid-template-columns:minmax(0,calc((100% - .75rem) * var(--split-tab,.62))) .75rem minmax(0,1fr)}
+/* A project's tab is one column: its work list names every worker. */
+#project.main{display:block}
+#project .pane{height:100%;max-width:64rem;margin:0 auto}
 .divider{position:relative;cursor:col-resize;border-radius:.375rem;touch-action:none;outline-offset:-2px}
 .divider::after{content:"";position:absolute;top:50%;left:50%;width:.25rem;height:2.75rem;transform:translate(-50%,-50%);border-radius:999px;background:var(--line);transition:background .15s}
 .divider:hover::after,.divider:focus-visible::after,.divider.drag::after{background:var(--here)}
@@ -2385,8 +2387,8 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .call-row{width:100%;border:0;background:none;text-align:left;display:flex;align-items:center;gap:.56rem;padding:.45rem .7rem;border-radius:.7rem}
 .dot{width:.5rem;height:.5rem;border-radius:50%;flex:none;background:var(--edge)}
 .dot.you{background:var(--you-lamp)}.dot.done{background:var(--done-lamp)}.dot.work{background:var(--work-lamp)}.dot.here{background:var(--here)}
-.call-title{flex:1;min-width:0;font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.call.open .call-title{white-space:normal;font-size:.94rem}
+.call-title{flex:1;min-width:0;font-weight:600;font-size:.9rem;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+.call.open .call-title{display:block;-webkit-line-clamp:unset;line-clamp:none;font-size:.94rem}
 .call-meta{flex:none;max-width:45%;font-size:.8rem;color:var(--ink-2);text-align:right;display:flex;flex-direction:column;line-height:1.25}
 .call-body{padding:0 .7rem .7rem 1.75rem}
 .call-body>*+*{margin-top:.5rem}
@@ -2431,6 +2433,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .proj-name:hover{text-decoration-color:var(--here);color:var(--here)}
 .proj-q{font-size:.84rem;color:var(--ink-2)}
 .steer{margin-left:auto;display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--ink-2)}
+.steer-note{margin-left:auto;font-size:.8rem;color:var(--here);font-weight:600}
 .seg{display:flex;border:1px solid var(--line);border-radius:.45rem;overflow:hidden;background:var(--surface)}
 .seg button{border:0;background:none;padding:.1rem .56rem;font-size:.8rem;color:var(--ink-2)}
 .seg button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
@@ -2448,10 +2451,11 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .doing{font-size:.875rem;flex:1 1 13rem}
 .doing.quiet{color:var(--work);font-weight:500}
 .job-foot .btn{margin-left:auto}
-.jobline{display:flex;gap:.56rem;align-items:baseline;margin-top:.375rem;font-size:.9rem}
+/* A row too narrow for its title and its state puts the state under the title, never squeezing the title. */
+.jobline{display:flex;flex-wrap:wrap;gap:0 .56rem;align-items:baseline;margin-top:.375rem;font-size:.9rem}
 .jobline .dot{align-self:center}
-.jobline .t{flex:1;min-width:0}
-.jobline .w{font-size:.8rem;color:var(--ink-2);white-space:nowrap}
+.jobline .t{flex:1 1 auto;min-width:0}
+.jobline .w{margin-left:auto;font-size:.8rem;color:var(--ink-2);white-space:nowrap}
 .jobline .w.you{color:var(--you)}.jobline .w.done{color:var(--done)}.jobline .w.work{color:var(--work)}
 .line{font-size:.84rem;color:var(--ink-2);margin-top:.375rem;display:flex;gap:.45rem;flex-wrap:wrap}
 .line b{font-weight:600;color:var(--ink)}
@@ -2478,14 +2482,6 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .bul li::before{content:"";position:absolute;left:.125rem;top:.62em;width:.3rem;height:.3rem;border-radius:50%;background:var(--ink-2)}
 .bul time{color:var(--ink-2);font-size:.8rem;margin-right:.5rem}
 .warn{color:var(--you)}.near{color:var(--work)}
-.worker{border:1px solid var(--line);border-radius:.7rem;padding:.56rem .75rem;background:var(--surface)}
-.worker+.worker{margin-top:.5rem}
-.worker.sel{border-color:var(--edge);box-shadow:var(--shadow)}
-.worker h4{font-size:.9rem;font-weight:600;display:flex;gap:.56rem;align-items:baseline}
-.worker h4 .t{flex:1;min-width:0}
-.worker h4 span.e{font-size:.8rem;color:var(--ink-2);font-weight:400;white-space:nowrap}
-.worker .doing{margin-top:.375rem;font-size:.875rem}
-.worker .doing.quiet{color:var(--work);font-weight:500}
 
 /* The primary's own part of the terminal's status bar row, word for word, under the message box. */
 .statusrow{min-width:0;font-size:.78rem;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
@@ -2534,7 +2530,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 :root:not([data-style="lively"]) .sec>h3 .n{background:var(--you-bg);color:var(--you);border-color:transparent}
 :root:not([data-style="lively"]) .call.open{border-color:var(--you-lamp);box-shadow:0 0 0 3px var(--you-bg)}
 :root:not([data-style="lively"]) .call.fin.open{border-color:var(--done-lamp);box-shadow:0 0 0 3px var(--done-bg)}
-:root:not([data-style="lively"]) .worker.sel{border-color:var(--here);box-shadow:0 0 0 3px var(--here-bg)}
+:root:not([data-style="lively"]) .job.sel{box-shadow:0 0 0 3px var(--here-bg)}
 
 /* Lively's stronger marks */
 [data-style="lively"] .top{border-bottom-color:transparent;box-shadow:var(--shadow)}
@@ -2558,7 +2554,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 [data-style="lively"] .seg button[aria-pressed="true"],[data-style="lively"] .side-switch button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
 [data-style="lively"] .job .job-top .dot.work{animation:glow 2s infinite ease-in-out}
 @keyframes glow{50%{box-shadow:0 0 0 .3rem rgba(230,169,58,.25)}}
-[data-style="lively"] .worker.sel{border-color:var(--here);box-shadow:0 0 0 3px var(--here-bg)}
+[data-style="lively"] .job.sel{box-shadow:0 0 0 3px var(--here-bg)}
 
 @media (max-width:61rem){
 .app{height:auto;min-height:100dvh}
@@ -2575,12 +2571,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .side-switch button{flex:1;border:0;background:none;padding:.45rem;font-size:.9rem;color:var(--ink-2)}
 .side-switch button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
 .main[data-side="chat"] #panelPane,.main[data-side="projects"] #chatPane{display:none}
-#project.main{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(10rem,calc(100dvh * var(--split-stack,.5))) .75rem auto}
-#project .pane:first-child{overflow:hidden}
-#project .pane:first-child .p-body{overflow-y:auto}
-#project .pane+.pane{margin-top:0}
-#project .divider{cursor:row-resize}
-#project .divider::after{width:2.75rem;height:.25rem}
+#project .pane{height:auto}
 .gear span{display:none}
 #compose{position:sticky;bottom:0;border-radius:0 0 .875rem .875rem}
 .settings{right:.5rem}
@@ -2590,6 +2581,8 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .call-body{padding-left:.7rem}
 .steps li{font-size:.72rem}
 }
+/* A screen worked by touch has no keys to hint at. */
+@media (hover:none) and (pointer:coarse){.kh,.keystrip{display:none!important}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 [data-motion="less"] *,[data-motion="less"] *::before,[data-motion="less"] *::after{animation:none!important;transition:none!important}
 
@@ -2626,9 +2619,8 @@ SETTINGS_JS = r"""
      Normal up it scales with the text. */
   var WRAP_REM = 48;
   /* Where each divider sits, as the share the first panel takes, and how far it may go. */
-  var SPLITS = { split: [0.25, 0.75], splitTab: [0.3, 0.8], splitStack: [0.2, 0.8] };
-  var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show',
-                   split: 0.55, splitTab: 0.62, splitStack: 0.5 };
+  var SPLITS = { split: [0.25, 0.75] };
+  var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show', split: 0.55 };
   var CHOICES = { style: ['calm', 'lively'], theme: ['auto', 'light', 'dark'], motion: ['auto', 'less'],
                   keys: ['show', 'hide'] };
 
@@ -2687,8 +2679,6 @@ SETTINGS_JS = r"""
     element.style.fontSize = TEXT_STEPS[kept.text] + '%';
     element.style.setProperty('--wrap', wrapWidth(kept.text));
     element.style.setProperty('--split', String(kept.split));
-    element.style.setProperty('--split-tab', String(kept.splitTab));
-    element.style.setProperty('--split-stack', String(kept.splitStack));
     element.setAttribute('data-style', kept.style);
     element.setAttribute('data-theme', kept.theme);
     element.setAttribute('data-motion', kept.motion);
@@ -2907,6 +2897,23 @@ VIEW_JS = r"""
     }
   }
 
+  /* The few words beside a call's title: whose it is and how long it has
+     waited. On its own project's tab the project is already the heading. */
+  function callMeta(call, ownTab, checking) {
+    var whose = ownTab ? '' : call.project_name || '';
+    if (call.mate) whose = whose ? whose + ', from ' + call.mate : 'from ' + call.mate;
+    return [whose, checking ? 'checking' : call.waited || ''].filter(Boolean);
+  }
+
+  /* Where a row of tabs scrolls to so one tab is in sight: as little as it
+     takes, with a little room beside it, and never past the start. */
+  function tabScroll(left, width, tabLeft, tabWidth) {
+    var room = 12;
+    if (tabLeft - room < left) return Math.max(0, tabLeft - room);
+    if (tabLeft + tabWidth + room > left + width) return Math.max(0, tabLeft + tabWidth + room - width);
+    return left;
+  }
+
   /* A note sent from a project's own tab is no look, as a key in a factory's tab is not. */
   function withLook(ask, tab) {
     if (tab === 'home') return ask;
@@ -2917,7 +2924,7 @@ VIEW_JS = r"""
 
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, took: took, linkLabel: linkLabel,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
-              keyAction: keyAction, noteFor: noteFor, withLook: withLook };
+              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMView = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -3092,7 +3099,7 @@ document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.
 /* ---- the projects: what the Factory pane and the bridge strip show ---- */
 let M=null,mver='',mirrorError='';
 let tab=decodeURIComponent(location.hash.slice(1))||'home';
-let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selWorker=null,hl=null;
+let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selJob=null,hl=null,tabShown=null;
 const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
 const full=new Set();    /* the clipped titles opened in full */
 
@@ -3132,7 +3139,7 @@ function talkBox(head){
   const go=btn('btn primary','Send to Starship','talksend');go.disabled=acting;
   add(row,go,btn('btn','Cancel','cancel',null,'Escape'));box.appendChild(row);return box;
 }
-function callCard(n){
+function callCard(n,ownTab){
   const open=openCall===n.id;
   const mine=sent[n.id];
   const answered=n.answered||(mine&&mine.asking===n.asking?mine:null);
@@ -3144,9 +3151,8 @@ function callCard(n){
   const title=el('span','call-title');title.appendChild(linked(n.ask,false));row.appendChild(title);
   if(urgent)row.appendChild(el('span','tag urgent','Most urgent'));
   const meta=el('span','call-meta');
-  meta.appendChild(el('span','',n.project_name+(n.mate?', from '+n.mate:'')));
   const checking=n.checking||asked[n.id]===n.asking;
-  meta.appendChild(el('span','',checking?'checking':n.waited));
+  V.callMeta(n,ownTab,checking).forEach(words=>meta.appendChild(el('span','',words)));
   row.appendChild(meta);card.appendChild(row);
   if(!open)return card;
   const body=el('div','call-body');
@@ -3207,7 +3213,7 @@ function callCard(n){
   card.appendChild(body);return card;
 }
 function jobCard(job,p,watch){
-  const card=el('div','job');
+  const card=el('div','job'+(!watch&&selJob===job.id?' sel':''));card.dataset.job=job.id;
   const top=el('div','job-top');
   add(top,el('span','dot work'),clip('job-title',V.plainText(job.title),'job:'+job.id),job.elapsed?el('span','mins',job.elapsed):null);
   card.appendChild(top);card.appendChild(steps(job));
@@ -3218,7 +3224,7 @@ function jobCard(job,p,watch){
   card.appendChild(foot);return card;
 }
 function jobLine(job,p){
-  const line=el('div','jobline');
+  const line=el('div','jobline');line.dataset.job=job.id;
   add(line,el('span','dot '+job.mark),clip('t',V.plainText(job.title),'job:'+job.id),el('span','w '+job.mark,job.words));
   if(job.read)line.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));
   return line;
@@ -3251,12 +3257,18 @@ function feedSection(feed,named){
 function drawTabs(){
   const tabs=$('tabs');
   const list=[{id:'home',name:'Control Centre'}].concat(M.projects.map(p=>({id:p.id,name:p.name,needs:p.page.needs.length})));
+  /* Drawing the tabs again must not move the row; only a newly chosen tab is brought into sight. */
+  const left=tabs.scrollLeft;let chosen=null;
   tabs.replaceChildren();
   list.forEach(t=>{const b=btn('tab',t.name,'tab',{id:t.id});b.setAttribute('role','tab');
-    b.setAttribute('aria-selected',String(t.id===tab));
+    b.setAttribute('aria-selected',String(t.id===tab));if(t.id===tab)chosen=b;
     if(t.needs){b.title=t.needs===1?'1 thing needs you':t.needs+' things need you';
       b.appendChild(el('span','dot you'));}
     tabs.appendChild(b);});
+  tabs.scrollLeft=left;
+  if(chosen&&tabShown!==tab){const row=tabs.getBoundingClientRect(),at=chosen.getBoundingClientRect();
+    tabs.scrollLeft=V.tabScroll(tabs.scrollLeft,tabs.clientWidth,at.left-row.left+tabs.scrollLeft,at.width);}
+  tabShown=tab;
 }
 function drawBand(){
   const band=M.band,box=$('band');
@@ -3294,13 +3306,14 @@ function drawHome(){
   const needs=section('Needs you',M.needs.length);
   const call=M.band.call;
   if(call&&!call.listed){const u=el('p','urgent-line');u.appendChild(el('b','','Most urgent: '));u.appendChild(linked(call.title,true));needs.appendChild(u);}
-  if(M.needs.length)M.needs.forEach(n=>needs.appendChild(callCard(n)));
+  if(M.needs.length)M.needs.forEach(n=>needs.appendChild(callCard(n,false)));
   else needs.appendChild(el('p','empty','Nothing needs you right now.'));
   const now=section('Right now');
   M.projects.forEach(p=>{
     const box=el('div','proj'+(hl&&hl.kind==='project'&&hl.id===p.id?' hl':''));box.dataset.proj=p.id;
     const head=el('div','proj-head');
-    add(head,btn('proj-name',p.name,'tab',{id:p.id}),el('span','proj-q',p.queue.join(', ')),steerSwitch(p));
+    /* Who steers is switched on the project's own tab; here only a project the owner steers says so. */
+    add(head,btn('proj-name',p.name,'tab',{id:p.id}),el('span','proj-q',p.queue.join(', ')),p.you_steer?el('span','steer-note','You steer'):null);
     box.appendChild(head);
     p.jobs.forEach(job=>box.appendChild(job.busy?jobCard(job,p,true):jobLine(job,p)));
     p.routine.forEach(r=>{const line=el('p','line');
@@ -3322,7 +3335,7 @@ function drawProject(p){
   if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');head.appendChild(n);}
   const parts=[];
   const mine=M.needs.filter(n=>n.project===p.id);
-  if(mine.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n)));parts.push(s);}
+  if(mine.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n,true)));parts.push(s);}
   const work=section('Work',null,p.page.queue.join(', '));
   p.page.jobs.forEach(job=>work.appendChild(job.busy?jobCard(job,p,false):jobLine(job,p)));
   p.page.folded.forEach(group=>{
@@ -3356,19 +3369,6 @@ function drawProject(p){
   const open=new Set(Array.from($('ppBody').querySelectorAll('details[open]')).map(d=>d.dataset.fold));
   $('ppBody').replaceChildren.apply($('ppBody'),parts);
   $('ppBody').querySelectorAll('details').forEach(d=>{if(open.has(d.dataset.fold))d.open=true;});
-  const workers=$('workers');workers.replaceChildren();
-  $('workersCount').textContent=p.page.workers.length?String(p.page.workers.length):'';
-  p.page.workers.forEach(job=>{
-    const card=el('div','worker'+(selWorker===job.id?' sel':''));card.dataset.worker=job.id;
-    const h=el('h4');h.appendChild(clip('t',V.plainText(job.title),'worker:'+job.id));
-    if(job.elapsed)h.appendChild(el('span','e',job.elapsed));
-    card.appendChild(h);
-    if(job.busy)card.appendChild(steps(job));
-    card.appendChild(el('p','doing'+(job.quiet?' quiet':''),job.words));
-    if(job.read){const r=el('div','rowb');r.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));card.appendChild(r);}
-    workers.appendChild(card);
-  });
-  if(!p.page.workers.length)workers.appendChild(el('p','empty','No one is working here right now.'));
 }
 function drawKeys(){
   const strip=$('keystrip');strip.replaceChildren();
@@ -3390,7 +3390,7 @@ function draw(){
   drawKeys();
   document.querySelectorAll('.clip').forEach(e=>e.classList.toggle('over',e.classList.contains('full')||e.scrollHeight>e.clientHeight+1));
   if(caret){const area=$('talkText');if(area){area.focus();area.setSelectionRange(caret[0],caret[1]);}}
-  dividers.forEach(d=>d.label());
+  homeDivider.label();
 }
 function show(id,flash){
   tab='home';openCall=id;chose=true;setSide('projects');draw();
@@ -3455,7 +3455,7 @@ function openKeys(open){$('keysSheet').hidden=!open;$('keysBtn').setAttribute('a
 async function perform(d){
   let answer=null;
   switch(d.act){
-    case 'tab':tab=d.id;selWorker=null;hl=null;if(talk&&talk.kind==='talk')talk=null;
+    case 'tab':tab=d.id;selJob=null;hl=null;if(talk&&talk.kind==='talk')talk=null;
       history.replaceState(null,'',tab==='home'?location.pathname:'#'+encodeURIComponent(tab));draw();return;
     case 'back':if(tab!=='home')perform({act:'tab',id:'home'});return;
     case 'move':move(Number(d.step));return;
@@ -3471,8 +3471,8 @@ async function perform(d){
     case 'talk':confirming=null;talk=d.kind==='talk'?{kind:'talk',factory:d.factory,text:''}:{kind:d.kind,item:d.id,text:''};
       if(d.id){openCall=d.id;chose=true;}
       draw();{const area=$('talkText');if(area)area.focus();}return;
-    case 'watch':tab=d.factory;selWorker=d.job;hl=null;draw();
-      {const card=document.querySelector('[data-worker="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'nearest'});}return;
+    case 'watch':tab=d.factory;selJob=d.job;hl=null;draw();
+      {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
     case 'send':{
       const c=confirming;const n=c&&need(c.item);if(!n)return;
       answer=await act(V.noteFor(c.keep?{act:'keep'}:{act:'answer',option:c.option},n));
@@ -3533,7 +3533,7 @@ function drawSettings(){
 function change(name,value){
   const next=Object.assign({},settings);next[name]=value;
   settings=FS.apply(document.documentElement,FS.save(storage,next));drawSettings();autosize();
-  dividers.forEach(d=>d.label());
+  homeDivider.label();
 }
 function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
 $('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
@@ -3542,7 +3542,7 @@ $('settingsClose').addEventListener('click',closeSettings);
 $('textSize').addEventListener('input',e=>change('text',Number(e.target.value)));
 $('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
 $('keyHints').addEventListener('change',e=>change('keys',e.target.checked?'show':'hide'));
-$('resetSizes').addEventListener('click',()=>{['split','splitTab','splitStack'].forEach(n=>change(n,FS.DEFAULTS[n]));});
+$('resetSizes').addEventListener('click',()=>{Object.keys(FS.SPLITS).forEach(n=>change(n,FS.DEFAULTS[n]));});
 $('settings').addEventListener('click',e=>{const b=e.target.closest('[data-set]');if(b)change(b.dataset.set,b.dataset.value);});
 document.addEventListener('click',e=>{if(!$('settings').hidden&&!e.target.closest('#settings')&&!e.target.closest('#gear'))closeSettings();});
 $('gear').prepend(icon('sliders'));$('settingsClose').appendChild(icon('close'));$('keysClose').appendChild(icon('close'));
@@ -3552,42 +3552,34 @@ $('keysClose').addEventListener('click',()=>{openKeys(false);$('keysBtn').focus(
   add(tr,a,el('td','',k[1]));body.appendChild(tr);});}
 drawSettings();
 
-/* ---- the dividers: drag, double-click to reset, arrow keys when focused ---- */
-const narrow=window.matchMedia('(max-width:61rem)');
-function divider(node,main){
-  function conf(){
-    if(main.id==='project'&&narrow.matches)return {name:'splitStack',axis:'y'};
-    return {name:main.id==='home'?'split':'splitTab',axis:'x'};
-  }
-  function label(){const c=conf();node.setAttribute('aria-orientation',c.axis==='x'?'vertical':'horizontal');
-    node.setAttribute('aria-valuenow',String(Math.round(settings[c.name]*100)));}
-  function put(value,keep){const c=conf();const range=FS.SPLITS[c.name];
+/* ---- the divider: drag, double-click to reset, arrow keys when focused ---- */
+function divider(node,main,name){
+  function label(){node.setAttribute('aria-orientation','vertical');
+    node.setAttribute('aria-valuenow',String(Math.round(settings[name]*100)));}
+  function put(value,keep){const range=FS.SPLITS[name];
     value=Math.min(range[1],Math.max(range[0],value));
-    if(keep)change(c.name,value);else{settings[c.name]=value;FS.apply(document.documentElement,settings);label();}}
+    if(keep)change(name,value);else{settings[name]=value;FS.apply(document.documentElement,settings);label();}}
   node.addEventListener('pointerdown',e=>{
     if(e.button!==0)return;e.preventDefault();node.setPointerCapture(e.pointerId);node.classList.add('drag');
-    const moved=ev=>{const c=conf();const r=main.getBoundingClientRect();
-      put(c.axis==='x'?(ev.clientX-r.left)/r.width:(ev.clientY-r.top)/window.innerHeight,false);};
+    const moved=ev=>{const r=main.getBoundingClientRect();put((ev.clientX-r.left)/r.width,false);};
     const done=()=>{node.classList.remove('drag');node.removeEventListener('pointermove',moved);
-      node.removeEventListener('pointerup',done);node.removeEventListener('pointercancel',done);put(settings[conf().name],true);};
+      node.removeEventListener('pointerup',done);node.removeEventListener('pointercancel',done);put(settings[name],true);};
     node.addEventListener('pointermove',moved);node.addEventListener('pointerup',done);node.addEventListener('pointercancel',done);
   });
-  node.addEventListener('dblclick',()=>put(FS.DEFAULTS[conf().name],true));
+  node.addEventListener('dblclick',()=>put(FS.DEFAULTS[name],true));
   node.addEventListener('keydown',e=>{
-    const c=conf();const range=FS.SPLITS[c.name];const now=settings[c.name];
-    const less=c.axis==='x'?'ArrowLeft':'ArrowUp',more=c.axis==='x'?'ArrowRight':'ArrowDown';
+    const range=FS.SPLITS[name];const now=settings[name];
     let next=null;
-    if(e.key===less)next=now-0.02;else if(e.key===more)next=now+0.02;
+    if(e.key==='ArrowLeft')next=now-0.02;else if(e.key==='ArrowRight')next=now+0.02;
     else if(e.key==='Home')next=range[0];else if(e.key==='End')next=range[1];
-    else if(e.key==='Enter')next=FS.DEFAULTS[c.name];
+    else if(e.key==='Enter')next=FS.DEFAULTS[name];
     if(next===null)return;
     e.preventDefault();e.stopPropagation();put(next,true);
   });
   label();
   return {label:label};
 }
-const dividers=[divider($('divHome'),$('home')),divider($('divTab'),$('project'))];
-narrow.addEventListener('change',()=>dividers.forEach(d=>d.label()));
+const homeDivider=divider($('divHome'),$('home'),'split');
 
 document.querySelectorAll('.brand').forEach(b=>b.prepend(ship()));
 setSide('projects');poll();mirror();
@@ -3696,10 +3688,6 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 </main>
 <main class="main" id="project" hidden>
 <section class="pane" aria-label="Project"><div class="pp-head" id="ppHead"></div><div class="p-body" id="ppBody"></div></section>
-<div class="divider" id="divTab" role="separator" tabindex="0" aria-label="Move the line between the project and its workers" aria-valuemin="20" aria-valuemax="80" title="Drag to resize; double-click to reset"></div>
-<section class="pane" aria-label="Workers at work">
-<div class="pane-head"><h2>Workers at work</h2><span class="state" id="workersCount"></span></div>
-<div class="p-body" id="workers"></div></section>
 </main>
 <footer class="keystrip" id="keystrip" aria-label="Keys"></footer>
 </div>
