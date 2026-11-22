@@ -154,7 +154,7 @@ Herdr is ready. Open a NEW terminal window (so the new commands are on your PATH
 
   onboard-starship
       Opens your whole desk at once: Herdr with your first mate, the bridge
-      strip and the Factory pane, and on a Mac your Starship web page and a
+      strip and the Factory pane, your Starship web page, and on a Mac a
       Terminal window on it all.
 
 Or by hand: type herdr, and in the shell it shows, start your first mate:
