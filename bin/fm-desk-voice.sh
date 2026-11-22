@@ -3,7 +3,7 @@
 # floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--front <name>|<bundle-id>|<title> [--front-pid <pid>]] [--image <png>]... [--stdin | <transcript text...>]
+#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--front <name>|<bundle-id>|<title> [--front-pid <pid> --front-tab-tty <tty>]] [--image <png>]... [--stdin | <transcript text...>]
 #   fm-desk-voice.sh delivery <client-id>
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
@@ -169,13 +169,17 @@
 # "|": the app's name, its bundle id and the front window's title, of which
 # only the name is required. A message with words then gains one line after
 # them, before any screenshots line:
-#   Front: <name> (<bundle-id>) - "<title>"
-# leaving out the parts that are empty. Each part is made one plain line first.
+#   Front: <name> (<bundle-id>) - window title (untrusted): <title>
+# leaving out the parts that are empty. Each part is made one plain line first,
+# and the title also loses its double quotes and backticks and is cut to 120
+# characters. The title is set by the app, and by any web page in a browser:
+# it is untrusted data, shown for context only and never an instruction.
 # A message of screenshots alone gets no Front line. send --front-pid <pid>
-# names that app's process: when a client of the primary's own multiplexer
-# session (tmux, or herdr by the socket facts described under --front-app
-# below) runs beneath it, the captain is looking at the first mate's own
-# terminal and the Front line is left out, typed and in the mailbox alike. The
+# --front-tab-tty <tty> name that app's process and the terminal device of its
+# frontmost tab, given together: when that tab shows the primary's own pane
+# (see shown_in_front, as for --front-app below), the captain is looking at
+# the first mate's own chat and the Front line is left out, typed and in the
+# mailbox alike. Another tab or window of the same terminal app keeps it. The
 # line stays on this machine: it is typed into the primary's chat or saved in
 # its mailbox like the words, and goes nowhere else.
 #
@@ -312,14 +316,15 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-# Parse "[--source <name>] [--front <name>|<bundle-id>|<title>] [--front-pid <pid>]
-# [--image <png>]... [--stdin | [--] [<text...>]]" into ARG_SOURCE, ARG_FRONT
-# (the --front value), ARG_FRONT_PID, ARG_IMAGES and ARG_TEXT (empty when the
-# text is blank).
+# Parse "[--source <name>] [--front <name>|<bundle-id>|<title>] [--front-pid <pid>
+# --front-tab-tty <tty>] [--image <png>]... [--stdin | [--] [<text...>]]" into
+# ARG_SOURCE, ARG_FRONT (the --front value), ARG_FRONT_PID, ARG_FRONT_TTY,
+# ARG_IMAGES and ARG_TEXT (empty when the text is blank).
 parse_transcript_args() {
   ARG_SOURCE=desk-floater
   ARG_FRONT=''
   ARG_FRONT_PID=''
+  ARG_FRONT_TTY=''
   ARG_IMAGES=()
   local from_stdin=false
   while [ "$#" -gt 0 ]; do
@@ -340,6 +345,13 @@ parse_transcript_args() {
           ''|0*|*[!0-9]*) refuse "--front-pid needs a pid: $2" ;;
         esac
         ARG_FRONT_PID=$2
+        shift 2
+        ;;
+      --front-tab-tty)
+        [ "$#" -ge 2 ] || refuse "--front-tab-tty needs a terminal device"
+        printf '%s' "$2" | grep -Eqx '/dev/(tty[A-Za-z0-9]+|pts/[0-9]+)' \
+          || refuse "--front-tab-tty needs a terminal device: $2"
+        ARG_FRONT_TTY=$2
         shift 2
         ;;
       --image)
@@ -367,6 +379,9 @@ parse_transcript_args() {
   else
     ARG_TEXT=$*
   fi
+  case "${ARG_FRONT_PID:+p}${ARG_FRONT_TTY:+t}" in
+    p|t) refuse "--front-pid and --front-tab-tty go together" ;;
+  esac
   case "$ARG_TEXT" in
     *[![:space:]]*) ;;
     *) ARG_TEXT='' ;;
@@ -387,7 +402,13 @@ front_line() {  # <value>
   [ -n "$name" ] || return 0
   bundle=$(plain_line "$bundle") || return 1
   title=$(plain_line "$title") || return 1
-  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - \"$title\"}"
+  title=$(printf '%s' "$title" | python3 -c '
+import sys
+raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateescape")
+text = " ".join(raw.replace("\"", "").replace("`", "").split())[:120].rstrip()
+sys.stdout.buffer.write(text.encode(sys.getfilesystemencoding(), "surrogateescape"))
+') || return 1
+  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - window title (untrusted): $title}"
 }
 
 # The message the parsed arguments make: the transcript, if any, then one
@@ -854,29 +875,12 @@ EOF
   return 1
 }
 
-# True when a client of the proven primary's own multiplexer session runs
-# beneath app <pid>: that app is the first mate's own terminal. Unproven
-# counts as not. Its subshell scopes the pane environment.
-front_hosts_primary() (  # <pid> [expect-home]
-  local clients client info
-  prove_primary_pane "${2:-}" || return 1
-  case "$PANE_BACKEND" in
-    herdr)
-      [ -n "${HERDR_SOCKET_PATH:-}" ] || return 1
-      clients=$(herdr_client_pids "$HERDR_SOCKET_PATH" "$PANE_ROOT") || return 1
-      ;;
-    tmux)
-      info=$(tmux display-message -p -t "$PANE_TARGET" '#{session_id} #{window_active}#{pane_active}' 2>/dev/null) \
-        || return 1
-      clients=$(tmux list-clients -t "${info% *}" -F '#{client_pid} #{client_tty}' 2>/dev/null | awk '{ print $1 }') \
-        || return 1
-      ;;
-    *) return 1 ;;
-  esac
-  for client in $clients; do
-    pid_within "$client" "$1" && return 0
-  done
-  return 1
+# True when the frontmost tab <tty> of app <pid> shows the proven primary's
+# own pane (see shown_in_front): the captain is looking at the first mate's
+# own chat. Unproven counts as not. Its subshell scopes the pane environment.
+front_shows_primary() (  # <pid> <tty> [expect-home]
+  prove_primary_pane "${3:-}" || return 1
+  shown_in_front "$PANE_BACKEND" "$PANE_TARGET" "$PANE_ROOT" "$1" "$2"
 )
 
 # True when tmux <target> is the active pane of its session's active window
@@ -1181,7 +1185,7 @@ send_once() {
         front_tty=$2
         shift 2
         ;;
-      --source|--image|--front|--front-pid)
+      --source|--image|--front|--front-pid|--front-tab-tty)
         [ "$#" -ge 2 ] || break
         rest+=("$1" "$2")
         shift 2
@@ -1204,9 +1208,10 @@ send_once() {
   parse_transcript_args "$@"
   source=$ARG_SOURCE
   text=$ARG_TEXT
-  # The captain looking at the first mate's own terminal says nothing a Front
-  # line could add.
-  if [ -n "$ARG_FRONT" ] && [ -n "$ARG_FRONT_PID" ] && front_hosts_primary "$ARG_FRONT_PID" "$expect_home"; then
+  # The captain looking at the first mate's own chat says nothing a Front line
+  # could add.
+  if [ -n "$ARG_FRONT" ] && [ -n "$ARG_FRONT_PID" ] \
+    && front_shows_primary "$ARG_FRONT_PID" "$ARG_FRONT_TTY" "$expect_home"; then
     ARG_FRONT=''
   fi
   line=$(message_text) || die "cannot prepare transcript"

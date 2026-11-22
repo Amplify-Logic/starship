@@ -749,28 +749,34 @@ enum FrontTab {
 /// so Firstmate knows what "this" or "here" means. Read with the permissions
 /// the floater already has: the focused window's title over Accessibility,
 /// else the window list's name, which Screen Recording reveals. With neither,
-/// the app's name goes alone.
+/// the app's name goes alone. For a terminal app whose front tab FrontTab can
+/// name, `tty` lets the script leave the line out when that tab is Firstmate's
+/// own chat.
 struct Frontmost: Equatable, Sendable {
     let pid: pid_t
     let name: String
     let bundleID: String?
     let title: String?
+    var tty: String? = nil
 
     /// The value of `send --front`: name, bundle id and title, split by "|".
     var argument: String {
         [name, bundleID ?? "", title ?? ""].joined(separator: "|")
     }
 
-    /// The frontmost app and its front window, or nil when the floater itself
-    /// is in front or no app is.
-    @MainActor
-    static func current() -> Frontmost? {
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+    /// App <app> and its front window, or nil when <app> is the floater
+    /// itself. It asks the app over Accessibility and Apple Events, so it runs
+    /// off the main actor.
+    static func read(_ app: NSRunningApplication) -> Frontmost? {
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let name = app.localizedName, !name.isEmpty else { return nil }
         let pid = app.processIdentifier
+        var tty: String?
+        if case .tty(let found) = FrontTab.tty(of: app) {
+            tty = found
+        }
         return Frontmost(pid: pid, name: name, bundleID: app.bundleIdentifier,
-                         title: focusedTitle(of: pid) ?? listedTitle(of: pid))
+                         title: focusedTitle(of: pid) ?? listedTitle(of: pid), tty: tty)
     }
 
     /// The focused window's title over Accessibility, asked with a short
@@ -782,8 +788,10 @@ struct Frontmost: Equatable, Sendable {
         var window: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
               let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        let element = window as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var title: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title) == .success
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title) == .success
         else { return nil }
         return nonEmpty(title as? String)
     }
@@ -1021,8 +1029,9 @@ final class FloaterModel: ObservableObject {
     // message while it keeps playing. See VoiceCapture.
     private let capture = VoiceCapture()
     private var recordURL: URL?
-    /// The app and window in front when the current talk began.
-    private var captureFront: Frontmost?
+    /// The app and window in front when the current talk began, read in the
+    /// background so it never delays the recording.
+    private var captureFront: Task<Frontmost?, Never>?
     private var pressStartedAt: Date?
     private var latched = false
     private var fromHotkey = false
@@ -1525,14 +1534,17 @@ final class FloaterModel: ObservableObject {
 
     private func begin(_ purpose: Purpose) {
         self.purpose = purpose
-        // What the captain was looking at as they started talking.
-        captureFront = purpose == .firstmate ? Frontmost.current() : nil
         mode = .starting
         status = "Starting…"
         latched = false
         fromHotkey = false
         pressStartedAt = nil
         startRecording()
+        // What the captain was looking at as they started talking.
+        captureFront = nil
+        if purpose == .firstmate, let app = NSWorkspace.shared.frontmostApplication {
+            captureFront = Task.detached(priority: .userInitiated) { Frontmost.read(app) }
+        }
     }
 
     private var listeningStatus: String {
@@ -1617,7 +1629,7 @@ final class FloaterModel: ObservableObject {
         }
     }
 
-    func transcribeAndDeliver(_ url: URL, purpose: Purpose, front talkFront: Frontmost? = nil) {
+    func transcribeAndDeliver(_ url: URL, purpose: Purpose, front talkFront: Task<Frontmost?, Never>? = nil) {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
             // Near silence holds no words to send or to retry: say so at once
             // rather than saving it and retrying it.
@@ -1684,8 +1696,9 @@ final class FloaterModel: ObservableObject {
                     }
                 }
             case .firstmate:
+                let front = await talkFront?.value
                 await MainActor.run {
-                    self.voiceTranscribed(text, audio: url, front: talkFront)
+                    self.voiceTranscribed(text, audio: url, front: front)
                 }
             }
         }
@@ -1851,14 +1864,17 @@ final class FloaterModel: ObservableObject {
     /// and returns the status to show. It is typed into firstmate's own chat;
     /// bin/fm-desk-voice.sh falls back to its mailbox when that pane cannot be
     /// reached.
-    /// `front` adds the "Front:" line, which the script leaves out when that
-    /// app is Firstmate's own terminal.
+    /// `front` adds the "Front:" line, which the script leaves out when the
+    /// front tab it names shows Firstmate's own chat.
     nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String?, images: [String],
                                             front: Frontmost?) -> String? {
         let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
         var args = ["send", "--source", "desk-floater"]
         if let front {
-            args += ["--front", front.argument, "--front-pid", String(front.pid)]
+            args += ["--front", front.argument]
+            if let tty = front.tty {
+                args += ["--front-pid", String(front.pid), "--front-tab-tty", tty]
+            }
         }
         for image in images {
             args += ["--image", image]
