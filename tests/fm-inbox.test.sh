@@ -581,6 +581,40 @@ run_inbox "$home" progress "$pid" "   " >/dev/null 2>&1 || empty_code=$?
 expect_code 1 "$empty_code" "an empty progress line is refused"
 pass "progress lines publish in order before the one reply and close with it"
 
+# On 2026-11-22 a crew's conversation showed replies that began "--text" and
+# one that was only "--file": an option the reply command does not have had
+# been typed before the words, and everything after the note id was recorded as
+# the reply. A first word that looks like an option is refused, for a reply and
+# for a progress line, and `--` puts through words that really start that way.
+home=$(make_home dashes)
+queued=$(run_inbox "$home" note "which glaze for the new cups") || fail "note for the option check failed"
+did=${queued#queued }
+did=${did%%$'\n'*}
+dash_code=0
+dash_out=$(run_inbox "$home" reply "$did" --text "Already decided: the green one." 2>&1) || dash_code=$?
+expect_code 1 "$dash_code" "a reply whose first word is an option the command does not have is refused"
+assert_contains "$dash_out" "--text" "the refusal names the word it took for an option"
+assert_contains "$dash_out" "put -- before" "the refusal says how to send words that really start with dashes"
+dash_code=0
+run_inbox "$home" reply "$did" --file >/dev/null 2>&1 || dash_code=$?
+expect_code 1 "$dash_code" "a reply that is only an option is refused"
+dash_code=0
+run_inbox "$home" progress "$did" --text "On it." >/dev/null 2>&1 || dash_code=$?
+expect_code 1 "$dash_code" "a progress line whose first word is an option is refused"
+recorded=$(run_inbox "$home" receipts | python3 -c 'import json,sys
+row=json.load(sys.stdin)["pending"][0]
+print(len(row["progress"]), row["reply"])')
+assert_equals "0 None" "$recorded" "a refused reply or progress line records nothing"
+run_inbox "$home" progress "$did" -- "--text was a slip, looking now." >/dev/null \
+  || fail "a progress line after -- failed"
+run_inbox "$home" reply "$did" -- "--green-- is the glaze, as agreed." >/dev/null || fail "a reply after -- failed"
+recorded=$(run_inbox "$home" receipts | python3 -c 'import json,sys
+row=json.load(sys.stdin)["pending"][0]
+print(row["progress"][0]["body"] + "|" + row["reply"]["body"])')
+assert_equals "--text was a slip, looking now.|--green-- is the glaze, as agreed." "$recorded" \
+  "words after -- are recorded as they are, dashes and all"
+pass "a reply or progress line never takes a mistyped option for its words"
+
 # forget removes the note saved under a request id, acknowledged or not, with
 # its reply and progress, and frees the request id; an unknown one is a no-op.
 home=$(make_home forget)

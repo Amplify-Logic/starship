@@ -613,14 +613,18 @@ write_screen() {  # <home>
      {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
       "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false}],
     "folded": [{"words": "1 deferred to a date", "jobs": [{"title": "Charge for seeds", "queue": "deferred"}]}],
-    "rules": ["English only."], "rules_size": "rules 13 / 1,500 characters", "rules_mark": "", "learned": [],
-    "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}},
+    "rules": ["English only."], "rules_size": "rules 1,400 / 1,500 characters · near the cap; past it its jobs get none of these rules",
+    "rules_mark": "near", "learned": [],
+    "feed": {"title": "LAST 12 HOURS", "events": []},
+    "talk": [{"when": "Fri 12:00", "who": "you", "said": "Keep the rows wide."},
+             {"when": "Fri 13:00", "who": "Starship", "said": "Done, a hand apart."},
+             {"when": "06:00", "who": "you", "said": "Are the labels in?"}]}},
   {"id": "recipe-box", "name": "Recipe Box", "state": "idle", "steered_by": "Starship", "about": ["0 workers, 0 busy"],
    "queue": "idle since 06:00 · nothing queued", "jobs": [], "routine": [], "next": null,
    "page": {"needs": [], "queue": ["nothing queued"], "jobs": [], "workers": [], "folded": [], "rules": [],
     "rules_size": "", "rules_mark": "", "learned": [], "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}}],
  "feed": {"title": "SINCE YOU LAST LOOKED, 2 h ago", "events": [
-  {"when": "06:00", "actor": "Recipe Box", "factory": "recipe-box", "word": "landed", "text": "A landed gentry recipe is in.", "colour": "green"},
+  {"when": "06:00", "actor": "Recipe Box", "factory": "recipe-box", "word": "went live", "text": "A landed gentry recipe", "colour": "green"},
   {"when": "06:11", "actor": "Garden Journal", "factory": "garden-journal", "word": "PR ready",
    "text": "The queued orders page has its PR ready.", "colour": "green"},
   {"when": "07:20", "actor": "Garden Journal", "factory": "garden-journal", "word": "asked you",
@@ -687,14 +691,25 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '.projects[0] | "\(.you_steer) \(.queue | join(", ")) | \(.next.title) \(.next.once_you_answer) | \(.about)"')" \
     "true 3 waiting to start, 2 in line | Harvest notes true | a phone journal for a vegetable garden. 2 workers, 1 busy" \
     "a project's row"
-  assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title) | \(.workers[0].title)"')" \
-    "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds | Garden reminders" \
+  assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title)"')" \
+    "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds" \
     "a project's own page"
+  # The page draws no column of workers beside a project's page: its work list
+  # already names each one, so the mirror hands the page no second list of them.
+  assert_equals "$(m '.projects[0].page | has("workers")')" "false" "the mirror hands the page a second list of workers"
+  assert_equals "$(m '.projects[0].page | "\(.rules_size) [\(.rules_mark)]"')" \
+    "rules 1,400 / 1,500 characters. near the cap; past it its jobs get none of these rules [near]" \
+    "the rules' size, which the pane says only near the cap or over it"
+  assert_equals "$(m '.projects[1].page.rules_size')" "" "a project the pane gives no rules size has none"
+  # What was said reads newest first on the page; the pane lists it oldest first.
+  assert_equals "$(m '.projects[0].page.talk | map("\(.when) \(.who): \(.said)") | join(" / ")')" \
+    "06:00 you: Are the labels in? / Fri 13:00 Starship: Done, a hand apart. / Fri 12:00 you: Keep the rows wide." \
+    "a project's conversation, newest first"
   assert_equals "$(m '.projects[1] | "\(.idle) \(.queue | join(", "))"')" "true idle since 06:00, nothing waiting to start" \
     "an idle project"
   assert_equals "$(m '.feed.title')" "Since you last looked, 2 h ago" "the feed's heading"
   assert_equals "$(m '.feed.events | map("\(.word): \(.text) [\(.mark)]") | join("; ")')" \
-    "went live: A landed gentry recipe is in. [done]; ready for your OK: The queued orders page is ready for your OK. [done]; asked you: Harvest chart needs your call. [you]" \
+    "went live: A landed gentry recipe [done]; ready for your OK: The queued orders page is ready for your OK. [done]; asked you: Harvest chart needs your call. [you]" \
     "the feed"
   assert_equals "$(mirror "$home" "?since=$(jq -r .version <<<"$out")" | jq -c .)" \
     "{\"version\":\"$(jq -r .version <<<"$out")\",\"unchanged\":true,\"clock\":\"Sat 08:00\"}" "an unchanged reading is not sent again"
@@ -1099,12 +1114,12 @@ const out = [];
 out.push('first visit: ' + JSON.stringify(S.load(storage)));
 kept['fm-web-settings'] = JSON.stringify({ text: 0, style: 'lively', theme: 'dark', motion: 'less' });
 out.push('after the first version: ' + JSON.stringify(S.load(storage)));
-S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less', keys: 'hide', split: 0.4, splitTab: 0.7, splitStack: 0.3 });
+S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less', keys: 'hide', split: 0.4, splitTab: 0.7 });
 out.push('next visit: ' + JSON.stringify(S.load(storage)));
 const el = page();
 S.apply(el, S.load(storage));
 out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(el.style.props) + ' ' + JSON.stringify(el.attrs));
-S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less', keys: 'maybe', split: 5, splitTab: 'wide', splitStack: 0.05 });
+S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less', keys: 'maybe', split: 5 });
 out.push('a bad value: ' + JSON.stringify(S.load(storage)));
 kept[S.KEY] = '{not json';
 out.push('unreadable: ' + JSON.stringify(S.load(storage)));
@@ -1114,22 +1129,24 @@ out.push('chat width: ' + S.TEXT_NAMES.map((name, text) => { const p = page(); S
 console.log(out.join('\n'));
 JS
 ) || fail "the settings script did not run: $out"
-  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
-after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
-next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"splitTab":0.7,"splitStack":0.3}
-on the page: 120% {"--wrap":"48rem","--split":"0.4","--split-tab":"0.7","--split-stack":"0.3"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
-a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"splitTab":0.62,"splitStack":0.2}
-unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5}
-no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"splitTab":0.62,"splitStack":0.5} 0
+  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55}
+after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55}
+next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4}
+on the page: 120% {"--wrap":"48rem","--split":"0.4"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
+a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75}
+unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55}
+no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55} 0
 sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal
 chat width: Smaller 60rem, Small 53.33rem, Normal 48rem, Large 48rem, Largest 48rem' "the settings a browser keeps and what they put on the page"
-  pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel sizes, and smaller text widens the chat"
+  pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel size, drop a size kept for a panel that is gone, and smaller text widens the chat"
 }
 
 # The page's rules, fetched as the browser fetches them and run without a page:
 # the chat folded into messages and one quiet line per run of steps, links as
 # short labels, and every key naming the button it stands for, so a key sends
-# the note that button sends, with no look from a project's tab.
+# the note that button sends, with no look from a project's tab. On 2026-11-22
+# every call on a project's own tab repeated that project's name beside its
+# title, and on a phone the chosen tab could sit out of sight.
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes() {
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
   local home root port out
@@ -1173,6 +1190,12 @@ out.push('notes: ' + JSON.stringify([
 out.push('look: ' + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'home')) + ' '
   + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'garden')));
 out.push('strip: ' + V.keyStrip({}).map(k => k.join(' ')).join(', ') + ' | ' + V.keyStrip({ confirming: true }).map(k => k.join(' ')).join(', '));
+const card = { project_name: 'Garden Journal', waited: 'waiting 3 h' };
+const mates = { project_name: 'Garden Journal', waited: 'ready 53 min', mate: 'near' };
+out.push('beside a call: ' + [V.callMeta(card, false, false), V.callMeta(card, true, false), V.callMeta(card, true, true),
+  V.callMeta(mates, false, false), V.callMeta(mates, true, false), V.callMeta({}, true, false)].map(m => m.join(' · ') || '-').join(' | '));
+out.push('tabs: ' + [V.tabScroll(0, 300, 20, 120), V.tabScroll(0, 300, 420, 120), V.tabScroll(400, 300, 100, 120),
+  V.tabScroll(400, 300, 0, 120), V.tabScroll(250, 300, 400, 120)].join(' '));
 console.log(out.join('\n'));
 JS
 ) || fail "the page's rules did not run: $out"
@@ -1187,9 +1210,11 @@ while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","
 anywhere: ArrowDown={"act":"move","step":1} ArrowUp={"act":"move","step":-1} ?={"act":"keys"} Escape={"act":"back"} q=null
 notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"},{"action":"keep","item":"garden-share","asking":"1794636660"},{"action":"settled","item":"garden-chart","asking":"1794632400"},{"action":"steer","factory":"garden","who":"you"},{"action":"read","item":"garden-chart"},{"action":"discuss","item":"garden-chart","asking":"1794632400","text":"why?"},{"action":"talk","factory":"garden","text":"hello"}]
 look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}
-strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel' \
-    "how the page folds the chat, labels links, and what each key sends"
-  pass "the chat folds into messages and quiet lines, links read as short labels, and keys send the buttons' notes"
+strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel
+beside a call: Garden Journal · waiting 3 h | waiting 3 h | checking | Garden Journal, from near · ready 53 min | from near · ready 53 min | -
+tabs: 0 252 88 0 250' \
+    "how the page folds the chat, labels links, what each key sends, what sits beside a call and where the tabs scroll to"
+  pass "the chat folds into messages and quiet lines, links read as short labels, keys send the buttons' notes, a call on its own project's tab does not repeat the project, and a chosen tab is brought into sight"
 }
 
 # The live line while the first mate works: what it is doing now in plain

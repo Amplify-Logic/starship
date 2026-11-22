@@ -131,13 +131,21 @@ function normalizeRepo(repo) {
   return clean.split("/").filter(Boolean).at(-1) || "Unassigned";
 }
 
+// A sentence ends at a full stop, question mark or exclamation mark only when
+// white space or the end of the text follows, so "5.3" and "4.20" stay whole.
 function sentences(text) {
-  return text.match(/[^.!?]+[.!?]?/g)?.map((item) => item.trim()).filter(Boolean) || [];
+  return text.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
 }
 
+// What may follow a recommendation and is no part of it: a pointer that starts
+// a new sentence ("See the notes.") or carries its own label ("Report: ...").
+// The same word inside the recommendation's own sentence stays in it.
+const AFTER_RECOMMENDATION =
+  /(?:(?<=[.!?])\s+(?:Report|Evidence|Follow-on|See)\b|\s+(?:Report|Evidence|Follow-on|See)\s*:)[\s\S]*$/;
+
 export function recommendationFrom(reason) {
-  const explicit = reason.match(/\bRecommendation:\s*(.*?)(?=(?:\s+(?:Report|Evidence|Follow-on|See)\b)|$)/i);
-  if (explicit) return explicit[1].trim();
+  const explicit = reason.match(/\bRecommendation:\s*([\s\S]*)$/i);
+  if (explicit) return explicit[1].replace(AFTER_RECOMMENDATION, "").trim();
   const recommended = sentences(reason).find((sentence) => /\b(recommend(?:s|ed|ation)?|advises?)\b/i.test(sentence));
   return recommended || "";
 }

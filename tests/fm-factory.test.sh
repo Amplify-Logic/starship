@@ -514,7 +514,7 @@ test_the_record_words_every_state() {
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | "\(.state) \(.idle_since)"')" "idle 1794636000" \
     "an idle factory knows since when"
   assert_equals "$(q '[.feed[] | "\(.word)|\(.actor)"] | join(" ")')" \
-    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal went live|Recipe Box asked you|Sample Shop" \
     "the feed, newest first: outcomes and the owner's calls only"
   assert_equals "$(q "[$shop | select(.queue != null) | \"\(.id)=\(.queue)\"] | join(\" \")")" \
     "shop-provider=waits on you shop-gift=in line shop-reviews=in line shop-later=on hold shop-tax=deferred" \
@@ -601,7 +601,7 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_contains "$out" "       x  Already settled?" "a question offers already settled"
   assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
-  has_line "$out" " ● Sharper cup photos needs a look" "a blocked job"
+  has_line "$out" " ● Sharper cup photos waiting on Starship" "a blocked job"
   has_line "$out" " ● Print shipping labels waiting · tries again 09:30" "a waiting job"
   has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
   has_line "$out" " Recipe Box idle since 06:00 · nothing queued Starship steers" "an idle factory is one row"
@@ -625,8 +625,10 @@ test_the_plain_screen_is_the_record_as_text() {
 
 # A factory's rules reach its jobs' briefs only while they fit the cap
 # bin/fm-brief.sh applies, so its page shows their size against that cap, in
-# the same count the brief's profile lookup reports: plain under it, marked
-# near it, and said plainly to be left out over it. No rules, no size line.
+# the same count the brief's profile lookup reports, once it matters: marked
+# near the cap, and said plainly to be left out over it. Rules well under the
+# cap show no size, and neither does a factory with no rules: on 2026-11-22
+# every factory's page carried "rules 138 / 1,500 characters" at all times.
 test_a_factory_page_shows_its_rules_size_against_the_cap() {
   reset_case
   write_projects
@@ -648,8 +650,8 @@ test_a_factory_page_shows_its_rules_size_against_the_cap() {
     "the brief's profile lookup reports the size the page shows"
 
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory sample-shop failed"
-  has_line "$out" " rules 69 / 1,500 characters" "rules under the cap show their size"
-  assert_not_contains "$out" "the cap" "rules under the cap were marked"
+  assert_contains "$out" "   · English only." "rules under the cap are not listed"
+  assert_not_contains "$out" "characters" "rules well under the cap showed their size"
   out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory garden-journal failed"
   has_line "$out" " rules 1,500 / 1,500 characters · near the cap; past it its jobs get none of these rules" \
     "rules at the cap are marked near it"
@@ -659,7 +661,7 @@ test_a_factory_page_shows_its_rules_size_against_the_cap() {
   out=$(python3 "$FACTORY" --plain --width 92 --factory shop-api) || fail "--plain --factory shop-api failed"
   assert_contains "$out" "none written down yet" "a factory with no rules"
   assert_not_contains "$out" "characters" "a factory with no rules showed a size"
-  pass "factory page: rules show their size against the brief's cap, marked near it and over it"
+  pass "factory page: rules show their size against the brief's cap only near it and over it"
 }
 
 # On 2026-11-15 the owner was told the backlog held about a hundred queued jobs
@@ -880,6 +882,50 @@ test_only_the_highlighted_call_opens_as_a_card() {
   pass "factory pane: only the highlighted call opens as a card; every other call is one line"
 }
 
+# On 2026-11-22 the owner's cards stopped short: a reason ended at 170
+# characters and a suggestion at 140, sometimes with no mark that anything was
+# left out, and what was cut could be read nowhere. They also named files by
+# their path and work by its internal id. An open card carries every word of
+# its reason and suggestion, a file reads as what it is, and an id or revision
+# mark standing alone in brackets is left out.
+test_an_open_card_reads_whole_and_names_no_path_or_internal_id() {
+  reset_case
+  write_registry
+  write_world
+  local shapes out why want_why want_tip
+  shapes=$(jq '(.decisions[] | select(.id == "shop-provider")) |= (
+      .question = "On the shop plans page (shop-plans-page-p1), agreed 10 Nov 2026. From data/shop-provider-review-x1/report.md section 3. Saved cards need a provider, and the current one (v2) takes 2.9 percent of every sale and/or a flat fee, while the cheaper one takes 1.4 percent but pays out a week later. Changing provider means every customer with a saved card types it in once more, three weeks before the holiday rush."
+      | .recommendation = "Stay with the current one until the holidays are over, then move to the cheaper one in January (r2), when a week more before a payout matters least and there is time to tell every customer with a saved card.")' \
+    "$HOME_FIX/shapes.json") || fail "could not lengthen the question"
+  printf '%s\n' "$shapes" > "$HOME_FIX/shapes.json"
+  want_why="On the shop plans page, agreed 10 Nov 2026. From the report section 3. Saved cards need a provider, and the current one (v2) takes 2.9 percent of every sale and/or a flat fee, while the cheaper one takes 1.4 percent but pays out a week later. Changing provider means every customer with a saved card types it in once more, three weeks before the holiday rush."
+  want_tip="Stay with the current one until the holidays are over, then move to the cheaper one in January, when a week more before a payout matters least and there is time to tell every customer with a saved card."
+  take_record
+  why=$(q '.needs_you[] | select(.id == "shop-provider") | .why')
+  assert_equals "$why" "$want_why" "the reason is cut short, or names a path or an internal id"
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .recommendation')" "$want_tip" \
+    "the suggestion is cut short, or carries a revision mark"
+  out=$(python3 "$FACTORY" --plain --width 92 --item shop-provider | tr '\n' ' ' | tr -s ' ') || fail "--plain failed"
+  assert_contains "$out" "three weeks before the holiday rush." "the open card does not show the end of its reason"
+  assert_contains "$out" "Starship suggests: Stay with the current one" "the open card lost its suggestion"
+  assert_contains "$out" "to tell every customer with a saved card." "the open card does not show the end of its suggestion"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.needs[] | select(.id == "shop-provider") | .why')" "$want_why" \
+    "a second screen is not handed the whole reason"
+  # A file anywhere in the home, or outside it, reads the same way, and a folder as a folder.
+  reset_case
+  write_registry
+  write_world
+  shapes=$(jq '(.decisions[] | select(.id == "shop-provider")) |= (
+      .question = "Read /srv/shop/notes/price-list.md and the pictures in ~/shop/photos/ first; data/shop-fees-x2/page.html has the fees."
+      | .recommendation = "")' "$HOME_FIX/shapes.json") || fail "could not name the files"
+  printf '%s\n' "$shapes" > "$HOME_FIX/shapes.json"
+  take_record
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .why')" \
+    "Read the price list and the pictures in the photos folder first; the page has the fees." \
+    "a file or a folder does not read as what it is"
+  pass "factory card: an open card shows its whole reason and suggestion, a file as what it is, and no internal id"
+}
+
 # Merges are answered on the Factory pane, so finished work shows the short
 # plain section its PR opens with (In short, See it, You need to, Risk) beside the
 # merge choice, read once and kept, and a PR without that section shows none.
@@ -960,7 +1006,10 @@ SH
 
 # On 2026-11-15 the feed listed jobs as finished that had only been closed.
 # Finished work is work the backlog holds a merged change, a landing or a
-# report for; anything else that was closed reads closed.
+# report for; anything else that was closed reads closed. On 2026-11-22 the
+# owner read "<a long title> is in." and "<an answered question> was closed." as
+# titles with a tail: each of those rows now leads with what happened (went
+# live, report ready, settled) and then names the work.
 test_closed_work_reads_closed_and_only_delivered_work_reads_finished() {
   reset_case
   write_registry
@@ -982,19 +1031,123 @@ test_closed_work_reads_closed_and_only_delivered_work_reads_finished() {
   printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
   take_record
   assert_equals "$(q '[.feed[] | select(.job | test("^shop-(dropped|superseded|merged|local|scout|call)$")) | "\(.job)=\(.word)"] | sort | join(" ")')" \
-    "shop-call=closed shop-dropped=closed shop-local=landed shop-merged=landed shop-scout=finished shop-superseded=closed" \
+    "shop-call=settled shop-dropped=closed shop-local=went live shop-merged=went live shop-scout=report ready shop-superseded=closed" \
     "the word each closed job reads"
   out=$(python3 "$FACTORY" --plain --width 110) || fail "--plain failed"
   has_line "$out" " today Sample Shop closed Stamp card at checkout was closed; no change or report on record." \
     "a job closed with nothing built does not read closed"
   has_line "$out" " today Sample Shop closed Old checkout redesign was closed; no change or report on record." \
     "a job closed with its change unmerged does not read closed"
-  has_line "$out" " today Sample Shop closed Free shipping over fifty was closed." "an answered call does not read closed"
-  has_line "$out" " today Sample Shop landed Faster cart is in." "a merged change does not read landed"
-  has_line "$out" " today Sample Shop finished Why the cart is slow is finished." "a report does not read finished"
-  assert_not_contains "$(printf '%s\n' "$out" | grep -E 'Stamp card at checkout|Old checkout|Free shipping')" "finished" \
-    "work that was only closed reads finished"
-  pass "factory feed: closed work reads closed; only a merged change, a landing or a report reads landed or finished"
+  has_line "$out" " today Sample Shop settled Free shipping over fifty" "an answered call does not read settled"
+  has_line "$out" " today Sample Shop went live Faster cart" "a merged change does not read went live"
+  has_line "$out" " today Sample Shop went live Tidy the price list" "a local landing does not read went live"
+  has_line "$out" " today Sample Shop report ready Why the cart is slow" "a report does not read report ready"
+  assert_not_contains "$(printf '%s\n' "$out" | grep -E 'Stamp card at checkout|Old checkout|Free shipping')" "went live" \
+    "work that was only closed reads as live"
+  assert_not_contains "$(printf '%s\n' "$out" | sed -n '/SINCE YOU LAST LOOKED/,$p')" " is in." "a feed row still ends in a tail"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.feed.events[] | select(.text | test("Faster cart|Why the cart|Free shipping")) | "\(.word): \(.text) [\(.colour)]"] | sort | join("; ")')" \
+    "report ready: Why the cart is slow [green]; settled: Free shipping over fifty [mist]; went live: Faster cart [green]" \
+    "a second screen is not handed the same words"
+  pass "factory feed: closed work reads closed; a merged change or a landing went live, a report is ready, an answered call is settled"
+}
+
+# On 2026-11-22 "needs a look" read as a job waiting on the owner, "with
+# Starship" said nothing about the work being finished, and "at work, no step
+# reported yet" read as a fault a minute after a job began. The record keeps
+# each state word, which the count line and the status bar count by; a job's
+# row says whose turn it is, that the work is finished, and, of a job that has
+# named no step yet, that it just started or is at work.
+test_a_job_row_says_whose_turn_it_is() {
+  reset_case
+  write_registry
+  write_world
+  python3 - "$HOME_FIX" "$NOW" <<'PY'
+import json, os, sys
+home, now = sys.argv[1], int(sys.argv[2])
+state, path = os.path.join(home, "state"), os.path.join(home, "snapshot.json")
+world = json.load(open(path))
+
+def task(tid, title, cs, detail, started, lines, kind="ship"):
+    meta = os.path.join(state, tid + ".meta")
+    open(meta, "w").write("kind=%s\nmode=no-mistakes\nyolo=off\nspawn_gen=s%d.1.1\n" % (kind, started))
+    status = os.path.join(state, tid + ".status")
+    open(status, "w").write("\n".join(lines) + "\n")
+    os.utime(status, (now - 3600, now - 3600))
+    world["tasks"].append({"id": tid, "kind": kind, "project": "/projects/sample-shop",
+                           "current_state": {"state": cs[0], "source": cs[1], "detail": detail,
+                                             "raw": "state: %s · source: %s · %s" % (cs[0], cs[1], detail)},
+                           "paths": {"meta": {"path": meta}, "status_log": {"path": status}},
+                           "hints": {"open_decisions": []}, "pr": {"url": None}})
+    world["backlog"]["records"].append({
+        "id": tid, "title": title, "repo": "sample-shop", "state": "in_flight", "structured": True, "kind": kind,
+        "captain_actionable": False, "hold_kind": None, "hold_bucket": None, "hold_reason": None, "hold_set": None,
+        "hold_until": None, "unresolved_blocker_ids": [], "since": "2026-11-14",
+        "completion": {"verb": None, "date": None}, "pr_url": None})
+
+def busy(tid, ts):
+    open(os.path.join(state, tid + ".busy-state"), "w").write(
+        "v1 gen=g1 seq=2 state=busy source=claude-hook event=user-prompt-submit ts=%d\n" % ts)
+
+task("shop-why", "Why the cart is slow", ("done", "status-log"), "report written", now - 3600,
+     ["done [at=%d]: report written" % (now - 300)], kind="scout")
+task("shop-banner", "Free shipping banner", ("working", "pane"), "harness busy (claude-hook)", now - 120,
+     ["working [at=%d]: set up" % (now - 110)])
+busy("shop-banner", now - 30)
+task("shop-cart", "Faster cart", ("working", "pane"), "harness busy (claude-hook)", now - 1800,
+     ["working [at=%d]: set up" % (now - 1790)])
+busy("shop-cart", now - 30)
+json.dump(world, open(path, "w"), indent=1)
+PY
+  take_record
+  local shop='.factories[] | select(.id == "sample-shop") | .jobs[]' out
+  assert_equals "$(q "[$shop | select(.id | test(\"shop-(why|images|coupons|banner|cart)\$\")) | \"\(.id)=\(.state)/\(.doing)\"] | sort | join(\" \")")" \
+    "shop-banner=busy/null shop-cart=busy/null shop-coupons=needs a look/null shop-images=needs a look/null shop-why=with Starship/null" \
+    "the record does not keep each state word, or names a step no worker named"
+  out=$(python3 "$FACTORY" --plain --width 100 --factory sample-shop) || fail "--plain --factory failed"
+  has_line "$out" " ● Sharper cup photos waiting on Starship" "a blocked job does not say it waits on Starship"
+  has_line "$out" " ● Gift cards at checkout waiting on Starship" "a question the checks put to Starship reads as the owner's"
+  has_line "$out" " · Why the cart is slow finished, its report is with Starship" "a finished report does not say it is finished"
+  assert_equals "$(printf '%s\n' "$out" | grep -A2 -F 'Free shipping banner' | tail -n 1 | tr -s ' ')" " just started" \
+    "a job two minutes old with no step named does not read just started"
+  assert_equals "$(printf '%s\n' "$out" | grep -A2 -F 'Faster cart' | tail -n 1 | tr -s ' ')" " at work" \
+    "a job half an hour old with no step named does not read at work"
+  assert_not_contains "$out" "needs a look" "a row still reads needs a look"
+  assert_not_contains "$out" "no step reported" "a row still reads as if a step were missing"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.factories[] | select(.id == "sample-shop") | .page.jobs[]
+      | select(.id | test("shop-(why|images|banner|cart)$")) | "\(.id)=\(.state): \(.words)"] | sort | join("; ")')" \
+    "shop-banner=busy: just started; shop-cart=busy: at work; shop-images=needs a look: waiting on Starship; shop-why=with Starship: finished, its report is with Starship" \
+    "a second screen is not handed the same words beside each state"
+  pass "factory pane: a job's row says whose turn it is, that finished work is finished, and that a new job just started"
+}
+
+# On 2026-11-22 a factory's page listed each of the owner's calls twice: as a
+# card under NEEDS YOU and again as the first rows of its work, so one factory's
+# work opened with four rows that repeated the four cards above them. A job
+# that already has a card on the page is not listed again under its work.
+test_a_call_with_a_card_is_not_listed_again_under_work() {
+  reset_case
+  write_registry
+  write_world
+  local out work
+  out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
+  assert_contains "$(printf '%s\n' "$out" | sed -n '/NEEDS YOU/,/WORK, IN ORDER/p')" "Which payment provider for the shop" \
+    "the page lost the call's card"
+  work=$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,/RULES THIS CREW FOLLOWS/p')
+  assert_not_contains "$work" "Which payment provider for the shop" "a question with a card is listed again under the page's work"
+  assert_contains "$work" "Search that forgives typos" "the page's other work left with the call"
+  out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory failed"
+  work=$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,/RULES THIS CREW FOLLOWS/p')
+  assert_not_contains "$work" "Harvest chart" "a question whose worker waits is listed again under the page's work"
+  assert_not_contains "$work" "Share a garden page as a picture" "finished work with a card is listed again under the page's work"
+  assert_contains "$work" "Garden reminders" "the page's other work left with the calls"
+  take_record
+  assert_equals "$(q '[.factories[].jobs[] | select(.id | test("^(shop-provider|garden-chart|garden-share)$")) | "\(.id)=\(.state)"] | sort | join(" ")')" \
+    "garden-chart=decision for you garden-share=ready to merge shop-provider=decision for you" \
+    "the record lost the jobs behind the calls"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "garden-journal") | .page
+      | "\(.needs | join(",")) | \(.jobs | map(.id) | join(","))"')" \
+    "garden-chart,garden-share | garden-water" "a second screen is handed the calls again as work"
+  pass "factory page: a call that has a card under NEEDS YOU is not listed again under the page's work"
 }
 
 test_a_job_with_no_sign_of_life_reads_quiet() {
@@ -1002,7 +1155,7 @@ test_a_job_with_no_sign_of_life_reads_quiet() {
   write_registry
   write_world quiet
   take_record
-  assert_equals "$(q '.factories[0].jobs[0] | "\(.quiet) \(.doing)"')" "true at work, no step reported yet" \
+  assert_equals "$(q '.factories[0].jobs[0] | "\(.quiet) \(.doing)"')" "true null" \
     "a quiet job"
   assert_equals "$(q '.factories[0].jobs[1].quiet')" "false" "a job in the checks never reads quiet"
   assert_contains "$(python3 "$FACTORY" --plain --width 92)" "       quiet for 40 min, no sign of life" \
@@ -1572,7 +1725,7 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
     "Sample Shop: 5 queued · 2 in line, Starship steers; Garden Journal: 1 queued · none in line, Starship steers; Recipe Box: idle since 06:00 · nothing queued, Starship steers" \
     "each factory's row"
   assert_equals "$(s '.factories[0].jobs | map("\(.title)=\(.words)/\(.elapsed)/\(.step)") | join("; ")')" \
-    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=needs a look//1; Gift cards at checkout=needs a look//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
+    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=waiting on Starship//1; Gift cards at checkout=waiting on Starship//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
     "the overview's jobs: what a busy one is doing, how long, on which step; else its state"
   assert_equals "$(s '.steps | join(", ")')" "planning, building, checking, ready to merge" "the four steps"
   assert_equals "$(s '.factories[0].next | "\(.title) then \(.then)"')" "Gift wrap at checkout then 2" "next in line"
@@ -3603,7 +3756,7 @@ test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
     "remind-0715=failed" "only the failed reminder pass is in the feed"
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
-    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal landed|Recipe Box asked you|Sample Shop" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal went live|Recipe Box asked you|Sample Shop" \
     "the rest of the feed is as before"
   assert_equals "$(q .count_line)" "3 busy · 2 decisions for you · 1 ready to merge · 1 idle" \
     "the count line is not the overview's figures beside the folded pass"
@@ -3673,13 +3826,13 @@ test_without_a_routine_mark_every_run_shows_as_before() {
   assert_equals "$(q '[.factories[].jobs[] | select(.routine != null)] | length')" "0" \
     "no job is routine without a mark"
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
-    "remind-0715=failed remind-0700=finished remind-0600=finished remind-0600=closed remind-0700=closed" \
+    "remind-0715=failed remind-0700=report ready remind-0600=report ready remind-0600=closed remind-0700=closed" \
     "every pass reaches the feed"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_contains "$out" "     ● Reminder pass 0750" "the running pass has its own card"
   assert_not_contains "$out" "↻" "a routine line without a mark"
-  has_line "$out" " 07:10 Garden Journal finished Reminder pass 0700 is finished." "a finished pass is in the feed"
+  has_line "$out" " 07:10 Garden Journal report ready Reminder pass 0700" "a finished pass is in the feed"
   pass "factory pane: without a routine mark every run shows as before"
 }
 
@@ -3809,12 +3962,15 @@ fm_test_run \
   test_an_opened_list_closes_when_its_folded_work_is_gone \
   test_a_blocker_that_was_finished_and_archived_holds_nothing_up \
   test_only_the_highlighted_call_opens_as_a_card \
+  test_an_open_card_reads_whole_and_names_no_path_or_internal_id \
   test_finished_work_shows_its_pr_short_section_beside_the_merge_choice \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
   test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
   test_a_folded_pass_counts_as_idle_and_hides_no_other_card \
   test_a_routine_line_is_yes_no_or_title_kinds \
   test_without_a_routine_mark_every_run_shows_as_before \
+  test_a_job_row_says_whose_turn_it_is \
+  test_a_call_with_a_card_is_not_listed_again_under_work \
   test_a_job_with_no_sign_of_life_reads_quiet \
   test_a_changing_pane_is_a_sign_of_life \
   test_ready_work_held_until_a_date_is_not_ready_for_you \

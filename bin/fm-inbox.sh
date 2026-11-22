@@ -25,8 +25,8 @@
 #   fm-inbox.sh note [--request-id <id>] [--json] [--] <text>...
 #   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
 #   fm-inbox.sh announce [--json] <id>
-#   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
-#   fm-inbox.sh progress <id> <text>... | progress <id> -
+#   fm-inbox.sh reply [--json] <id> [--] <text>... | reply [--json] <id> -
+#   fm-inbox.sh progress <id> [--] <text>... | progress <id> -
 #   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
 #   fm-inbox.sh ready
 #   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
@@ -69,6 +69,10 @@
 # `progress` publishes a short update on a note still being worked, before the
 # one reply: any number of lines, in order, refused once the reply exists.
 # Receipts list them per note as progress[] ({at, body}).
+# The words of a `reply` or a `progress` line follow the note id as they are,
+# and no option is read there: a first word that looks like one (`--text`,
+# `--file`) is refused rather than recorded as the words, and `--` puts through
+# words that really start with two dashes.
 # A newly created and announced note also rings the primary (ring_primary
 # below): a short labelled line typed into its chat pane so a busy primary sees
 # the note within seconds. The queued wake is still the delivery; the watcher
@@ -640,6 +644,17 @@ next_reply_seq() {
   printf '%s\n' "$seq"
 }
 
+# words_after_id <command> <word>...: the header owns the contract. Prints
+# nothing; the caller drops a leading `--` itself.
+words_after_id() {
+  local command=$1
+  shift
+  case "${1:-}" in
+    --) [ "$#" -gt 1 ] || die "usage: fm-inbox.sh $command <id> [--] <text>..." ;;
+    --?*) die "fm-inbox.sh $command reads no option after the note id, so $1 would be recorded as the words; put -- before words that really start with --" ;;
+  esac
+}
+
 cmd_reply() {
   local json=0 id body path staging seq
   if [ "${1:-}" = "--json" ]; then
@@ -647,17 +662,19 @@ cmd_reply() {
     shift
   fi
   id=${1:-}
-  [ -n "$id" ] || die "usage: fm-inbox.sh reply [--json] <id> <text>... (or: reply [--json] <id> -)"
+  [ -n "$id" ] || die "usage: fm-inbox.sh reply [--json] <id> [--] <text>... (or: reply [--json] <id> -)"
   shift
   valid_note_id "$id" || die "invalid note id"
   path=$(note_path "$id") || die "no such note: $id"
   if [ "$#" -eq 0 ]; then
-    die "usage: fm-inbox.sh reply [--json] <id> <text>... (or: reply [--json] <id> -)"
+    die "usage: fm-inbox.sh reply [--json] <id> [--] <text>... (or: reply [--json] <id> -)"
   elif [ "$1" = "-" ]; then
     [ "$#" -eq 1 ] || die "usage: fm-inbox.sh reply [--json] <id> -"
     body=$(cat; printf .)
     body=${body%.}
   else
+    words_after_id reply "$@"
+    [ "$1" != "--" ] || shift
     body="$*"
   fi
   [ -n "${body//[[:space:]]/}" ] || die "refusing to record an empty reply"
@@ -709,16 +726,18 @@ PY
 cmd_progress() {
   local id body path at
   id=${1:-}
-  [ -n "$id" ] || die "usage: fm-inbox.sh progress <id> <text>... (or: progress <id> -)"
+  [ -n "$id" ] || die "usage: fm-inbox.sh progress <id> [--] <text>... (or: progress <id> -)"
   shift
   valid_note_id "$id" || die "invalid note id"
   path=$(note_path "$id") || die "no such note: $id"
   if [ "$#" -eq 0 ]; then
-    die "usage: fm-inbox.sh progress <id> <text>... (or: progress <id> -)"
+    die "usage: fm-inbox.sh progress <id> [--] <text>... (or: progress <id> -)"
   elif [ "$1" = "-" ]; then
     [ "$#" -eq 1 ] || die "usage: fm-inbox.sh progress <id> -"
     body=$(cat)
   else
+    words_after_id progress "$@"
+    [ "$1" != "--" ] || shift
     body="$*"
   fi
   body=$(printf '%s' "$body" | tr '\t\r\n' '   ')
