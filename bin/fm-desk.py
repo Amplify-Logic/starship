@@ -20,12 +20,13 @@ Usage:
   fm-desk.py onboard            a new person's first start, also run as
                                 `onboard-starship`: with no key to press, it
                                 starts Herdr with the first mate, the bridge
-                                strip and the Factory pane, then on a Mac opens
-                                the web page (bin/fm-web.sh open, unless it is
-                                already running) and last one Terminal window
-                                on the desk, so that window is in front; it
-                                ends by writing a starter config/desk-layout.
-                                A web page that cannot open is a note, not a
+                                strip and the Factory pane, then opens the web
+                                page (bin/fm-web.sh open, unless it is already
+                                running; with no browser it prints the address)
+                                and, on a Mac, last one Terminal window on the
+                                desk, so that window is in front; it ends by
+                                writing a starter config/desk-layout. A web
+                                page that cannot open is a note, not a
                                 failure. With a layout already there it
                                 changes nothing.
   fm-desk.py install-command    put `starship` and `onboard-starship` on PATH:
