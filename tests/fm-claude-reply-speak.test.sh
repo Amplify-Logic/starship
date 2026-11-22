@@ -726,12 +726,17 @@ test_real_speak_muted_and_not_enabled_stay_silent() {
   printf 'enabled = true\n' > "$dir/config/speak"
   : > "$dir/state/speak-muted"
   run_hook_real_speak "$dir" "Captain, muted homes stay quiet."
+  [ "$(find "$dir/state/speak-history" -name text 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+    || fail "a muted home must keep the reply once, as text for the floater's caption"
+  grep -rqF "muted homes stay quiet" "$dir/state/speak-history" \
+    || fail "the kept muted line must be the reply's spoken lead"
   rm -f "$dir/state/speak-muted" "$dir/config/speak"
   run_hook_real_speak "$dir" "Captain, homes that never opted in stay quiet."
   sleep 1
   assert_absent "$dir/audio.log" "a muted or not-enabled home must stay silent"
-  assert_absent "$dir/state/speak-history" "nothing must be kept when nothing was spoken"
-  pass "real fm-speak: muted and not-enabled homes stay silent"
+  [ "$(find "$dir/state/speak-history" -name text 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+    || fail "a home that never opted in must keep nothing"
+  pass "real fm-speak: muted and not-enabled homes stay silent, and a muted reply is kept as text"
 }
 
 # The floater's voice-volume level reaches the reply the hook speaks, through

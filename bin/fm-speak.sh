@@ -144,9 +144,12 @@
 #             not kept (never used, or pruned) is exit 1.
 #   --mute    makes every later line, repeats included, stay silent until
 #             --unmute, and stops any line playing now. The flag is
-#             state/speak-muted and is per home. A muted line is neither shaped
-#             nor kept for --repeat, and the call still exits 0: muting affects
-#             voice only, and the text reply stays the authoritative one.
+#             state/speak-muted and is per home. A muted line is still shaped,
+#             with the same register and exit codes as a spoken one, and kept in
+#             the reply history as text only, so the desk floater's caption and
+#             recent list still show it; it never reaches a speaker and needs
+#             none. Muting affects voice only, and the text reply stays the
+#             authoritative one.
 #   --muted   prints `muted` or `unmuted`.
 #   --enabled prints `enabled` when this home is opted in (OPT-IN above) and
 #             `disabled` otherwise, whatever the mute says. It is how other
@@ -171,15 +174,17 @@
 # --replay are spoken lines and honour `enabled`, mute, the volume and --stop
 # like any other, and print the text they replayed.
 #
-# REPLY HISTORY: every line handed to a speaker is kept in
-# state/speak-history/<number>/, readable only by this account (directories
-# 0700, files 0600), with the time it was spoken and the text as it was
-# shaped, so a refused or unshaped sentence can never be replayed, and a replay
-# is never shaped a second time. Numbers only grow; the newest 10 replies
-# are kept and older ones are pruned whenever a new one is kept. A muted line is
-# neither shaped nor kept. When Deepgram synthesized the line, its audio is kept
-# beside the text, and a replay plays that audio straight away instead of paying
-# for the network synthesis again - that wait is what made a replay slow. A reply
+# REPLY HISTORY: every line handed to a speaker, or shaped while muted, is
+# kept in state/speak-history/<number>/, readable only by this account
+# (directories 0700, files 0600), with the time it was spoken and the text as
+# it was shaped, so a refused or unshaped sentence can never be replayed, and a
+# replay is never shaped a second time. Numbers only grow; the newest 10
+# replies are kept and older ones are pruned whenever a new one is kept. A
+# muted line is kept as text only, with no audio (see --mute); unmuted later,
+# --repeat and --replay speak it like any reply without audio. When Deepgram
+# synthesized the line, its audio is kept beside the text, and a replay plays
+# that audio straight away instead of paying for the network synthesis again -
+# that wait is what made a replay slow. A reply
 # with no kept audio (spoken by `say`, or kept before its audio was) is spoken
 # through the ordinary speaker choice, and audio synthesized for that replay is
 # kept for the next one. A named `voice` in config/speak always wins: kept
@@ -211,8 +216,8 @@
 #                      (default: $FM_HOME/state)
 #
 # EXIT CODES (mirroring the register owner's own contract):
-#   0  handed to the speaker, printed under --dry-run, or this home is not
-#      opted in
+#   0  handed to the speaker, kept as text while muted, printed under
+#      --dry-run, or this home is not opted in
 #   1  cannot speak: the register owner is unreachable, failed or exceeded its
 #      bound, the speech binary is missing, the configured voice is not one
 #      this machine has, the state directory that holds the playback lock
@@ -1036,7 +1041,7 @@ replay_reply() {  # [number]
 }
 
 main() {
-  local dry_run=false text='' outfile errfile textfile status shaped control=
+  local dry_run=false muted=false text='' outfile errfile textfile status shaped control=
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1114,9 +1119,9 @@ main() {
     note "this home is not opted in; add 'enabled = true' to config/speak to speak here"
     exit 0
   fi
+  # A muted line is shaped and kept as text, never spoken (see --mute).
   if [ "$dry_run" != true ] && is_muted; then
-    note "voice is muted; nothing was spoken (fm-speak.sh --unmute)"
-    exit 0
+    muted=true
   fi
 
   if [ -z "$SHAPER" ]; then
@@ -1128,14 +1133,14 @@ main() {
   fi
   [ -x "$SHAPER" ] \
     || die "the spoken register owner is not executable: $SHAPER (check 'shaper' in config/speak or FM_SPEAK_SHAPER)"
-  if [ "$dry_run" != true ]; then
+  if [ "$dry_run" != true ] && [ "$muted" != true ]; then
     if [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
       die "no speech binary at $SAY_BIN and no DEEPGRAM_API_KEY (set FM_SPEAK_SAY or the key)"
     fi
   fi
 
   apply_desk_register
-  if [ "$dry_run" != true ]; then
+  if [ "$dry_run" != true ] && [ "$muted" != true ]; then
     load_speak_lock_helpers
     start_voice_list
   fi
@@ -1180,6 +1185,12 @@ main() {
   esac
 
   if [ "$dry_run" = true ]; then
+    printf '%s\n' "$shaped"
+    exit 0
+  fi
+  if [ "$muted" = true ]; then
+    record_history "$shaped"
+    note "voice is muted; the line was kept as text, not spoken (fm-speak.sh --unmute)"
     printf '%s\n' "$shaped"
     exit 0
   fi

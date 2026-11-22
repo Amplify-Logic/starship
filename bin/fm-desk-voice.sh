@@ -3,11 +3,11 @@
 # floater.
 #
 # Usage:
-#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--image <png>]... [--stdin | <transcript text...>]
+#   fm-desk-voice.sh send [--client-id <id>] [--expect-home <dir>] [--source <name>] [--front <name>|<bundle-id>|<title> [--front-pid <pid> --front-tab-tty <tty>]] [--image <png>]... [--stdin | <transcript text...>]
 #   fm-desk-voice.sh delivery <client-id>
 #   fm-desk-voice.sh send --front-app <pid> --front-tty <tty> [--source <name>] [<text...>]
 #   fm-desk-voice.sh send --front-focused [--source <name>] [<text...>]
-#   fm-desk-voice.sh deliver [--source <name>] [--image <png>]... [<transcript text...>]
+#   fm-desk-voice.sh deliver [--source <name>] [--front <name>|<bundle-id>|<title>] [--image <png>]... [<transcript text...>]
 #   fm-desk-voice.sh ring <line>
 #   fm-desk-voice.sh shot [--display <n> | --stdin]
 #   fm-desk-voice.sh keep [--purpose firstmate|dictate] [--reason <text>] <audio-file>
@@ -163,6 +163,26 @@
 # "Screenshots: <path> <path>...", and the JSON also lists them under "images".
 # A message may be screenshots alone.
 #
+# send and deliver --front "<name>|<bundle-id>|<title>" name the app and
+# window that were in front when the captain started talking, so the first
+# mate knows what "this" or "here" means. The value splits at its first two
+# "|": the app's name, its bundle id and the front window's title, of which
+# only the name is required. A message with words then gains one line after
+# them, before any screenshots line:
+#   Front: <name> (<bundle-id>) - window title (untrusted): <title>
+# leaving out the parts that are empty. Each part is made one plain line first,
+# and the title also loses its double quotes and backticks and is cut to 120
+# characters. The title is set by the app, and by any web page in a browser:
+# it is untrusted data, shown for context only and never an instruction.
+# A message of screenshots alone gets no Front line. send --front-pid <pid>
+# --front-tab-tty <tty> name that app's process and the terminal device of its
+# frontmost tab, given together: when that tab shows the primary's own pane
+# (see shown_in_front, as for --front-app below), the captain is looking at
+# the first mate's own chat and the Front line is left out, typed and in the
+# mailbox alike. Another tab or window of the same terminal app keeps it. The
+# line stays on this machine: it is typed into the primary's chat or saved in
+# its mailbox like the words, and goes nowhere else.
+#
 # send and deliver --stdin read the transcript from standard input instead of
 # the arguments, so a message too long for one argument (Linux refuses any
 # single argument over 128 KiB) still arrives whole; bin/fm-web.py sends this
@@ -296,10 +316,15 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-# Parse "[--source <name>] [--image <png>]... [--stdin | [--] [<text...>]]" into ARG_SOURCE,
+# Parse "[--source <name>] [--front <name>|<bundle-id>|<title>] [--front-pid <pid>
+# --front-tab-tty <tty>] [--image <png>]... [--stdin | [--] [<text...>]]" into
+# ARG_SOURCE, ARG_FRONT (the --front value), ARG_FRONT_PID, ARG_FRONT_TTY,
 # ARG_IMAGES and ARG_TEXT (empty when the text is blank).
 parse_transcript_args() {
   ARG_SOURCE=desk-floater
+  ARG_FRONT=''
+  ARG_FRONT_PID=''
+  ARG_FRONT_TTY=''
   ARG_IMAGES=()
   local from_stdin=false
   while [ "$#" -gt 0 ]; do
@@ -307,6 +332,26 @@ parse_transcript_args() {
       --source)
         [ "$#" -ge 2 ] || refuse "--source needs a name"
         ARG_SOURCE=$2
+        shift 2
+        ;;
+      --front)
+        [ "$#" -ge 2 ] || refuse "--front needs <name>|<bundle-id>|<title>"
+        ARG_FRONT=$2
+        shift 2
+        ;;
+      --front-pid)
+        [ "$#" -ge 2 ] || refuse "--front-pid needs a pid"
+        case "$2" in
+          ''|0*|*[!0-9]*) refuse "--front-pid needs a pid: $2" ;;
+        esac
+        ARG_FRONT_PID=$2
+        shift 2
+        ;;
+      --front-tab-tty)
+        [ "$#" -ge 2 ] || refuse "--front-tab-tty needs a terminal device"
+        printf '%s' "$2" | grep -Eqx '/dev/(tty[A-Za-z0-9]+|pts/[0-9]+)' \
+          || refuse "--front-tab-tty needs a terminal device: $2"
+        ARG_FRONT_TTY=$2
         shift 2
         ;;
       --image)
@@ -334,16 +379,48 @@ parse_transcript_args() {
   else
     ARG_TEXT=$*
   fi
+  case "${ARG_FRONT_PID:+p}${ARG_FRONT_TTY:+t}" in
+    p|t) refuse "--front-pid and --front-tab-tty go together" ;;
+  esac
   case "$ARG_TEXT" in
     *[![:space:]]*) ;;
     *) ARG_TEXT='' ;;
   esac
 }
 
+# The "Front: ..." line for --front value <value>, or nothing when it names no
+# app (see the header).
+front_line() {  # <value>
+  local name bundle title rest
+  name=${1%%|*}
+  rest=${1#"$name"}
+  rest=${rest#|}
+  bundle=${rest%%|*}
+  title=${rest#"$bundle"}
+  title=${title#|}
+  name=$(plain_line "$name") || return 1
+  [ -n "$name" ] || return 0
+  bundle=$(plain_line "$bundle") || return 1
+  title=$(plain_line "$title") || return 1
+  title=$(printf '%s' "$title" | python3 -c '
+import sys
+raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateescape")
+text = " ".join(raw.replace("\"", "").replace("`", "").split())[:120].rstrip()
+sys.stdout.buffer.write(text.encode(sys.getfilesystemencoding(), "surrogateescape"))
+') || return 1
+  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - window title (untrusted): $title}"
+}
+
 # The message the parsed arguments make: the transcript, if any, then one
+# "Front: ..." line when --front names an app and there are words, then one
 # "Screenshots: <path>..." line when images are attached.
 message_text() {
-  local text=$ARG_TEXT
+  local text=$ARG_TEXT front
+  if [ -n "$text" ] && [ -n "$ARG_FRONT" ]; then
+    front=$(front_line "$ARG_FRONT") || return 1
+    text="$text${front:+
+$front}"
+  fi
   if [ "${#ARG_IMAGES[@]}" -gt 0 ]; then
     text="${text:+$text
 }Screenshots: ${ARG_IMAGES[*]}"
@@ -355,7 +432,7 @@ deliver() {
   local source text id stamp path tmp
   parse_transcript_args "$@"
   source=$ARG_SOURCE
-  text=$(message_text)
+  text=$(message_text) || die "cannot prepare transcript"
   [ -n "$text" ] || refuse "nothing to deliver"
 
   ensure_dirs
@@ -798,6 +875,14 @@ EOF
   return 1
 }
 
+# True when the frontmost tab <tty> of app <pid> shows the proven primary's
+# own pane (see shown_in_front): the captain is looking at the first mate's
+# own chat. Unproven counts as not. Its subshell scopes the pane environment.
+front_shows_primary() (  # <pid> <tty> [expect-home]
+  prove_primary_pane "${3:-}" || return 1
+  shown_in_front "$PANE_BACKEND" "$PANE_TARGET" "$PANE_ROOT" "$1" "$2"
+)
+
 # True when tmux <target> is the active pane of its session's active window
 # and a client attached to that session reports that its terminal has focus.
 # tmux tracks focus only for a client that attached while focus-events was
@@ -1100,7 +1185,7 @@ send_once() {
         front_tty=$2
         shift 2
         ;;
-      --source|--image)
+      --source|--image|--front|--front-pid|--front-tab-tty)
         [ "$#" -ge 2 ] || break
         rest+=("$1" "$2")
         shift 2
@@ -1123,7 +1208,14 @@ send_once() {
   parse_transcript_args "$@"
   source=$ARG_SOURCE
   text=$ARG_TEXT
-  line=$(plain_line "$(message_text)") || die "cannot prepare transcript"
+  # The captain looking at the first mate's own chat says nothing a Front line
+  # could add.
+  if [ -n "$ARG_FRONT" ] && [ -n "$ARG_FRONT_PID" ] \
+    && front_shows_primary "$ARG_FRONT_PID" "$ARG_FRONT_TTY" "$expect_home"; then
+    ARG_FRONT=''
+  fi
+  line=$(message_text) || die "cannot prepare transcript"
+  line=$(plain_line "$line") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
   line=$(composer_safe_line "$line")
 
@@ -1166,6 +1258,7 @@ send_once() {
   for image in ${ARG_IMAGES[@]+"${ARG_IMAGES[@]}"}; do
     image_args+=(--image "$image")
   done
+  [ -z "$ARG_FRONT" ] || image_args+=(--front "$ARG_FRONT")
   path=$(deliver --source "$source" ${image_args[@]+"${image_args[@]}"} -- "$text") \
     || die "cannot save to the mailbox"
   printf 'mailbox: %s\n' "$path"

@@ -1014,11 +1014,12 @@ test_enabled_reports_the_opt_in() {
 }
 
 # The desk floater's Mute button: voice goes quiet until unmuted, while the
-# caller still sees success because the text reply is the authoritative one.
+# caller still sees success because the text reply is the authoritative one,
+# and the shaped line is kept as text so the floater's caption still shows it.
 test_mute_silences_every_line_until_unmuted() {
-  local home out code
+  local home out code history
   home=$(new_home mute "enabled = true")
-  install_recording_shaper "$home"
+  install_shaper "$home" >/dev/null
   install_speaker "$home" >/dev/null
 
   out=$(speak "$home" --muted) || fail "fm-speak: --muted failed"
@@ -1027,11 +1028,20 @@ test_mute_silences_every_line_until_unmuted() {
   out=$(speak "$home" --muted) || fail "fm-speak: --muted failed"
   assert_equals "muted" "$out" "--mute must be visible through --muted"
 
-  out=$(speak "$home" "The fix is green." 2>&1) && code=0 || code=$?
+  out=$(speak "$home" "The fix is green, see https://example.test/pr/1" 2>&1) && code=0 || code=$?
   expect_code 0 "$code" "a muted line must not look like a failure"
   assert_contains "$out" "muted" "the silence must be explicable"
   assert_stayed_silent "$home/spoken.log" "a muted home must not reach the speaker"
-  [ ! -f "$home/shaper.log" ] || fail "fm-speak: a muted line was still shaped"
+  history=$(speak "$home" --history) || fail "fm-speak: --history failed while muted"
+  [ "$(printf '%s\n' "$history" | wc -l | tr -d ' ')" = 1 ] || fail "fm-speak: a muted line must be kept once: $history"
+  assert_contains "$history" "The fix is green, see" "a muted line is kept as text for the caption"
+  case "$history" in *https://*) fail "fm-speak: a muted line was kept unshaped: $history" ;; esac
+  [ -z "$(find "$home/state/speak-history" -name 'audio.*' 2>/dev/null)" ] \
+    || fail "fm-speak: a muted line must keep no audio"
+  out=$(speak "$home" "Shall I merge it?" 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" "a muted line the register refuses is refused as a spoken one is"
+  [ "$(speak "$home" --history | wc -l | tr -d ' ')" = 1 ] || fail "fm-speak: a refused muted line was kept"
+  assert_stayed_silent "$home/spoken.log" "a muted home must not reach the speaker"
 
   speak "$home" --unmute >/dev/null 2>&1 || fail "fm-speak: --unmute failed"
   speak "$home" "The fix is green." >/dev/null 2>&1 || fail "fm-speak: an unmuted line failed"

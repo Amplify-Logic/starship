@@ -48,7 +48,7 @@ Drag the floater by its dark plate.
 | Repeat (circular arrows) | Speaks the last reply again; "Voice muted" while muted. |
 | Mute (speaker) | Voice off and on; orange while muted. Right-click it for the voice volume. |
 | Camera | A screenshot for your first mate; a blue number counts the shots waiting to be sent. |
-| Arrow (right edge) | The last 10 spoken replies; click one to hear it again. |
+| Arrow (right edge) | The last 10 replies, spoken or kept as text while muted; click one to hear it again. |
 | Tray icon | Right-click to hide or show the floater, or to quit it. |
 
 The voice volume runs from 0 to 100% of the Windows volume.

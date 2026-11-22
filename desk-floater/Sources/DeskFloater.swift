@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen.start()
         self.screen = screen
         model.refreshMute()
+        model.startCaption()
         model.recoverRecordings()
         DispatchQueue.main.async {
             model.warmMicrophone()
@@ -713,11 +714,23 @@ enum FrontTab {
         "com.apple.Terminal": "tell application id \"com.apple.Terminal\" to get tty of selected tab of front window",
     ]
 
-    static func tty(of app: NSRunningApplication) -> Answer {
+    /// The front tab's terminal device only when the Automation permission is
+    /// already granted, so it never asks the captain; nil otherwise.
+    static func ttyIfAllowed(of app: NSRunningApplication) -> String? {
+        guard let id = app.bundleIdentifier, scripts[id] != nil else { return nil }
+        let target = NSAppleEventDescriptor(bundleIdentifier: id)
+        guard let desc = target.aeDesc,
+              AEDeterminePermissionToAutomateTarget(desc, AEEventClass(typeWildCard),
+                                                    AEEventID(typeWildCard), false) == noErr,
+              case .tty(let tty) = tty(of: app, seconds: 1) else { return nil }
+        return tty
+    }
+
+    static func tty(of app: NSRunningApplication, seconds: Int = 3) -> Answer {
         guard let id = app.bundleIdentifier, let script = scripts[id] else { return .none }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", "with timeout of 3 seconds", "-e", script, "-e", "end timeout"]
+        proc.arguments = ["-e", "with timeout of \(seconds) seconds", "-e", script, "-e", "end timeout"]
         let out = Pipe()
         let err = Pipe()
         proc.standardOutput = out
@@ -743,6 +756,76 @@ enum FrontTab {
     }
 }
 
+/// The app and window in front when the captain starts talking to Firstmate,
+/// sent with the words as one "Front:" line (bin/fm-desk-voice.sh send --front)
+/// so Firstmate knows what "this" or "here" means. Read with the permissions
+/// the floater already has: the focused window's title over Accessibility,
+/// else the window list's name, which Screen Recording reveals. With neither,
+/// the app's name goes alone. For a terminal app whose front tab FrontTab can
+/// name, `tty` lets the script leave the line out when that tab is Firstmate's
+/// own chat.
+struct Frontmost: Equatable, Sendable {
+    let pid: pid_t
+    let name: String
+    let bundleID: String?
+    let title: String?
+    var tty: String? = nil
+
+    /// The value of `send --front`: name, bundle id and title, split by "|".
+    var argument: String {
+        [name, bundleID ?? "", title ?? ""].joined(separator: "|")
+    }
+
+    /// App <app> and its front window, or nil when <app> is the floater
+    /// itself. It asks the app over Accessibility and Apple Events, so it runs
+    /// off the main actor.
+    static func read(_ app: NSRunningApplication) -> Frontmost? {
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let name = app.localizedName, !name.isEmpty else { return nil }
+        let pid = app.processIdentifier
+        return Frontmost(pid: pid, name: name, bundleID: app.bundleIdentifier,
+                         title: focusedTitle(of: pid) ?? listedTitle(of: pid),
+                         tty: FrontTab.ttyIfAllowed(of: app))
+    }
+
+    /// The focused window's title over Accessibility, asked with a short
+    /// timeout so a busy app never holds up the press.
+    private static func focusedTitle(of pid: pid_t) -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        var window: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
+              let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        let element = window as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        var title: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title) == .success
+        else { return nil }
+        return nonEmpty(title as? String)
+    }
+
+    /// The name of the app's frontmost ordinary window in the window list,
+    /// which macOS shows only with Screen Recording allowed.
+    private static func listedTitle(of pid: pid_t) -> String? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                       kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (window[kCGWindowLayer as String] as? Int) == 0 else { continue }
+            if let name = nonEmpty(window[kCGWindowName as String] as? String) {
+                return name
+            }
+        }
+        return nil
+    }
+
+    private static func nonEmpty(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+}
+
 /// Screenshots waiting to go to Firstmate, and the talk-to-Firstmate words held
 /// to go with them. They go as one message once `window` has passed since the
 /// last shot or the end of the last talk, so each new one restarts the wait.
@@ -752,6 +835,8 @@ struct ShotStack {
     private(set) var shots: [String] = []
     private(set) var inFlight = 0
     private(set) var transcript: String?
+    /// The app and window in front when the held words began.
+    private(set) var front: Frontmost?
     private var lastActivity: Date?
 
     /// Shots taken and not yet sent, counting any still being captured.
@@ -780,13 +865,16 @@ struct ShotStack {
 
     /// Holds a transcript to go with the stack, after any words already held.
     /// False when nothing is stacked, so the words should go at once instead.
-    mutating func hold(_ text: String) -> Bool {
+    /// The first held words' front window is the message's.
+    mutating func hold(_ text: String, front: Frontmost? = nil) -> Bool {
         if let held = transcript {
             transcript = held + " " + text
+            self.front = self.front ?? front
             return true
         }
         guard count > 0 else { return false }
         transcript = text
+        self.front = front
         return true
     }
 
@@ -795,12 +883,13 @@ struct ShotStack {
     }
 
     /// Empties the stack, returning the message it held.
-    mutating func take() -> (text: String?, images: [String]) {
+    mutating func take() -> (text: String?, images: [String], front: Frontmost?) {
         defer {
             transcript = nil
+            front = nil
             shots = []
         }
-        return (transcript, shots)
+        return (transcript, shots, front)
     }
 
     private mutating func touch(_ now: Date) {
@@ -925,6 +1014,10 @@ final class FloaterModel: ObservableObject {
     @Published var showingVolume = false
     @Published var recent: [RecentReply] = []
     @Published var showingRecent = false
+    /// Firstmate's newest reply, shown as a caption beside the floater whether
+    /// the voice is muted or not; nil when there is none to show.
+    @Published var caption: RecentReply?
+    @Published var captionExpanded = false
     @Published var keysTrusted = false {
         didSet {
             if mode == .idle {
@@ -945,6 +1038,9 @@ final class FloaterModel: ObservableObject {
     // message while it keeps playing. See VoiceCapture.
     private let capture = VoiceCapture()
     private var recordURL: URL?
+    /// The app and window in front when the current talk began, read in the
+    /// background so it never delays the recording.
+    private var captureFront: Task<Frontmost?, Never>?
     private var pressStartedAt: Date?
     private var latched = false
     private var fromHotkey = false
@@ -963,10 +1059,24 @@ final class FloaterModel: ObservableObject {
     // path, with the attempts each has had. See Recording.
     private(set) var retrying: [String: Int] = [:]
 
+    // The caption follows bin/fm-speak.sh's reply history: a change to its
+    // folder is read through `--history`. Replies kept before the floater
+    // started are never shown as new.
+    private let historyDir: String
+    private var historyStamp: Date?
+    private var captionSeen: Int?
+    private var captionTimer: Timer?
+    /// Bumped whenever the caption changes, so an older hide timer lets a
+    /// newer caption be.
+    private var captionTurn = 0
+    /// How long a caption stays up unless it is expanded.
+    static let captionShown: TimeInterval = 15
+
     init(repoRoot: String, fmHome: String) {
         self.repoRoot = repoRoot
         self.fmHome = fmHome
         recordingDir = (fmHome as NSString).appendingPathComponent("state/desk-voice/recording")
+        historyDir = (fmHome as NSString).appendingPathComponent("state/speak-history")
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
@@ -1072,7 +1182,7 @@ final class FloaterModel: ObservableObject {
             }
             return
         }
-        let (text, images) = stack.take()
+        let (text, images, front) = stack.take()
         let audio = heldAudio
         heldAudio = []
         shotsChanged()
@@ -1084,7 +1194,7 @@ final class FloaterModel: ObservableObject {
             }
         }
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
-            let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: images)
+            let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: images, front: front)
             await MainActor.run {
                 self.delivered(outcome, audio: audio)
             }
@@ -1115,11 +1225,11 @@ final class FloaterModel: ObservableObject {
     /// A transcribed talk-to-Firstmate message: sent at once when nothing is
     /// stacked, otherwise held until the stack window closes and sent with the
     /// shots. The floater is free meanwhile, so another talk joins the same message.
-    private func voiceTranscribed(_ text: String, audio: URL) {
-        guard stack.hold(text) else {
+    private func voiceTranscribed(_ text: String, audio: URL, front: Frontmost?) {
+        guard stack.hold(text, front: front) else {
             status = "Delivering…"
             Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
-                let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: [])
+                let outcome = Self.deliver(repoRoot: repoRoot, fmHome: fmHome, text: text, images: [], front: front)
                 await MainActor.run {
                     self.delivered(outcome, audio: [audio], finishing: true)
                 }
@@ -1280,6 +1390,81 @@ final class FloaterModel: ObservableObject {
         }
     }
 
+    // MARK: reply caption
+
+    /// Starts following the reply history for the caption.
+    func startCaption() {
+        historyStamp = Self.modified(historyDir)
+        readCaption(initial: true)
+        captionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkHistory() }
+        }
+    }
+
+    private func checkHistory() {
+        let stamp = Self.modified(historyDir)
+        guard stamp != historyStamp else { return }
+        historyStamp = stamp
+        readCaption(initial: false)
+        // A reply's text is written just after its folder appears.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.readCaption(initial: false)
+        }
+    }
+
+    private func readCaption(initial: Bool) {
+        Task.detached(priority: .utility) { [repoRoot, fmHome] in
+            let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--history"]) ?? ""
+            let newest = Self.parseHistory(out).first
+            await MainActor.run {
+                self.historyRead(newest, initial: initial)
+            }
+        }
+    }
+
+    private func historyRead(_ newest: RecentReply?, initial: Bool) {
+        if initial {
+            captionSeen = max(captionSeen ?? 0, newest?.id ?? 0)
+            return
+        }
+        guard let newest, newest.id > (captionSeen ?? 0) else { return }
+        captionSeen = newest.id
+        caption = newest
+        captionExpanded = false
+        scheduleCaptionHide()
+        if showingRecent {
+            refreshRecent()
+        }
+    }
+
+    func dismissCaption() {
+        captionTurn += 1
+        caption = nil
+        captionExpanded = false
+    }
+
+    /// An expanded caption stays until it is dismissed or collapsed again.
+    func toggleCaptionExpanded() {
+        captionExpanded.toggle()
+        captionTurn += 1
+        if !captionExpanded {
+            scheduleCaptionHide()
+        }
+    }
+
+    private func scheduleCaptionHide() {
+        captionTurn += 1
+        let turn = captionTurn
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captionShown) { [weak self] in
+            guard let self, self.captionTurn == turn, !self.captionExpanded else { return }
+            self.caption = nil
+        }
+    }
+
+    nonisolated private static func modified(_ path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    }
+
     /// Reads `<number> TAB <epoch> TAB <text>` lines, newest first.
     nonisolated private static func parseHistory(_ out: String) -> [RecentReply] {
         out.split(separator: "\n").compactMap { line in
@@ -1364,6 +1549,11 @@ final class FloaterModel: ObservableObject {
         fromHotkey = false
         pressStartedAt = nil
         startRecording()
+        // What the captain was looking at as they started talking.
+        captureFront = nil
+        if purpose == .firstmate, let app = NSWorkspace.shared.frontmostApplication {
+            captureFront = Task.detached(priority: .userInitiated) { Frontmost.read(app) }
+        }
     }
 
     private var listeningStatus: String {
@@ -1407,6 +1597,7 @@ final class FloaterModel: ObservableObject {
     }
 
     private func cancelCapture() {
+        captureFront = nil
         latched = false
         fromHotkey = false
         pressStartedAt = nil
@@ -1436,16 +1627,18 @@ final class FloaterModel: ObservableObject {
             return
         }
         recordURL = nil
+        let front = captureFront
+        captureFront = nil
         mode = .busy
         status = "Transcribing…"
         // The last words are still arriving as the key comes up; the capture
         // keeps recording for a moment before the file is closed.
         capture.finish { [self] in
-            transcribeAndDeliver(url, purpose: purpose)
+            transcribeAndDeliver(url, purpose: purpose, front: front)
         }
     }
 
-    func transcribeAndDeliver(_ url: URL, purpose: Purpose) {
+    func transcribeAndDeliver(_ url: URL, purpose: Purpose, front talkFront: Task<Frontmost?, Never>? = nil) {
         Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
             // Near silence holds no words to send or to retry: say so at once
             // rather than saving it and retrying it.
@@ -1512,8 +1705,9 @@ final class FloaterModel: ObservableObject {
                     }
                 }
             case .firstmate:
+                let front = await talkFront?.value
                 await MainActor.run {
-                    self.voiceTranscribed(text, audio: url)
+                    self.voiceTranscribed(text, audio: url, front: front)
                 }
             }
         }
@@ -1679,9 +1873,18 @@ final class FloaterModel: ObservableObject {
     /// and returns the status to show. It is typed into firstmate's own chat;
     /// bin/fm-desk-voice.sh falls back to its mailbox when that pane cannot be
     /// reached.
-    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String?, images: [String]) -> String? {
+    /// `front` adds the "Front:" line, which the script leaves out when the
+    /// front tab it names shows Firstmate's own chat.
+    nonisolated private static func deliver(repoRoot: String, fmHome: String, text: String?, images: [String],
+                                            front: Frontmost?) -> String? {
         let bin = (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh")
         var args = ["send", "--source", "desk-floater"]
+        if let front {
+            args += ["--front", front.argument]
+            if let tty = front.tty {
+                args += ["--front-pid", String(front.pid), "--front-tab-tty", tty]
+            }
+        }
         for image in images {
             args += ["--image", image]
         }
@@ -1813,6 +2016,21 @@ struct FloaterView: View {
     }
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            cluster
+            if let reply = model.caption {
+                captionBubble(reply)
+            }
+        }
+        .fixedSize()
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { size in
+            mover.fit(size)
+        }
+    }
+
+    private var cluster: some View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: rowSpacing) {
                 mainButton
@@ -1855,12 +2073,84 @@ struct FloaterView: View {
                         .onEnded { _ in mover.end() }
                 )
         )
-        .fixedSize()
-        .onGeometryChange(for: CGSize.self) { proxy in
-            proxy.size
-        } action: { size in
-            mover.fit(size)
+    }
+
+    // The caption's calm card: light paper with dark ink, or the reverse in
+    // Dark Mode, so it reads as Firstmate's words rather than as a control.
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    private static let captionPaper = adaptive(
+        light: NSColor(srgbRed: 1.0, green: 0.992, blue: 0.973, alpha: 1),
+        dark: NSColor(srgbRed: 0.129, green: 0.137, blue: 0.122, alpha: 1))
+    private static let captionInk = adaptive(
+        light: NSColor(srgbRed: 0.137, green: 0.129, blue: 0.114, alpha: 1),
+        dark: NSColor(srgbRed: 0.922, green: 0.910, blue: 0.882, alpha: 1))
+    private static let captionSoft = adaptive(
+        light: NSColor(srgbRed: 0.420, green: 0.400, blue: 0.361, alpha: 1),
+        dark: NSColor(srgbRed: 0.635, green: 0.616, blue: 0.573, alpha: 1))
+    private static let captionLine = adaptive(
+        light: NSColor(srgbRed: 0.890, green: 0.867, blue: 0.816, alpha: 1),
+        dark: NSColor(srgbRed: 0.200, green: 0.208, blue: 0.184, alpha: 1))
+
+    /// Firstmate's newest reply: two lines, or all of it once expanded. It
+    /// only shows words; clicking it expands or collapses it.
+    private func captionBubble(_ reply: RecentReply) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                if model.muted {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.system(size: 8))
+                        .help("Voice muted - shown as text only")
+                        .accessibilityLabel("Voice muted")
+                }
+                Text("Firstmate, \(Self.timeLabel(reply.time))")
+                    .font(.system(size: 10, weight: .medium))
+                Spacer(minLength: 8)
+                captionControl(model.captionExpanded ? "chevron.up" : "chevron.down",
+                               help: model.captionExpanded ? "Show less" : "Show all of it",
+                               action: model.toggleCaptionExpanded)
+                captionControl("xmark", help: "Dismiss", action: model.dismissCaption)
+            }
+            .foregroundStyle(Self.captionSoft)
+            Text(reply.text)
+                .font(.system(size: 12))
+                .foregroundStyle(Self.captionInk)
+                .lineLimit(model.captionExpanded ? 14 : 2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: model.toggleCaptionExpanded)
         }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .frame(width: model.captionExpanded ? 300 : 240, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Self.captionPaper)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Self.captionLine)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Firstmate's reply: \(reply.text)")
+    }
+
+    private func captionControl(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 8, weight: .bold))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     /// Mutes on a click; a right-click or Control-click opens the voice-volume
