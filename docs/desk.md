@@ -14,7 +14,7 @@ It links neither over another command by that name, such as the starship.rs shel
 With nothing to press or choose, it brings up the whole desk at once:
 
 1. Herdr with your first mate in one pane, the [bridge strip](bridge-strip.md) across its top and the [Factory pane](factory-pane.md) beside it.
-2. On a Mac, your [web page](web.md), through `bin/fm-web.sh open`; one already running for this home is left as it is, and one that cannot open is named in a note without stopping the rest.
+2. Your [web page](web.md), through `bin/fm-web.sh open`; one already running for this home is left as it is, with no browser to open it in its address is printed instead, and one that cannot start is named in a note without stopping the rest.
 3. On a Mac, one Terminal window on the desk, opened last so it is in front for Claude Code's first questions; elsewhere it tells you to open another terminal window and type `herdr` to see it.
 4. A starter `config/desk-layout` for that desk, so plain `starship` opens it from then on.
 

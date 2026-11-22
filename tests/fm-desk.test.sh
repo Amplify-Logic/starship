@@ -176,13 +176,19 @@ with open(os.path.join(records, fid), "w") as record:
 PY
 
 # The fake web page launcher stands in for bin/fm-web.sh: status answers from
-# a marker file, and open logs the call and starts it.
+# a marker file, and open logs the call and starts it; with no browser it
+# starts it but cannot open it, as the real one, and open --print prints a link.
 cat > "$FAKE/tools/fm-web.sh" <<'SH'
 #!/usr/bin/env bash
 echo "web $* home=${FM_HOME:-}" >> "$FAKE_HERDR_CALLS"
 case "$1" in
   status) [ -e "$FAKE_WEB_RUNNING" ] ;;
-  open) [ -z "${FAKE_WEB_FAILS:-}" ] || { echo "fm-web: port in use" >&2; exit 1; }; : > "$FAKE_WEB_RUNNING"; echo "opened Starship as its own window" ;;
+  open)
+    [ -z "${FAKE_WEB_FAILS:-}" ] || { echo "fm-web: port in use" >&2; exit 1; }
+    : > "$FAKE_WEB_RUNNING"
+    if [ "${2:-}" = --print ]; then echo "http://127.0.0.1:8765/?code=fake"
+    elif [ -n "${FAKE_WEB_NO_BROWSER:-}" ]; then echo "fm-web: no browser found; open it yourself" >&2; exit 1
+    else echo "opened Starship as its own window"; fi ;;
   *) exit 2 ;;
 esac
 SH
@@ -237,7 +243,7 @@ new_case() {  # <running:true|false>
     HERDR_BIN_PATH="$FAKE/bin/herdr" HERDR_CONFIG_PATH="$C/herdr-config.toml" \
     FM_DESK_BIN="$FAKE/tools" FM_DESK_PS="cat $C/ps" FM_DESK_OSASCRIPT="$FAKE/bin/osascript" FM_DESK_WAIT=3 \
     FM_DESK_OPEN="$FAKE/bin/open" FM_DESK_MACOS=26.0
-  unset FAKE_WEB_FAILS HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION HERDR_ENV
+  unset FAKE_WEB_FAILS FAKE_WEB_NO_BROWSER HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SESSION HERDR_ENV
   printf '{"session": "default", "running": %s, "workspaces": [], "n": 0}\n' "$1" > "$FAKE_HERDR_STATE"
   : > "$FAKE_HERDR_CALLS"; : > "$FAKE_PS"; : > "$FAKE_TERMINAL_TABS"; : > "$FAKE_FACTORY_JOBS"
   printf 'sample-shop=Sample Shop\nrecipe-box=Recipe Box\ngarden-journal=Garden Journal\n' > "$FAKE_FACTORY_NAMES"
@@ -981,19 +987,26 @@ test_onboard_never_duplicates_what_is_already_there() {
   pass "desk: onboard never opens a running web page again, survives one that cannot start, and leaves a set-up home alone"
 }
 
-# Off a Mac there is no Terminal window to open and no browser to assume: the
-# desk still comes up, and onboarding says how to see it.
-test_onboard_off_macos_brings_up_the_desk_only() {
+# Off a Mac there is no Terminal window to open: the desk still comes up,
+# the web page opens in a browser when there is one, its address is printed
+# when there is none, and onboarding says how to see the first mate.
+test_onboard_off_macos_brings_up_the_desk_and_the_web_page() {
   new_case false
   local out
   out=$(FM_DESK_MACOS="" desk onboard < /dev/null) || fail "onboard off macOS failed: $out"
   assert_contains "$out" "  done: start the first mate" "off macOS onboard did not start the first mate"
   assert_contains "$out" "  done: show the Starship bridge" "off macOS onboard did not show the bridge strip"
   assert_not_contains "$out" "open view" "off macOS onboarding opened a Terminal window"
-  assert_no_grep "^web " "$FAKE_HERDR_CALLS" "off macOS onboarding opened the web page"
+  assert_contains "$out" "  done: open your Starship web page" "off macOS onboarding did not open the web page"
+  assert_grep "web open home=$FM_HOME" "$FAKE_HERDR_CALLS" "off macOS the web page was not opened for this home"
   assert_contains "$out" "Open another terminal window and type \`herdr\` to see your first mate." "off macOS onboard did not say how to see the first mate"
   assert_not_contains "$(cat "$FM_HOME/config/desk-layout")" "view =" "off macOS the starter layout names a window"
-  pass "desk: off macOS onboard brings up the desk and says how to see it"
+  rm -f "$FM_HOME/config/desk-layout" "$FAKE_WEB_RUNNING"
+  out=$(FM_DESK_MACOS="" FAKE_WEB_NO_BROWSER=1 desk onboard < /dev/null) || fail "onboard with no browser failed: $out"
+  assert_contains "$out" "  note: no browser opened here; your Starship web page is at http://127.0.0.1:8765/?code=fake" "with no browser onboarding did not print the web page's address"
+  assert_not_contains "$out" "done: open your Starship web page" "with no browser onboarding claimed the web page opened"
+  [ -e "$FM_HOME/config/desk-layout" ] || fail "with no browser onboarding did not finish"
+  pass "desk: off macOS onboard brings up the desk, opens the web page or prints its address"
 }
 
 test_onboard_starship_runs_onboarding_by_its_name() {
@@ -1013,7 +1026,7 @@ fm_test_run \
   test_an_empty_session_gets_the_whole_desk_in_order \
   test_onboard_brings_up_the_whole_desk_and_the_web_page_at_once \
   test_onboard_never_duplicates_what_is_already_there \
-  test_onboard_off_macos_brings_up_the_desk_only \
+  test_onboard_off_macos_brings_up_the_desk_and_the_web_page \
   test_onboard_starship_runs_onboarding_by_its_name \
   test_views_open_in_cream_while_the_workspace_is_light \
   test_a_second_run_changes_nothing \

@@ -1265,6 +1265,11 @@ def open_web_page(home: str) -> None:
         return
     out = subprocess.run(["bash", script, "open"], env=env, capture_output=True, text=True)
     if out.returncode != 0:
+        link = subprocess.run(["bash", script, "open", "--print"], env=env, capture_output=True, text=True)
+        if link.returncode == 0 and link.stdout.strip():
+            say("  note: no browser opened here; your Starship web page is at %s"
+                % link.stdout.strip().splitlines()[-1])
+            return
         why = (out.stderr.strip() or "no reason given").splitlines()[-1]
         say("  note: your Starship web page did not open (%s); `%s open` opens it later"
             % (why, os.path.join(ROOT, "bin", "fm-web.sh")))
@@ -1279,13 +1284,11 @@ def cmd_onboard() -> int:
         say("Your desk is already set up (%s); run `%s` to open it." % (path, ME))
         return 0
     layout = starter_layout(home)
-    mac = macos_major() > 0
     say("Welcome to Starship. This opens your whole desk: Herdr with your first mate, the bridge strip "
-        "across the top and the Factory pane beside it%s." % (
-            ", then your Starship web page and a Terminal window on the desk" if mac else ""))
+        "across the top and the Factory pane beside it, then your Starship web page%s." % (
+            " and a Terminal window on the desk" if macos_major() > 0 else ""))
     notes = fill(layout, home, ONBOARD_DESK_KINDS)[1]
-    if mac:
-        open_web_page(home)
+    open_web_page(home)
     notes += fill(layout, home)[1]
     for note in dict.fromkeys(notes):
         say("  note: %s" % note)
