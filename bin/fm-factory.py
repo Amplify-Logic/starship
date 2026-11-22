@@ -3190,6 +3190,11 @@ class View:
             return "waiting · tries again %s" % clock(job["until"]), "", False
         if job["state"] == "with Starship" and job.get("kind") == "scout":
             return "finished, its report is with Starship", "", False
+        # Only a job the overview counts stopped, the one the top sentence and
+        # the strip count, says Starship is on it; one whose window or worktree
+        # is gone without that reading reads plain stopped.
+        if job["state"] == "stopped" and job["id"] not in (self.record["counts"].get("lost_list") or []):
+            return "stopped", "", False
         return STATE_WORDS.get(job["state"], job["state"]), "", False
 
     def job_rows(self, width: int, job: Dict[str, Any], full: bool) -> List[Row]:
@@ -3716,11 +3721,11 @@ def screen(view: View) -> Dict[str, Any]:
                 "feed": feed_of(fac["id"], 8),
                 "talk": [{"when": stamp, "who": who, "said": said} for stamp, who, said in view.talk(fac)]}}
 
-    # The jobs that stopped, the ones behind the bridge strip's "N stopped" first.
+    # The jobs behind the bridge strip's "N stopped", the ones the top sentence counts.
     lost = record["counts"].get("lost_list") or []
-    stopped = sorted(({"id": job["id"], "factory": fac["id"], "title": job["title"]}
-                      for fac in record["factories"] for job in fac["jobs"] if job["state"] == "stopped"),
-                     key=lambda job: 0 if job["id"] in lost else 1)
+    stopped = [{"id": job["id"], "factory": fac["id"], "title": job["title"]}
+               for fac in record["factories"] for job in fac["jobs"]
+               if job["state"] == "stopped" and job["id"] in lost]
     return {"schema": SCREEN_SCHEMA, "as_of": record.get("as_of"),
             "clock": view.clock_words(),
             "sentences": sentences(record, view.now()),

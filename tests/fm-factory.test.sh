@@ -1766,7 +1766,7 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
     "Sample Shop: 5 queued · 2 in line, Starship steers; Garden Journal: 1 queued · none in line, Starship steers; Recipe Box: idle since 06:00 · nothing queued, Starship steers" \
     "each factory's row"
   assert_equals "$(s '.factories[0].jobs | map("\(.title)=\(.words)/\(.elapsed)/\(.step)") | join("; ")')" \
-    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=waiting on Starship//1; Gift cards at checkout=waiting on Starship//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped, Starship is on it//1" \
+    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=waiting on Starship//1; Gift cards at checkout=waiting on Starship//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
     "the overview's jobs: what a busy one is doing, how long, on which step; else its state"
   assert_equals "$(s '.steps | join(", ")')" "planning, building, checking, ready to merge" "the four steps"
   assert_equals "$(s '.factories[0].next | "\(.title) then \(.then)"')" "Gift wrap at checkout then 2" "next in line"
@@ -1933,6 +1933,14 @@ test_a_stopped_job_says_so_and_who_is_on_it() {
     "2 jobs are running. 1 has stopped and 1 hit a problem, and Starship is on them." "the second sentence"
   flat=$(FM_FLEET_STATE_PROBE=$probe overview_cached python3 "$FACTORY" --plain --width 100 | tr -s ' ')
   assert_contains "$flat" " ● Gift cards at checkout stopped, Starship is on it" "the stopped job does not say so and who is on it"
+  # Old banner swap lost its worktree, which the overview does not count as
+  # stopped: no sentence counts it, so its row does not claim Starship is on it
+  # and the screen does not name it among the stopped jobs.
+  assert_contains "$flat" " ● Old banner swap stopped" "the uncounted job no longer reads stopped"
+  assert_not_contains "$flat" "Old banner swap stopped, Starship is on it" \
+    "a job the top sentence does not count says Starship is on it"
+  assert_equals "$(jq -r '[.stopped[].id] | join(",")' <<<"$screen")" "shop-coupons" \
+    "the screen names a stopped job the top sentence does not count"
   pass "factory pane: the job the strip counts stopped says so and who is on it, and the screen names it"
 }
 
