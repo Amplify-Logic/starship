@@ -20,7 +20,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
-- Stop, Repeat and Mute controls for that spoken voice, a voice-volume level of its own, and a list of the recent spoken replies to hear any of them again.
+- Stop, Repeat and Mute controls for that spoken voice, a voice-volume level of its own, and a list of the recent replies to hear any of them again.
 - Firstmate's newest reply in a small caption beside the floater, whether the voice is muted or not (see [Reply caption](#reply-caption)).
 - A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
 - A dictation mode that types what you say into whatever text box has the cursor, and sends it when that text box is the Firstmate chat.
