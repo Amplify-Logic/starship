@@ -1267,7 +1267,8 @@ def open_web_page(home: str) -> None:
     if out.returncode != 0:
         link = subprocess.run(["bash", script, "open", "--print"], env=env, capture_output=True, text=True)
         if link.returncode == 0 and link.stdout.strip():
-            say("  note: no browser opened here; your Starship web page is at %s"
+            say("  note: no browser opened here; your Starship web page runs on this machine at %s, "
+                "an address that opens only on this machine, and its sign-in link expires after two minutes"
                 % link.stdout.strip().splitlines()[-1])
             return
         why = (out.stderr.strip() or "no reason given").splitlines()[-1]

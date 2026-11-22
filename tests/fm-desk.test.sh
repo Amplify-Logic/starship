@@ -1003,7 +1003,7 @@ test_onboard_off_macos_brings_up_the_desk_and_the_web_page() {
   assert_not_contains "$(cat "$FM_HOME/config/desk-layout")" "view =" "off macOS the starter layout names a window"
   rm -f "$FM_HOME/config/desk-layout" "$FAKE_WEB_RUNNING"
   out=$(FM_DESK_MACOS="" FAKE_WEB_NO_BROWSER=1 desk onboard < /dev/null) || fail "onboard with no browser failed: $out"
-  assert_contains "$out" "  note: no browser opened here; your Starship web page is at http://127.0.0.1:8765/?code=fake" "with no browser onboarding did not print the web page's address"
+  assert_contains "$out" "  note: no browser opened here; your Starship web page runs on this machine at http://127.0.0.1:8765/?code=fake, an address that opens only on this machine, and its sign-in link expires after two minutes" "with no browser onboarding did not print the web page's address"
   assert_not_contains "$out" "done: open your Starship web page" "with no browser onboarding claimed the web page opened"
   [ -e "$FM_HOME/config/desk-layout" ] || fail "with no browser onboarding did not finish"
   pass "desk: off macOS onboard brings up the desk, opens the web page or prints its address"
