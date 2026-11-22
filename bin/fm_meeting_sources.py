@@ -417,7 +417,6 @@ class Anarlog(Source):
             record["phase"] = "waiting"
 
     def poll_one(self, records, meeting_id, record, item, problems):
-        known = records["meetings"]
         if record and record.get("phase") == "speaker-pass":
             self.poll_speaker_pass(record)
             return
