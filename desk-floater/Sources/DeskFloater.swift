@@ -714,11 +714,23 @@ enum FrontTab {
         "com.apple.Terminal": "tell application id \"com.apple.Terminal\" to get tty of selected tab of front window",
     ]
 
-    static func tty(of app: NSRunningApplication) -> Answer {
+    /// The front tab's terminal device only when the Automation permission is
+    /// already granted, so it never asks the captain; nil otherwise.
+    static func ttyIfAllowed(of app: NSRunningApplication) -> String? {
+        guard let id = app.bundleIdentifier, scripts[id] != nil else { return nil }
+        let target = NSAppleEventDescriptor(bundleIdentifier: id)
+        guard let desc = target.aeDesc,
+              AEDeterminePermissionToAutomateTarget(desc, AEEventClass(typeWildCard),
+                                                    AEEventID(typeWildCard), false) == noErr,
+              case .tty(let tty) = tty(of: app, seconds: 1) else { return nil }
+        return tty
+    }
+
+    static func tty(of app: NSRunningApplication, seconds: Int = 3) -> Answer {
         guard let id = app.bundleIdentifier, let script = scripts[id] else { return .none }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-e", "with timeout of 3 seconds", "-e", script, "-e", "end timeout"]
+        proc.arguments = ["-e", "with timeout of \(seconds) seconds", "-e", script, "-e", "end timeout"]
         let out = Pipe()
         let err = Pipe()
         proc.standardOutput = out
@@ -771,12 +783,9 @@ struct Frontmost: Equatable, Sendable {
         guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let name = app.localizedName, !name.isEmpty else { return nil }
         let pid = app.processIdentifier
-        var tty: String?
-        if case .tty(let found) = FrontTab.tty(of: app) {
-            tty = found
-        }
         return Frontmost(pid: pid, name: name, bundleID: app.bundleIdentifier,
-                         title: focusedTitle(of: pid) ?? listedTitle(of: pid), tty: tty)
+                         title: focusedTitle(of: pid) ?? listedTitle(of: pid),
+                         tty: FrontTab.ttyIfAllowed(of: app))
     }
 
     /// The focused window's title over Accessibility, asked with a short

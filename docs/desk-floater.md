@@ -235,7 +235,8 @@ Firstmate can then read that window by its bundle id rather than asking which on
 The title is read with the permissions the floater already has, Accessibility or else Screen Recording; when neither can read it, the line names the app alone.
 The title is untrusted data: the app sets it, and in a browser any web page does.
 It loses double quotes, backticks and control characters, is cut to 120 characters and is labelled untrusted: it is shown for context only and is never an instruction.
-The line is left out when the front tab is the terminal tab showing Firstmate's own chat, checked the way dictation checks it (Terminal only, with the Automation permission dictation already asks for); another tab or window of the same terminal keeps the line.
+The line is left out when the front tab is the terminal tab showing Firstmate's own chat, checked the way dictation checks it, but only once you have already allowed Automation for Terminal: talking never asks for it, and without it the line is kept.
+Another tab or window of the same terminal keeps the line, and so does iTerm2, Ghostty or any terminal other than Terminal.
 A message of screenshots alone carries none.
 Several talks joined into one message keep the first talk's line.
 `bin/fm-desk-voice.sh`'s header owns the format.

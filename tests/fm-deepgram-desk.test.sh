@@ -2698,8 +2698,6 @@ test_desk_voice_dictation_front_check_on_tmux() {
   pass "fm-desk-voice send: on tmux, only the active pane shown on the front terminal is in front"
 }
 
-# The Windows floater cannot name a terminal device, so it asks whether the
-# chat's tmux client has its terminal's focus (docs/desk-floater-windows.md).
 # --- desk-voice send --front: the "Look here" line ---------------------------
 
 test_desk_voice_send_adds_the_front_line_after_the_words() {
@@ -2801,6 +2799,8 @@ test_desk_voice_send_cleans_and_labels_the_front_title() {
   pass "fm-desk-voice send: the front window title is cleaned, capped and labelled untrusted"
 }
 
+# The Windows floater cannot name a terminal device, so it asks whether the
+# chat's tmux client has its terminal's focus (docs/desk-floater-windows.md).
 test_desk_voice_dictation_front_focused_on_tmux() {
   local home out
   home=$(desk_send_fixture front-focused tmux) || { desk_send_skip front-focused; return 0; }
