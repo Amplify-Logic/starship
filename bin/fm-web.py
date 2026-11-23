@@ -30,6 +30,11 @@ pictures in the owner's messages (pasted images, and image paths) are served by
 an opaque id at /api/picture/<id>, only while the shown conversation holds
 them. The desk voice's "Screenshots:" paths and paths under its shots folder
 are taken out of the words; any other image path stays as the owner wrote it.
+A message the owner types while the first mate works waits in Claude Code's
+own queue, which the transcript records as queue-operation entries before the
+message is read in; the reading carries those still queued as `waiting`, shown
+as faded bubbles, until the transcript shows each read in (Conversation's
+_queue_operation and _delivered own the matching).
 A file the first mate's reply names under the home's data/ or .lavish/ folder
 is a link to /api/file/<home path>, served read-only in its own type
 (home_file owns which files qualify); a page or drawing runs sandboxed.
@@ -56,8 +61,9 @@ document (schema fm-web-conversation.v1), for another page that shows a
 home's conversation without this server: the Deck reads every local crew home
 this way. Its fields are schema, home, generated_at, session, state (busy,
 idle or offline), since (when the turn under way began, while busy and known), note,
-older, version and items, each item exactly as the page receives it, so its
-html is already escaped and safe to insert.
+older, version, items and waiting (the owner's messages still queued), each
+item exactly as the page receives it, so its html is already escaped and safe
+to insert.
 
 Beside the conversation the page mirrors the terminal workspace: the bridge
 strip's band and the Factory pane's overview and factory pages, as tabs. It
@@ -755,6 +761,10 @@ def _starts_turn(text: str) -> bool:
     return not (tag and tag.group(1) in BASH_MODE_TAGS)
 
 
+def _words(text: str) -> str:
+    return " ".join(text.split())
+
+
 class Conversation:
     """Folds transcript entries into display items, oldest first."""
 
@@ -777,11 +787,20 @@ class Conversation:
         # Each picture an owner's message shows, by its id: ("path", path) or
         # ("data", media type, base64), read only when the page asks for it.
         self.pictures: Dict[str, Tuple[str, ...]] = {}
+        # Messages typed while the first mate works, as Claude Code's own
+        # queue records them ("queue-operation" entries), oldest first: each
+        # is its timestamp, its words, whether it reads as the owner's own
+        # message, and whether the transcript already shows it read in, until
+        # the queue takes it out.
+        self.queue: List[List[Any]] = []
 
     def add(self, entry: Dict[str, Any]) -> None:
         if not isinstance(entry, dict) or entry.get("isSidechain"):
             return
         kind = entry.get("type")
+        if kind == "queue-operation":
+            self._queue_operation(entry)
+            return
         uid = str(entry.get("uuid") or f"x{len(self.items)}")
         ts = str(entry.get("timestamp") or "")
         was_busy = self.busy
@@ -813,18 +832,75 @@ class Conversation:
                         self._push(_owner_item(uid, ts, text))
                         self.busy = self.opening = True
 
+    def _queue_operation(self, entry: Dict[str, Any]) -> None:
+        """Follow Claude Code's queue of messages typed mid-turn.
+
+        An enqueue adds one; a remove names the words it takes out; popAll
+        and clear empty it. A dequeue names nothing: the owner's messages go
+        before the machinery's notices, so it takes the oldest of the owner's,
+        else the oldest. The transcript may show a message read in before or
+        after its dequeue or remove, so _delivered only marks it read and the
+        queue operation takes a marked one first. A message queued before the
+        part of the transcript read is unknown here, so its dequeue or remove
+        can at worst hide one still waiting: the page may miss a waiting
+        message, never show a read one as waiting.
+        """
+        operation = entry.get("operation")
+        if operation == "enqueue":
+            text = _block_text(entry.get("content"))
+            ts = str(entry.get("timestamp") or "")
+            shown = _classify_user_string("", ts, text, "") if text.strip() else None
+            self.queue.append([ts, text, shown is not None and shown["kind"] == "user", False])
+        elif operation == "dequeue":
+            self._take([queued for queued in self.queue if queued[3]]
+                       or [queued for queued in self.queue if queued[2]] or self.queue)
+        elif operation == "remove":
+            words = _words(_block_text(entry.get("content")))
+            matching = [queued for queued in self.queue if _words(queued[1]) == words]
+            self._take([queued for queued in matching if queued[3]] or matching)
+        elif operation in ("popAll", "clear"):
+            self.queue.clear()
+
+    def _take(self, candidates: List[List[Any]]) -> None:
+        if candidates:
+            self.queue.remove(candidates[0])
+
+    def _delivered(self, text: str) -> None:
+        """The transcript shows <text> read in: it is no longer waiting."""
+        words = _words(text)
+        for queued in self.queue:
+            if not queued[3] and _words(queued[1]) == words:
+                queued[3] = True
+                return
+
+    def waiting_items(self) -> List[Dict[str, Any]]:
+        """The owner's messages still queued, as faded bubbles to show."""
+        waiting: List[Dict[str, Any]] = []
+        for index, (ts, text, owner, read) in enumerate(self.queue):
+            if not owner or read:
+                continue
+            item = _user_item("waiting:" + picture_id(f"{index}:{ts}:{text}"), ts, text)
+            self._render_user(item)
+            item["waiting"] = True
+            waiting.append(item)
+        return waiting
+
+    def _render_user(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
+        text, paths = owner_pictures(item.pop("_text"), self.shots)
+        item["html"] = render_markdown(text) if text.strip() else ""
+        for index, (media, data) in enumerate(blobs or []):
+            pid = picture_id(f"{item['id']}:{index}")
+            self.pictures[pid] = ("data", media, data)
+            item["pictures"].append(pid)
+        for path in paths:
+            pid = picture_id("path:" + path)
+            self.pictures[pid] = ("path", path)
+            item["pictures"].append(pid)
+
     def _push(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
         if item["kind"] == "user":
-            text, paths = owner_pictures(item.pop("_text"), self.shots)
-            item["html"] = render_markdown(text) if text.strip() else ""
-            for index, (media, data) in enumerate(blobs or []):
-                pid = picture_id(f"{item['id']}:{index}")
-                self.pictures[pid] = ("data", media, data)
-                item["pictures"].append(pid)
-            for path in paths:
-                pid = picture_id("path:" + path)
-                self.pictures[pid] = ("path", path)
-                item["pictures"].append(pid)
+            self._delivered(item["_text"])
+            self._render_user(item, blobs)
         self.items.append(item)
         if item["kind"] != "assistant":
             self.last_assistant_msg = None
@@ -1051,7 +1127,8 @@ class TranscriptCache:
                 if session is None
                 else "Firstmate's conversation file was not found."
             )
-            return {"session": session, "state": "offline", "items": [], "older": False, "note": reason, "version": f"none:{session}"}
+            return {"session": session, "state": "offline", "items": [], "waiting": [], "older": False, "note": reason,
+                    "version": f"none:{session}"}
         stat = path.stat()
         key = (str(path), stat.st_size, stat.st_mtime_ns)
         with self.lock:
@@ -1059,13 +1136,15 @@ class TranscriptCache:
                 conversation, older = read_tail(path, str(self.home / "state" / "desk-voice" / "shots"),
                                                 link=self.link)
                 items = conversation.public_items(TAIL_ITEMS)
+                waiting = conversation.waiting_items()
                 self.value = {
                     "items": items,
+                    "waiting": waiting,
                     "older": older,
                     "busy": conversation.busy,
                     "since": conversation.turn_started if conversation.turn_opened or not older else None,
                 }
-                self.pictures = conversation.shown_pictures(items)
+                self.pictures = conversation.shown_pictures(items + waiting)
                 self.key = key
             value = dict(self.value)
         busy = value.pop("busy")
@@ -2373,6 +2452,9 @@ details.quiet.err summary{color:var(--you)}
 /* While the first mate works: a moving mark, what it is doing, and for how long. */
 .live{display:flex;align-items:center;gap:.5rem;margin:.375rem 0 .25rem 2.375rem;font-size:.84rem;color:var(--ink-2)}
 .live[hidden]{display:none}
+.msg.waiting{flex-direction:column;align-items:flex-end}
+.msg.waiting .bubble{opacity:.55;border:1px dashed var(--edge)}
+.msg.waiting .wait{margin-top:.25rem;font-size:.78rem;color:var(--ink-2)}
 .live .what{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .live .took{flex:none;font-variant-numeric:tabular-nums}
 .live .dots{flex:none;display:inline-flex;gap:.2rem}
@@ -2849,6 +2931,16 @@ VIEW_JS = r"""
     return Math.floor(s / 3600) + 'h ' + two(Math.floor(s / 60) % 60) + 'm';
   }
 
+  /* What a message typed while the first mate works says under its faded
+     bubble: it will be read next, or, once the first mate has stopped or it
+     has waited past WAIT_LONG_MS, that it is still waiting. */
+  var WAIT_LONG_MS = 120000;
+  function waitingWords(item, state, now) {
+    var at = Date.parse((item && item.ts) || '');
+    var long = !isNaN(at) && now - at > WAIT_LONG_MS;
+    return state === 'busy' && !long ? 'Waiting, Firstmate will read it next' : 'Still waiting, Firstmate has not read it yet';
+  }
+
   function quietLabel(group) {
     var things = plural(group.steps.length, 'thing', 'things');
     return group.pending ? 'Looking at ' + things + '…' : 'Looked at ' + things;
@@ -2999,6 +3091,7 @@ VIEW_JS = r"""
   }
 
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, took: took, linkLabel: linkLabel,
+              waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
               keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -3018,6 +3111,8 @@ let version='',images=[],sending=false;
 const PLACEHOLDER=input.placeholder;let suggestion='';
 /* The live line: the last items, the turn's start, and when this page first saw it working. */
 let shown=[],since=null,working=false,seenAt=0;
+/* Messages typed while the first mate works, not read in yet, and its state. */
+let waiting=[],chatState='offline';
 const KEY_NAMES={Enter:'↵',Escape:'esc'};
 
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;
@@ -3098,10 +3193,28 @@ function drawLive(){
   live.querySelector('.took').textContent=V.took(Date.now()-(isNaN(start)?seenAt:start));
   if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
 }
+/* Each waiting message as a faded bubble below the live line; the transcript
+   showing it read in drops it here as its normal bubble appears above. */
+function renderWaiting(){
+  const box=$('waiting');const stick=atBottom();const frag=document.createDocumentFragment();
+  for(const item of waiting){
+    const msg=el('div','msg user waiting');const b=el('div','bubble');b.innerHTML=item.html||'';
+    if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
+    msg.appendChild(b);msg.appendChild(el('div','wait',V.waitingWords(item,chatState,Date.now())));frag.appendChild(msg);
+  }
+  box.replaceChildren(frag);
+  if(stick)log.scrollTop=log.scrollHeight;
+}
+function drawWaiting(){
+  const notes=$('waiting').querySelectorAll('.wait');
+  waiting.forEach((item,i)=>{const words=V.waitingWords(item,chatState,Date.now());
+    if(notes[i]&&notes[i].textContent!==words)notes[i].textContent=words;});
+}
 setInterval(drawLive,1000);
+setInterval(drawWaiting,1000);
 function setState(state,started){
   if(state==='busy'&&!working)seenAt=Date.now();
-  working=state==='busy';since=working?started||null:null;
+  working=state==='busy';since=working?started||null:null;chatState=state;
   stateEl.className='state '+state;
   stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':'Not running';
 }
@@ -3114,10 +3227,12 @@ async function poll(){
         version=data.version||'';
         shown=data.items||[];
         render(shown);
+        waiting=data.waiting||[];
+        renderWaiting();
         $('note').textContent=data.note||'';
         $('older').hidden=!data.older;
       }
-      setState(data.state||'offline',data.since);drawLive();
+      setState(data.state||'offline',data.since);drawLive();drawWaiting();
       suggest(data.suggestion||'');
       if(data.build&&BUILD&&data.build!==BUILD)reloadWhenFree();
     }
@@ -3816,6 +3931,7 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 <div id="items"></div>
 <div id="live" class="live" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
 <span class="what" role="status"></span><span class="took" aria-hidden="true"></span></div>
+<div id="waiting"></div>
 <p id="note" class="note"></p></div></div>
 <div id="compose"><div class="wrap">
 <div id="thumbs"></div>
@@ -3987,6 +4103,7 @@ def command_conversation(home: Path) -> None:
         "older": bool(payload.get("older")),
         "version": payload.get("version"),
         "items": payload.get("items", []),
+        "waiting": payload.get("waiting", []),
     }
     json.dump(document, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")

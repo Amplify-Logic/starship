@@ -36,6 +36,10 @@ A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
 While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run (counted from when the page first saw it working, when the turn began before the part of the conversation the page reads); it goes away when the turn ends.
 That line never shows a command, a path or code: a step description that holds one reads as the generic words for that kind of step instead.
+A message you send while the first mate works, from the page, the terminal or the desk floater, shows at once below that line as a faded bubble marked `Waiting, Firstmate will read it next`.
+When the first mate reads it in, it becomes an ordinary message in the chat, shown once.
+If it is still not read in after two minutes, or the first mate is no longer working, the mark says `Still waiting, Firstmate has not read it yet` and the bubble stays.
+This only shows what is waiting; it does not change how the message is delivered.
 
 A message box at the bottom sends to the same first mate.
 A message can hold up to 200,000 characters, enough for a long pasted transcript.
@@ -177,6 +181,7 @@ The transcript is found under the Claude config directory: `CLAUDE_CONFIG_DIR`, 
 The lock and transcript are re-read on every refresh, so a restarted, cleared or compacted session is followed without restarting the page.
 After `/clear` the page switches to the new conversation right away, starting with the `/clear` itself.
 Only the end of the transcript is parsed, so a very large transcript stays quick; older history stays in the terminal.
+A message typed while the first mate works is recorded in the transcript's own queue entries (`queue-operation`) as soon as it is typed; the page shows the owner's messages among them as waiting until the transcript shows each one read in or taken out of the queue, and never shows the machinery's queued notices.
 `bin/fm-web.sh conversation` prints the same reading once as versioned JSON, with no server, for another page that shows a home's conversation; [direct-line.md](direct-line.md) lists the other reads such a page uses.
 The page polls about every one and a half seconds while visible.
 
