@@ -296,6 +296,69 @@ PY
   pass "a turn begun before the read part carries no start"
 }
 
+# A message typed while the first mate works waits in Claude Code's queue; the
+# transcript records it there ("queue-operation") before it is read in. The page
+# shows it at once as a waiting message, and as one ordinary message, never two,
+# once the transcript shows it read in, mid-turn or as the next turn.
+test_a_message_typed_mid_turn_shows_as_waiting_until_it_is_read() {
+  local home file out shot
+  home=$(make_home queued)
+  file=$(transcript "$home")
+  mkdir -p "$home/state/desk-voice/shots"
+  shot="$home/state/desk-voice/shots/20261123T185500000000Z-ab12cd34.png"
+  printf '\x89PNG\r\n\x1a\nshot' > "$shot"
+  {
+    printf '%s\n' '{"type":"user","uuid":"u1","timestamp":"2026-11-23T18:54:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"send the scout"}}'
+    printf '%s\n' '{"type":"assistant","uuid":"a1","timestamp":"2026-11-23T18:54:05Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls","description":"List files"}}]}}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:55:10.000Z","content":"<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:55:13.622Z","content":"send*"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:55:14.000Z","content":"⁣: Firstmate operational input waiting: read the note"}'
+    jq -nc --arg shot "$shot" '{type:"queue-operation",operation:"enqueue",timestamp:"2026-11-23T18:55:20.000Z",content:("and this Screenshots: " + $shot)}'
+  } > "$file"
+  serve_home "$home"
+  out=$(conversation "$home") || fail "conversation read failed"
+  assert_equals "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "user,tool" "a queued message is not yet in the conversation"
+  assert_equals "$(jq -r '[.waiting[] | "\(.kind) \(.waiting) \(.ts) \(.html)"] | join("|")' <<<"$out")" \
+    "user true 2026-11-23T18:55:13.622Z <p>send*</p>|user true 2026-11-23T18:55:20.000Z <p>and this</p>" \
+    "the owner's queued messages wait, oldest first; the machinery's notices do not show"
+  assert_equals "$(jq -r '.waiting[1].pictures | length' <<<"$out")" "1" "a queued screenshot shows as a picture"
+  assert_equals "$(curl -sS -o /dev/null -w '%{http_code}' --cookie "$(cat "$home/web.test-cookie")" \
+    "http://127.0.0.1:$(cat "$home/web.test-port")/api/picture/$(jq -r '.waiting[1].pictures[0]' <<<"$out")")" "200" \
+    "and the page may fetch it"
+  {
+    printf '%s\n' '{"type":"queue-operation","operation":"remove","timestamp":"2026-11-23T18:55:53.980Z","content":"send*","reason":"absorbed_mid_turn"}'
+    printf '%s\n' '{"type":"attachment","uuid":"q1","timestamp":"2026-11-23T18:55:13.377Z","attachment":{"type":"queued_command","prompt":"send*","origin":{"kind":"human"}}}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.items[] | select(.kind == "user") | .html] | join("|")' <<<"$out")" "<p>send the scout</p>|<p>send*</p>" \
+    "read in mid-turn, it is an ordinary message"
+  assert_equals "$(jq -r '[.waiting[].html] | join("|")' <<<"$out")" "<p>and this</p>" "and no longer waiting: never shown twice"
+  # The turn ends and the next queued message starts the next turn: the user
+  # message can land before the dequeue that names nothing.
+  {
+    printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s1","timestamp":"2026-11-23T18:56:00Z"}'
+    jq -nc --arg shot "$shot" '{type:"user",uuid:"u2",timestamp:"2026-11-23T18:56:00.100Z",origin:{kind:"human"},message:{role:"user",content:("and this Screenshots: " + $shot)}}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" "a message read in as the next turn is no longer waiting"
+  assert_equals "$(jq -r '[.items[] | select(.kind == "user")] | length' <<<"$out")" "3" "it shows once"
+  # A dequeue names nothing: it takes the owner's oldest before a notice.
+  {
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:57:00Z","content":"<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:57:01Z","content":"first"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:57:02Z","content":"second"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"dequeue","timestamp":"2026-11-23T18:57:03Z"}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.waiting[].html] | join("|")' <<<"$out")" "<p>second</p>" "a dequeue takes the owner's oldest message"
+  printf '%s\n' '{"type":"queue-operation","operation":"popAll","timestamp":"2026-11-23T18:57:04Z"}' >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" "an emptied queue leaves nothing waiting"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation)
+  assert_equals "$(jq -r '.waiting | type' <<<"$out")" "array" "the conversation command carries what is waiting too"
+  pass "a message typed mid-turn shows as waiting at once and as one ordinary message once read in"
+}
+
 # Bold or italic words that hold code or a link still render as emphasis.
 test_emphasis_around_code_renders() {
   local home html
@@ -1275,10 +1338,14 @@ console.log([
   V.nowWords(pending('Bash', 'word '.repeat(30), 'x')).length <= 81,
 ].join(' | '));
 console.log([0, 9400, 61000, 3599000, 3780000].map(V.took).join(' | '));
+const at = Date.parse('2026-11-23T18:55:13Z'), q = { ts: '2026-11-23T18:55:13Z' };
+console.log([V.waitingWords(q, 'busy', at + 5000), V.waitingWords(q, 'busy', at + V.WAIT_LONG_MS + 1000),
+  V.waitingWords(q, 'idle', at + 5000), V.waitingWords(q, 'offline', at + 5000), V.waitingWords({}, 'busy', at)].join(' | '));
 JS
 ) || fail "the live line rules did not run: $out"
   assert_equals "$out" 'Thinking | Thinking | Thinking | Show the open pull requests | Running a command | Running a command | Running a command | Reading a file | Changing a file | Searching the files | Waiting on a helper: Look through the web code | Using a connected app | Reading its notes | true
-0s | 9s | 1m 01s | 59m 59s | 1h 03m' "the live line in plain words, and how long the turn has run"
+0s | 9s | 1m 01s | 59m 59s | 1h 03m
+Waiting, Firstmate will read it next | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Waiting, Firstmate will read it next' "the live line in plain words, how long the turn has run, and what a waiting message says"
   pass "the live line says what is happening in plain words and for how long"
 }
 
@@ -1325,6 +1392,7 @@ test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
 test_a_working_turn_says_when_it_began
 test_a_turn_begun_before_the_read_part_carries_no_start
+test_a_message_typed_mid_turn_shows_as_waiting_until_it_is_read
 test_emphasis_around_code_renders
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
