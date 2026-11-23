@@ -184,6 +184,17 @@ SCREENSHOTS_LEFT_RE = re.compile(r"(?:^|(?<=\s))Screenshots:[ \t]*(?=\n|$)")
 IMAGE_PATH_RE = re.compile(
     r"(['\"])(/[^'\"\n]+?\.(?:png|jpe?g|gif|webp))\1"
     r"|(?<![^\s'\"(])(/(?:\\ |[^\s'\"\\])+?\.(?:png|jpe?g|gif|webp))(?=$|[\s'\").,;:!?])", re.I)
+# The desk floater's "Front: <app> (<bundle id>) - window title (...): <title>"
+# line (bin/fm-desk-voice.sh's header owns it) is for firstmate, not the owner:
+# the page hides it. It is the last thing in the message but for the
+# screenshots line, typed after the words on their line or saved on its own,
+# and it names a bundle id or a window title, so the owner's own words that
+# merely start with "Front:" stay. The old "(untrusted)" label still matches.
+FRONT_LINE_RE = re.compile(
+    r"(?:^|[ \t]+|[ \t]*\n)Front: (?:(?!Front: )[^\n])+?"
+    r"(?: \([\w.-]+\)(?: - window title \((?:untrusted|set by the app)\): [^\n]*?)?"
+    r"| - window title \((?:untrusted|set by the app)\): [^\n]*?)"
+    r"(?=(?:\s+Screenshots:[^\n]*)?\s*\Z)")
 PICTURE_MAX = 20 * 1024 * 1024
 PICTURE_ID_RE = re.compile(r"^[0-9a-f]{24}$")
 PICTURE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
@@ -886,7 +897,7 @@ class Conversation:
         return waiting
 
     def _render_user(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
-        text, paths = owner_pictures(item.pop("_text"), self.shots)
+        text, paths = owner_pictures(FRONT_LINE_RE.sub("", item.pop("_text"), count=1), self.shots)
         item["html"] = render_markdown(text) if text.strip() else ""
         for index, (media, data) in enumerate(blobs or []):
             pid = picture_id(f"{item['id']}:{index}")
@@ -2370,10 +2381,12 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 .tab:hover{color:var(--hull-ink)}
 .tab .dot{display:inline-block;margin-left:.375rem;vertical-align:.06rem}
 .tab[aria-selected="true"]{color:var(--hull-ink);font-weight:600;background:var(--hull-soft);box-shadow:inset 0 -2px 0 var(--here)}
-.band{display:flex;align-items:center;gap:.375rem .875rem;justify-content:flex-end;min-width:0}
+/* The band keeps its whole width and the tabs scroll instead: a band squeezed
+   below its content spills left over the tabs, drawing a lamp over a tab's name. */
+.band{flex:none;display:flex;align-items:center;gap:.375rem .875rem;justify-content:flex-end}
 .lamps{display:flex;gap:.375rem .75rem}
 .lamp{display:flex;align-items:center;gap:.375rem;font-size:.84rem;white-space:nowrap}
-.lamp i{width:.56rem;height:.56rem;border-radius:50%;border:1.5px solid var(--hull-2);opacity:.6}
+.lamp i{flex:none;width:.56rem;height:.56rem;border-radius:50%;border:1.5px solid var(--hull-2);opacity:.6}
 .lamp b{font-weight:600;font-variant-numeric:tabular-nums}
 .lamp:not(.lit){color:var(--hull-2)}
 .lamp.lit i{border:0;opacity:1}

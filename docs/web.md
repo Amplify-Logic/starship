@@ -30,6 +30,7 @@ Everything the first mate did between two messages folds into one quiet line, su
 Notices typed into the chat by the machinery, such as the desk voice's mailbox ring, are steps in that line, never your messages.
 A picture you pasted, or a screenshot the desk voice sent, shows as a small picture you can click to see in full, never as its file path.
 Any other image path you typed stays in your words exactly as you wrote it, with the picture shown beneath the message.
+The desk floater's Front line, naming the app and window in front when you talked, is hidden from your messages; Firstmate still receives it ([desk-floater.md](desk-floater.md#the-front-line)).
 A file the first mate names in a reply, home-relative such as `data/<task>/knowledge.html` or as an absolute path, is a link that opens the file in a new tab when it exists under the home's `data/` or `.lavish/` folder.
 Web pages, PDFs, pictures and drawings open as themselves, and Markdown and other text files open as plain text; any other path stays plain words.
 A compaction shows as a divider whose summary you can expand.

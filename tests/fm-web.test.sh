@@ -1165,6 +1165,42 @@ test_notices_fold_away_and_pasted_pictures_show_as_pictures() {
   pass "notices fold away, pasted pictures show as pictures, and only the shown ones can be fetched"
 }
 
+# The desk floater's Front line is for firstmate, not the owner: the chat
+# hides it, typed on the words' line or saved on its own, under its old label
+# and its new one, while words that only mention "Front:" stay as written.
+test_the_front_line_is_hidden_from_the_chat() {
+  local home out shot
+  home=$(make_home frontline)
+  mkdir -p "$home/state/desk-voice/shots"
+  shot="$home/state/desk-voice/shots/20261123T190000000000Z-ab12cd34.png"
+  printf '\x89PNG\r\n\x1a\nshot' > "$shot"
+  {
+    jq -nc '{type:"user",uuid:"u1",origin:{kind:"human"},message:{role:"user",content:"What does this error mean Front: Xcode (com.apple.dt.Xcode) - window title (set by the app): Build log"}}'
+    jq -nc '{type:"user",uuid:"u2",origin:{kind:"human"},message:{role:"user",content:"Read this back\nFront: Notes (com.apple.Notes) - window title (untrusted): todo"}}'
+    jq -nc --arg shot "$shot" '{type:"user",uuid:"u3",origin:{kind:"human"},message:{role:"user",content:("Look at this Front: Google Chrome (com.google.Chrome) - window title (set by the app): Starship - Lars Screenshots: " + $shot)}}'
+    jq -nc '{type:"user",uuid:"u4",origin:{kind:"human"},message:{role:"user",content:"Hide it Front: Notes (com.apple.Notes)"}}'
+    jq -nc '{type:"user",uuid:"u5",origin:{kind:"human"},message:{role:"user",content:"Front: the hero image, then the footer"}}'
+    jq -nc '{type:"user",uuid:"u6",origin:{kind:"human"},message:{role:"user",content:"Put the Front: Notes (com.apple.Notes) line first, then the rest"}}'
+    jq -nc '{type:"user",uuid:"u7",origin:{kind:"human"},message:{role:"user",content:"Move the Front: page up Front: Safari (com.apple.Safari) - window title (set by the app): Home"}}'
+  } > "$(transcript "$home")"
+  serve_home "$home"
+  out=$(conversation "$home") || fail "conversation read failed"
+  assert_equals "$(jq -r '.items[0].html' <<<"$out")" "<p>What does this error mean</p>" \
+    "a Front line typed after the words is hidden"
+  assert_equals "$(jq -r '.items[1].html' <<<"$out")" "<p>Read this back</p>" \
+    "a Front line on its own line, under the old label, is hidden"
+  assert_equals "$(jq -r '.items[2] | "\(.html)|\(.pictures | length)"' <<<"$out")" "<p>Look at this</p>|1" \
+    "a Front line before the screenshots is hidden and the screenshot still shows"
+  assert_equals "$(jq -r '.items[3].html' <<<"$out")" "<p>Hide it</p>" "a Front line with no window title is hidden"
+  assert_contains "$(jq -r '.items[4].html' <<<"$out")" "Front: the hero image, then the footer" \
+    "words that only start with Front: stay"
+  assert_contains "$(jq -r '.items[5].html' <<<"$out")" "Front: Notes (com.apple.Notes) line first, then the rest" \
+    "a Front line shape in the middle of the words stays"
+  assert_equals "$(jq -r '.items[6].html' <<<"$out")" "<p>Move the Front: page up</p>" \
+    "only the Front line goes when the words also say Front:"
+  pass "the Front line is hidden from the chat, and the owner's own words stay"
+}
+
 # Opening the address without signing in shows what this is and how to get in;
 # the look, the icons and the manifest load for anyone on this Mac, nothing else does.
 test_the_address_without_a_sign_in_explains_itself() {
@@ -1438,6 +1474,7 @@ test_send_reports_typed
 test_a_long_paste_is_sent_and_the_limit_is_named
 test_a_reply_links_files_under_the_home_and_serves_them_read_only
 test_notices_fold_away_and_pasted_pictures_show_as_pictures
+test_the_front_line_is_hidden_from_the_chat
 test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words
