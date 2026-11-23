@@ -123,7 +123,9 @@ a report under the home's data/; its record carries those as `read`, the sources
 bin/fm-read.sh is given, and fm-read.sh owns which page opens. `r` reads the
 highlighted call, or on a factory the first job or report in New it shows
 with something to read, and a click on any `r  Read the report` line reads that one; the reader runs in the
-background, so the pane never waits on it.
+background, so the pane never waits on it. Likewise a change in New that went
+live shows an `o  See what changed` line: `o` on its factory opens the first
+such PR in the browser, and a click on the line opens that one.
 
 How fresh it is. A full refresh reads every worker, which takes seconds, so the
 live pane starts one only once the record's workers are FM_FACTORY_TTL old and
@@ -227,6 +229,9 @@ Test seams:
                               none
   FM_FACTORY_READ             reader command, run with the item's read sources
                               as arguments (default bin/fm-read.sh)
+  FM_FACTORY_OPEN             the command that opens a change's PR, run as
+                              `<cmd> <pr-url>` (default open on macOS,
+                              xdg-open elsewhere)
 Exit: 0 on success; 1 when a step fails, with the reason on stderr; 2 on a usage
 error.
 """
@@ -1571,20 +1576,25 @@ def routine_lines(factory: Dict[str, Any],
     return lines
 
 
+RESOLUTION_RE = re.compile(r"^Resolution recorded by fm-(captain|decision)-hold\.$")
+
+
 def recorded_answer(lines: Any) -> str:
     """What the owner answered on a closed call, from its resolution record (bin/fm-captain-hold.sh answer).
 
-    The record's words under `Captain decision:` are his; a captured answer
-    names the option as it was shown to him, which reads better than its key.
+    Records are prepended, so the newest is the first, up to the next one; only
+    its words under `Captain decision:` are the owner's, and a captured answer
+    names the option as it was shown, which reads better than its key.
     """
     lines = [str(line).strip() for line in lines or [] if isinstance(line, str)]
-    if "Captain decision:" not in lines:
+    starts = [i for i, line in enumerate(lines) if RESOLUTION_RE.match(line)]
+    if not starts:
         return ""
-    block: List[str] = []
-    for line in lines[lines.index("Captain decision:") + 1:]:
-        if not line:
-            break
-        block.append(line)
+    record = lines[starts[0] + 1:starts[1] if len(starts) > 1 else len(lines)]
+    labels = [line for line in record if line in ("Captain decision:", "Reconciliation evidence:")]
+    if labels[:1] != ["Captain decision:"]:
+        return ""
+    block = [line for line in record[record.index("Captain decision:") + 1:] if line]
     shown = next((line.split(":", 1)[1] for line in block if line.startswith("Answer as shown to the captain:")), None)
     if shown is not None:
         words = shown.rsplit(" -> ", 1)[0]
@@ -2674,6 +2684,7 @@ class Row(list):
     hull = False
     stop: Optional[Tuple[str, str]] = None   # the highlight stop this row draws, if any
     read: Optional[Tuple[str, List[str]]] = None   # the title and sources a click on this row reads
+    link: Optional[Tuple[str, str]] = None   # the title and PR a click on this row opens
 
 
 def S(text: Any, colour: str = "ice", bold: bool = False) -> Tuple[str, str, bool]:
@@ -2788,6 +2799,8 @@ LOOK_WORDS = {"checks": "stopped: its checks raised a question, Starship is on i
 NEW_LABELS = {"went live": "Went live", "report ready": "Report ready", "settled": "Settled",
               "PR ready": "PR ready", "finished": "Finished", "failed": "Failed", "closed": "Closed"}
 NEW_CAP = 4
+# How many of its newest feed events a factory's own page lists, on both screens.
+PAGE_FEED = 8
 # How long after its start a busy job that has named no step reads `just started`.
 JUST_STARTED = 300
 FEED_COLOUR = {"finished": "green", "report ready": "green", "PR ready": "green", "went live": "green",
@@ -2806,6 +2819,13 @@ def read_row(width: int, lead: str, item: Dict[str, Any]) -> Row:
     """The `r  Read the report` line of a call or job with something to read; a click on it reads it."""
     line = row(width, [S(lead), S("r", "cyan", True), S("  "), S("Read the report", "ice")])
     line.read = (item["title"], list(item["read"]))
+    return line
+
+
+def link_row(width: int, lead: str, item: Dict[str, Any]) -> Row:
+    """The `o  See what changed` line of a change that went live; a click on it opens its PR."""
+    line = row(width, [S(lead), S("o", "cyan", True), S("  "), S("See what changed", "ice")])
+    line.link = (item["title"], item["pr"])
     return line
 
 
@@ -2999,6 +3019,14 @@ class View:
         drawn = self.page_jobs(fac)[0] if self.opened else self.overview_jobs(fac) + self.told(fac)["new"]
         job = next((j for j in drawn if j.get("read")), None)
         return (job["title"], job["read"]) if job else None
+
+    def openable(self) -> Optional[Tuple[str, str]]:
+        """What `o` opens: on a highlighted factory on the overview, the PR of the first change in New that went live."""
+        kind, ident = self.at()
+        if kind != "factory" or self.opened or not self.has_factory(ident):
+            return None
+        item = next((n for n in self.told(self.factory(ident))["new"] if n["pr"]), None)
+        return (item["title"], item["pr"]) if item else None
 
     @staticmethod
     def overview_jobs(fac: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -3388,6 +3416,10 @@ class View:
                         "text": text,
                         "when": self.stamp(event), "pr": event.get("pr") if event["word"] == "went live" else None,
                         "read": list(event.get("read") or []), "title": title})
+        more = news[NEW_CAP:]
+        page = {id(e) for e in [e for e in self.record["feed"] if e["factory"] == fac["id"]][:PAGE_FEED]}
+        more_words = ("and %d more" % len(more) + (", on its own page" if all(id(e) in page for e in more) else "")
+                      if more else "")
         nxt = fac.get("next")
         lined = nxt["then"] + 1 if nxt else 0
         needs = len(fac["needs"])
@@ -3408,7 +3440,7 @@ class View:
             "jobs": jobs, "routine": routine,
             "now": "" if any(j["state"] == "busy" for j in jobs) or any(r["running"] for r in routine)
             else "Nothing is running.",
-            "new": new, "more": max(len(news) - NEW_CAP, 0),
+            "new": new, "more": len(more), "more_words": more_words,
             "next": {"title": nxt["title"], "once_you_answer": bool(nxt["once_you_answer"]), "then": nxt["then"],
                      "words": "".join([", once you answer" if nxt["once_you_answer"] else "",
                                        ", then %d more lined up" % nxt["then"] if nxt["then"] else ""])}
@@ -3483,8 +3515,10 @@ class View:
             new += flow(width, lead, item["text"], "ice", indent=pad + 7, cap=3)
             if item["read"]:
                 new.append(read_row(width, " " * (pad + 7), item))
+            if item["pr"]:
+                new.append(link_row(width, " " * (pad + 7), item))
         if told["more"]:
-            new.append(row(width, [S(" " * (pad + 7)), S("and %d more, on its own page" % told["more"], "faint")]))
+            new.append(row(width, [S(" " * (pad + 7)), S(told["more_words"], "faint")]))
         rows += labelled(new, "new")
         nxt = told["next"]
         if nxt:
@@ -3662,6 +3696,8 @@ class View:
             keys.append("b bring back · n no longer needed")
         if self.readable():
             keys.append("r read")
+        if self.openable():
+            keys.append("o see the change")
         if self.unfolded or self.older_open is not None:
             keys.append("esc hide the list")
         elif not self.opened or not self.in_tab:
@@ -3762,7 +3798,7 @@ class View:
             rows.append(row(width, [S("     nothing recorded yet", "faint")]))
         for stamp, what in self.learned(fac):
             rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], what, "mist")
-        rows += [row(width)] + self.feed_rows(width, fac["id"], cap=8)
+        rows += [row(width)] + self.feed_rows(width, fac["id"], cap=PAGE_FEED)
         rows += [row(width), row(width, [S(" TALK", "mist", True)]), row(width)]
         if not fac["talk"]:
             rows.append(row(width, [S("     Nothing said here yet. Press t to talk to this crew.", "faint")]))
@@ -3889,7 +3925,7 @@ def screen(view: View) -> Dict[str, Any]:
             "new": [{"id": item["id"], "word": item["word"], "label": item["label"], "text": item["text"], "when": item["when"],
                      "pr": item["pr"], "read": bool(item["read"]), "title": item["title"],
                      "colour": FEED_COLOUR.get(item["word"], "amber")} for item in told["new"]],
-            "more": told["more"],
+            "more": told["more"], "more_words": told["more_words"],
             "next": told["next"],
             "page": {
                 "needs": [need["id"] for need in view.needs(fac["id"])],
@@ -3903,7 +3939,7 @@ def screen(view: View) -> Dict[str, Any]:
                 "rules_mark": {"red": "over", "amber": "near"}.get(rules_colour, ""),
                 "learned": [{"when": stamp, "what": what} for stamp, what in view.learned(fac)],
                 "shelves": shelves_of(fac["id"]),
-                "feed": feed_of(fac["id"], 8),
+                "feed": feed_of(fac["id"], PAGE_FEED),
                 "talk": [{"when": stamp, "who": who, "said": said} for stamp, who, said in view.talk(fac)]}}
 
     # The jobs behind the bridge strip's "N stopped", the ones the top sentence counts.
@@ -4208,6 +4244,14 @@ def start_reading(home: str, sources: List[str]) -> subprocess.Popen:
     with open(os.path.join(pane_dir(home), "read.log"), "w", encoding="utf-8") as log:
         return subprocess.Popen(cmd + list(sources), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                 start_new_session=True, env=dict(os.environ, FM_HOME=home))
+
+
+def start_opening(home: str, url: str) -> subprocess.Popen:
+    """Open <url> in the browser in the background."""
+    seam = os.environ.get("FM_FACTORY_OPEN")
+    cmd = shlex.split(seam) if seam else ["open" if sys.platform == "darwin" else "xdg-open"]
+    return subprocess.Popen(cmd + [url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True, env=dict(os.environ, FM_HOME=home))
 
 
 def record_steer(home: str, fid: str, who: str, now: int) -> None:
@@ -4635,6 +4679,19 @@ class Pane:
             return
         self.say("Opening %s to read." % title, "cyan")
 
+    def open_change(self, item: Optional[Tuple[str, str]]) -> None:
+        """Open the PR of a change that went live in the browser, without waiting for it."""
+        if not item:
+            self.say("No change to open here.", "mist")
+            return
+        title, pr = item
+        try:
+            start_opening(self.home, pr)
+        except OSError as error:
+            self.say("%s did not open: %s" % (title, error), "red", 12)
+            return
+        self.say("Opening the change %s." % title, "cyan")
+
     def check_reading(self) -> None:
         """Say so when the reader stopped without opening the page."""
         if not self.reading or self.reading[0].poll() is None:
@@ -4829,11 +4886,14 @@ class Pane:
             view.scroll(3 if key == "wheel-down" else -3)
             return True
         if key.startswith(CLICK):
-            # A click reads the Read line it lands on; anywhere else it does nothing.
+            # A click reads the Read line or opens the change line it lands on; anywhere else it does nothing.
             line = int(key[len(CLICK):])
             drawn = self.drawn[line - 1] if 0 < line <= len(self.drawn) else None
-            if drawn is not None and drawn.read and view.talking is None and view.confirm is None:
-                self.read(drawn.read)
+            if drawn is not None and view.talking is None and view.confirm is None:
+                if drawn.read:
+                    self.read(drawn.read)
+                elif drawn.link:
+                    self.open_change(drawn.link)
             return True
         if key in ("mouse", "other"):
             return True
@@ -4922,6 +4982,8 @@ class Pane:
             self.settled(need)
         elif lower == "r":
             self.read(view.readable())
+        elif lower == "o":
+            self.open_change(view.openable())
         elif lower == "t":
             fid = self.factory_of_stop()
             if need and need["kind"] == "question":
@@ -5153,7 +5215,8 @@ def dig(data: Any, *paths: str) -> Optional[str]:
 def pane_command(home: str, *args: str) -> str:
     words = ["exec", "env", "FM_HOME=%s" % home]
     for name in ("HERDR_BIN_PATH", "FM_FACTORY_TTL", "FM_FACTORY_MAX_AGE", "FM_FACTORY_QUIET_MINUTES", "FM_FACTORY_SNAPSHOT",
-                 "FM_FACTORY_PEEK", "FM_FACTORY_INBOX", "FM_FACTORY_READ", "FM_FACTORY_PANE_CONFIG_DIR"):
+                 "FM_FACTORY_PEEK", "FM_FACTORY_INBOX", "FM_FACTORY_READ", "FM_FACTORY_OPEN",
+                 "FM_FACTORY_PANE_CONFIG_DIR"):
         if name in os.environ:
             words.append("%s=%s" % (name, os.environ[name]))
     words += ["bash", os.path.join(BIN, "fm-factory-pane.sh")] + list(args)

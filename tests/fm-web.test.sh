@@ -628,7 +628,7 @@ write_screen() {  # <home>
             "when": "06:05", "pr": "https://example.invalid/g/pull/9", "read": false, "title": "Raised beds", "colour": "green"},
            {"id": "garden-soil", "word": "report ready", "label": "Report ready", "text": "Why the soil dries out",
             "when": "today", "pr": null, "read": true, "title": "Why the soil dries out", "colour": "green"}],
-   "more": 2,
+   "more": 2, "more_words": "and 2 more, on its own page",
    "next": {"title": "Harvest notes", "once_you_answer": true, "then": 1, "words": ", once you answer, then 1 more lined up"},
    "page": {"needs": ["garden-chart", "garden-share"], "queue": ["3 queued", "2 in line", "1 deferred to a date"],
     "jobs": [], "workers": [
@@ -723,7 +723,8 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '.projects[0].new | map("\(.when) \(.label): \(.text) [\(.mark)] \(.pr) \(.read)") | join(" / ")')" \
     "06:11 Ready for your OK: The queued orders page [done]  false / 06:05 Went live: Raised beds [done] https://example.invalid/g/pull/9 false / today Report ready: Why the soil dries out [done]  true" \
     "a project's New"
-  assert_equals "$(m '.projects[0].more')" "2" "how many more New leaves to the project's page"
+  assert_equals "$(m '.projects[0] | "\(.more) \(.more_words)"')" "2 and 2 more, on its own page" \
+    "how many more New leaves to the project's page"
   assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title)"')" \
     "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds" \
     "a project's own page"

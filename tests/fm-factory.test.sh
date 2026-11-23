@@ -1066,8 +1066,16 @@ test_closed_work_reads_closed_and_only_delivered_work_reads_finished() {
         report_path: "data/shop-scout/report.md"}),
       closed("shop-call"; "Free shipping over fifty"; {kind: "captain", hold_kind: "captain",
         hold_reason: "Free shipping needs a floor.",
-        body_lines: ["Resolution recorded by fm-captain-hold.", "Decision digest: 0", "Resolution mode: answered", "",
-          "Captain decision:", "Yes, from fifty.", "", "Free shipping needs a floor."]})]' "$FM_FACTORY_SNAPSHOT") \
+        body_lines: ["Resolution recorded by fm-captain-hold.", "Decision digest: 1", "Resolution mode: answered",
+          "Captain decision:", "Yes, from fifty.",
+          "Resolution recorded by fm-captain-hold.", "Decision digest: 0", "Resolution mode: answered",
+          "Captain decision:", "Captain answered this call through the Factory pane.", "Task: shop-call",
+          "Answer: 2", "Answer as shown to the captain: No free shipping -> 2", "Free shipping needs a floor."]}),
+      closed("shop-recon"; "Gift cards for staff"; {kind: "captain", hold_kind: "captain",
+        body_lines: ["Resolution recorded by fm-captain-hold.", "Decision digest: 1", "Resolution mode: reconciled",
+          "Reconciliation evidence:", "Closed on the forge.",
+          "Resolution recorded by fm-captain-hold.", "Decision digest: 0", "Resolution mode: answered",
+          "Captain decision:", "Yes, for staff."]})]' "$FM_FACTORY_SNAPSHOT") \
     || fail "could not close the work"
   printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
   # A change takes its real time from its PR's merge, a report from when it was written.
@@ -1090,8 +1098,12 @@ SH
     "only a change that went live through a PR has its merge time read"
   assert_equals "$(q '[.feed[] | select(.job == "shop-merged" or .job == "shop-scout") | "\(.job)@\(.at)"] | join(" ")')" \
     "shop-merged@$((NOW - 30 * 60)) shop-scout@$((NOW - 48 * 60))" "a change's and a report's real times"
+  # Records are prepended: only the newest says what the owner answered, and a
+  # closure on evidence is no answer of the owner's, whatever an older record said.
   assert_equals "$(q '.feed[] | select(.job == "shop-call") | .answer')" "Yes, from fifty." \
     "a settled call keeps what the owner answered"
+  assert_equals "$(q '.feed[] | select(.job == "shop-recon") | "\(.word)|\(.answer)|\(.text)"')" \
+    "settled||Gift cards for staff" "a call closed on evidence says an older answer"
   out=$(python3 "$FACTORY" --plain --width 110 --factory sample-shop) || fail "--plain failed"
   has_line "$out" " today closed Stamp card at checkout was closed; no change or report on record." \
     "a job closed with nothing built does not read closed"
@@ -1111,10 +1123,12 @@ SH
   has_line "$out" " 07:12 Report ready: Why the cart is slow" "a report ready row"
   assert_equals "$(printf '%s\n' "$out" | grep -A1 'Report ready: Why the cart is slow' | sed -n 2p | tr -s ' ')" \
     " r Read the report" "a report in New has no Read line"
-  has_line "$out" " and 2 more, on its own page" "New does not say how much more its factory's page tells"
+  assert_equals "$(printf '%s\n' "$out" | grep -A1 'Went live: Faster cart' | sed -n 2p | tr -s ' ')" \
+    " o See what changed" "a change that went live in New has no line to open it"
+  has_line "$out" " and 3 more, on its own page" "New does not say how much more its factory's page tells"
   assert_not_contains "$out" " is in." "a news row still ends in a tail"
-  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "sample-shop") | [.new[:2][] | "\(.when) \(.label): \(.text) [\(.colour)] \(.pr // "-") \(.read)"] + [.more | tostring] | join("; ")')" \
-    "07:30 Went live: Faster cart [green] https://example.invalid/s/pull/5 false; 07:12 Report ready: Why the cart is slow [green] - true; 2" \
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "sample-shop") | [.new[:2][] | "\(.when) \(.label): \(.text) [\(.colour)] \(.pr // "-") \(.read)"] + [.more_words] | join("; ")')" \
+    "07:30 Went live: Faster cart [green] https://example.invalid/s/pull/5 false; 07:12 Report ready: Why the cart is slow [green] - true; and 3 more, on its own page" \
     "a second screen is not handed the same New"
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s"\n' "$HOME_FIX/read.args" > "$BINDIR/reader$CASE"
   chmod +x "$BINDIR/reader$CASE"
@@ -1122,6 +1136,31 @@ SH
     '{"ok": true, "said": "Opening Why the cart is slow to read."}' "a second screen cannot read a report its New tells"
   sleep 0.5
   assert_equals "$(cat "$HOME_FIX/read.args" 2>/dev/null)" "shop-scout" "the report a second screen reads"
+  # `o` on the factory, and a click on its See what changed line, open that change's PR.
+  local opened="$HOME_FIX/open.args" screen="$HOME_FIX/screen" line
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$opened" > "$BINDIR/opener$CASE"
+  chmod +x "$BINDIR/opener$CASE"
+  export FM_FACTORY_OPEN="$BINDIR/opener$CASE"
+  drive_keys DOWN DOWN DOWN DOWN o
+  assert_equals "$(cat "$opened" 2>/dev/null)" "https://example.invalid/s/pull/5" "o on a factory did not open its change"
+  : > "$opened"
+  python3 "$FACTORY" --plain --width 100 --height 50 > "$screen" || fail "--plain failed"
+  line=$(awk '/Went live: Faster cart/ { live = 1 } live && /o  See what changed$/ { print NR; exit }' "$screen")
+  [ -n "$line" ] || fail "no See what changed line in sight to click"$'\n'"$(cat "$screen")"
+  drive_keys $'\x1b[<0;20;'"$line"$'M\x1b[<0;20;'"$line"'m'
+  assert_equals "$(cat "$opened" 2>/dev/null)" "https://example.invalid/s/pull/5" \
+    "a click on a See what changed line did not open that change"
+  unset FM_FACTORY_OPEN
+  # The factory's page lists its eight newest events, four of which New already
+  # shows, so more than four more cannot all be there.
+  snap=$(jq '(.backlog.records[] | select(.id == "shop-dropped")) as $row
+    | .backlog.records += [range(1; 6) | . as $n | $row + {id: "shop-old\($n)", title: "Old idea \($n)"}]' \
+    "$FM_FACTORY_SNAPSHOT") || fail "could not close more work"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  take_record
+  out=$(python3 "$FACTORY" --plain --width 110) || fail "--plain failed"
+  has_line "$out" " and 8 more" "New does not count what its factory's page cannot hold"
+  assert_not_contains "$out" "8 more, on its own page" "New says its page holds more than the page lists"
   unset FM_FACTORY_PR_MERGED
   pass "factory feed: closed work reads closed; a merged change or a landing went live, a report is ready, an answered call is settled"
 }

@@ -1277,6 +1277,7 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(item, dict)
         ],
         "more": factory.get("more") or 0,
+        "more_words": factory.get("more_words") or "",
         "routine": [
             {"kind": line.get("kind") or "", "words": list(line.get("words") or []), "now": line.get("now") or ""}
             for line in factory.get("routine") or []
@@ -2469,7 +2470,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .call.open{border-color:var(--edge);box-shadow:var(--shadow)}
 .call.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{background:var(--here-bg)}100%{background:var(--surface)}}
-.call.hl,.proj.hl{outline:2px solid var(--here);outline-offset:1px}
+.call.hl,.proj.hl,.quiet-facs li.hl{outline:2px solid var(--here);outline-offset:1px}
 .call-row{width:100%;border:0;background:none;text-align:left;display:flex;align-items:center;gap:.56rem;padding:.45rem .7rem;border-radius:.7rem}
 .dot{width:.5rem;height:.5rem;border-radius:50%;flex:none;background:var(--edge)}
 .dot.you{background:var(--you-lamp)}.dot.done{background:var(--done-lamp)}.dot.work{background:var(--work-lamp)}.dot.here{background:var(--here)}
@@ -3493,7 +3494,7 @@ function drawHome(){
         else line.appendChild(linked(n.text,true));
         if(n.read)line.appendChild(btn('btn small plain','Read it','read',{factory:p.id,job:n.id}));
         dd.appendChild(line);});
-      if(p.more)dd.appendChild(el('p','line','and '+p.more+' more, on its own page'));
+      if(p.more)dd.appendChild(el('p','line',p.more_words));
       part('New',dd);}
     if(p.next){const dd=el('dd');const line=el('p');
       add(line,el('b','',V.plainText(p.next.title)),document.createTextNode(p.next.words));dd.appendChild(line);part('Next',dd);}
@@ -3501,7 +3502,7 @@ function drawHome(){
   });
   const quiet=M.projects.filter(p=>p.quiet);
   if(quiet.length){const q=el('div','quiet-facs');q.appendChild(el('h4','','Quiet for now'));const ul=el('ul');
-    quiet.forEach(p=>{const li=el('li');li.dataset.proj=p.id;add(li,btn('proj-name',p.name,'tab',{id:p.id}),el('span','w',p.quiet_words));ul.appendChild(li);});
+    quiet.forEach(p=>{const li=el('li',hl&&hl.kind==='project'&&hl.id===p.id?'hl':'');li.dataset.proj=p.id;add(li,btn('proj-name',p.name,'tab',{id:p.id}),el('span','w',p.quiet_words));ul.appendChild(li);});
     q.appendChild(ul);facs.appendChild(q);}
   if(!M.projects.length)facs.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
   body.replaceChildren(needs,facs);

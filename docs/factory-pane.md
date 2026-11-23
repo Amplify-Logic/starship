@@ -44,6 +44,7 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
      new   14:12  Report ready: Why the cart is slow
                   r  Read the report
            11:41  Went live: Faster cart
+                  o  See what changed
            today  Settled: Free shipping over fifty? You answered: Yes, from fifty.
      next  Gift wrap at checkout, then 3 more lined up
 
@@ -95,8 +96,8 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   A job that is not busy but waits, stopped, failed or is a call of yours that has started is one row with its state in words, and with nothing busy Now opens with `Nothing is running.`
   A job with something to read shows the same `r  Read the report` line.
   A factory with [routine work](#routine-work) adds one `↻` line per routine kind under Now.
-  New is what came out of the factory since the owner last looked: `Went live:`, `Report ready:`, `Settled:`, `PR ready:`, `Finished:`, `Failed:` or `Closed:` in front of the work's title, newest first, each with its time, at most four, then how many more its own page lists.
-  A settled call says what the owner answered, from its resolution record's `Captain decision:` words, a report shows its `r  Read the report` line, and work that went live is told once, so its earlier finished or PR ready is left out.
+  New is what came out of the factory since the owner last looked: `Went live:`, `Report ready:`, `Settled:`, `PR ready:`, `Finished:`, `Failed:` or `Closed:` in front of the work's title, newest first, each with its time, at most four, then how many more there are, with `, on its own page` only when that page's eight newest events hold them all.
+  A settled call says what the owner answered, from its resolution record's `Captain decision:` words, a report shows its `r  Read the report` line, a change that went live through a PR shows an `o  See what changed` line, and work that went live is told once, so its earlier finished or PR ready is left out.
   Next is the first job in line and how many more are lined up after it, or `, once you answer` when the next job waits on a call of yours.
   A factory with nothing that needs you, nothing in Now and nothing new is quiet: it folds into one line under QUIET FOR NOW, saying since when it is idle, or that nothing is running, how many jobs are lined up, and how many of its calls are put off with the date the next comes back.
   The heading says since when New tells what moved, in the third sentence's words: since the owner last looked, or the last 12 or 48 hours.
@@ -117,7 +118,7 @@ When the screen is taller than the pane, the sentences stay on top and the keys 
 The highlight keeps itself in sight as it moves, `pgup`, `pgdn` and the mouse wheel scroll the view, and the row under the sentences and the row above the keys say how many lines are out of sight above or below.
 The pane asks the terminal for mouse reports to see the wheel, so Herdr's own text selection does not work inside it.
 
-The pane asks for mouse button reports too, so a click on a `Read the report` line reads that item; a click anywhere else does nothing.
+The pane asks for mouse button reports too, so a click on a `Read the report` line reads that item and a click on a `See what changed` line opens that PR in the browser; a click anywhere else does nothing.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done or ready to merge, red is a decision for you.
 The pane and the worker copies in a factory's tab select light or dark colours, including the highlighted rows: the remembered [workspace theme](fork-configuration.md#workspace-theme-configworkspace-theme) when one is set, repainting in place when it is switched, else the terminal background at startup; plain-text output is unchanged.
@@ -190,6 +191,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `k` | Keep the highlighted finished work and ask Starship to land it, after `enter` confirms it. |
 | `c` | Ask for changes to the highlighted finished work, in the talk box, typed. |
 | `r` | Read the highlighted call's report, or on a factory the first shown job's; a click on a `Read the report` line reads that one. |
+| `o` | On a factory on the overview, open the PR of the first change in its New that went live, in the browser (`FM_FACTORY_OPEN` stands in for the opener); a click on a `See what changed` line opens that one. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through: by voice where the desk voice is set up, typed otherwise. |
 | `s` | Switch who steers the highlighted factory, both ways. |
 | `b` `n` | On a listed older question, ask Starship to bring it back into NEEDS YOU, or say it is no longer needed, after `enter` confirms it. |
@@ -353,5 +355,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's answer, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's answer, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.
