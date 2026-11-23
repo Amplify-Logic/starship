@@ -70,8 +70,8 @@ sends; a button on a project tab says `in_tab`, so it records no look, as a
 key in a factory's tab does not. The page decides and merges nothing. This process never takes the
 session lock, never drains wakes, and never writes backlog or fleet state.
 
-The page's settings (text size, style, light or dark, reduced motion, key
-hints, panel sizes) live in the browser's own storage; SETTINGS_JS owns them
+The page's settings (text size, style, light or dark, colours, reduced
+motion, key hints, panel sizes) live in the browser's own storage; SETTINGS_JS owns them
 and is served as /settings.js. VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
@@ -2591,6 +2591,18 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .switch{display:flex;align-items:center;gap:.56rem;margin-top:.45rem;font-size:.875rem;font-weight:400}
 .switch input{width:1.06rem;height:1.06rem;accent-color:var(--here)}
 .set .btn{margin-top:.45rem}
+.swatches{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.4rem;margin-top:.45rem}
+.swatches button{display:flex;flex-direction:column;align-items:center;gap:.25rem;border:1px solid var(--line);border-radius:.5rem;background:var(--surface);padding:.35rem .2rem .3rem;font-size:.75rem;color:var(--ink-2)}
+.swatches button[aria-pressed="true"]{border-color:var(--here);box-shadow:0 0 0 2px var(--here-bg);color:var(--ink);font-weight:600}
+.sw{display:flex;width:2.25rem;height:1.25rem;border-radius:.3rem;overflow:hidden;border:1px solid var(--edge)}
+.sw i{flex:1}
+.sw.own{background:conic-gradient(#e0605a,#e6b84c,#6cbf73,#4fa6d9,#9a7ad8,#e0605a)}
+.pickers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.4rem;margin-top:.5rem}
+.pickers[hidden]{display:none}
+.pick{display:flex;flex-direction:column;align-items:center;gap:.2rem;font-size:.8rem;color:var(--ink-2)}
+.pick input{width:100%;height:2rem;padding:0;border:1px solid var(--edge);border-radius:.4rem;background:var(--surface);cursor:pointer}
+#colourNote:empty{display:none}
+#colourNote{color:var(--you)}
 
 /* Calm: pastel tints and gentle contrast, with the same clear grouping Lively
    has: each section of a panel is its own soft card, and the counts, the open
@@ -2695,9 +2707,29 @@ SETTINGS_JS = r"""
   var WRAP_REM = 48;
   /* Where each divider sits, as the share the first panel takes, and how far it may go. */
   var SPLITS = { split: [0.25, 0.75] };
-  var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show', split: 0.55 };
+  /* The ready-made colour schemes, each an accent, a background and a text
+     colour for light and for dark. Default is the page's own colours, with
+     nothing put over them; Custom is the person's own three, kept for light
+     and for dark apart. */
+  var SCHEMES = {
+    sea: { name: 'Sea', light: { accent: '#1f6a85', bg: '#e3edf0', ink: '#15303a' },
+           dark: { accent: '#7fc8e0', bg: '#0f1d23', ink: '#e2eef2' } },
+    green: { name: 'Green', light: { accent: '#3b6a45', bg: '#e5eae0', ink: '#222b24' },
+             dark: { accent: '#9ccb9f', bg: '#121a14', ink: '#e3ece4' } },
+    warm: { name: 'Warm', light: { accent: '#a64e28', bg: '#f4e8de', ink: '#33241c' },
+            dark: { accent: '#f0a47d', bg: '#1e1612', ink: '#f2e8e1' } },
+    slate: { name: 'Slate', light: { accent: '#4a5ba8', bg: '#e6e8ee', ink: '#22252e' },
+             dark: { accent: '#a3b1f0', bg: '#14161c', ink: '#e6e8ef' } }
+  };
+  var COLOURS = ['default'].concat(Object.keys(SCHEMES), ['custom']);
+  var PICKS = ['accent', 'bg', 'ink'];
+  /* Text, and the accent, must reach this contrast on every background they
+     sit on (the usual 4.5 to 1 for readable text). */
+  var READABLE = 4.5;
+  var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show', split: 0.55,
+                   colours: 'default', custom: null };
   var CHOICES = { style: ['calm', 'lively'], theme: ['auto', 'light', 'dark'], motion: ['auto', 'less'],
-                  keys: ['show', 'hide'] };
+                  keys: ['show', 'hide'], colours: COLOURS };
 
   /* Whatever comes in, a whole and valid set of settings comes out. */
   function clean(given) {
@@ -2715,6 +2747,132 @@ SETTINGS_JS = r"""
         out[name] = Math.round(Math.min(range[1], Math.max(range[0], value)) * 1000) / 1000;
       }
     });
+    out.custom = cleanCustom(given.custom);
+    return out;
+  }
+
+  function isHex(value) { return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value); }
+
+  /* Custom colours: for light and for dark, three colours or nothing. */
+  function cleanCustom(given) {
+    if (!given || typeof given !== 'object') return null;
+    var out = { light: null, dark: null }, any = false;
+    ['light', 'dark'].forEach(function (mode) {
+      var set = given[mode];
+      if (set && typeof set === 'object' && PICKS.every(function (k) { return isHex(set[k]); })) {
+        out[mode] = {};
+        PICKS.forEach(function (k) { out[mode][k] = set[k].toLowerCase(); });
+        any = true;
+      }
+    });
+    return any ? out : null;
+  }
+
+  /* ---- colour sums ---- */
+  function rgb(h) { return [1, 3, 5].map(function (i) { return parseInt(h.slice(i, i + 2), 16); }); }
+  function hex(c) {
+    return '#' + c.map(function (v) { return ('0' + Math.round(Math.min(255, Math.max(0, v))).toString(16)).slice(-2); }).join('');
+  }
+  function mix(a, b, share) {
+    var x = rgb(a), y = rgb(b);
+    return hex([0, 1, 2].map(function (i) { return x[i] + (y[i] - x[i]) * share; }));
+  }
+  function luminance(h) {
+    var c = rgb(h).map(function (v) {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function contrast(a, b) {
+    var x = luminance(a), y = luminance(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+  function least(fg, backs) {
+    return Math.min.apply(null, backs.map(function (b) { return contrast(fg, b); }));
+  }
+  /* The colour itself when it reads on every background given, else the
+     nearest shade of it that does: moved toward black on a light background,
+     toward white on a dark one. */
+  function readable(fg, backs, min) {
+    if (least(fg, backs) >= min) return fg;
+    var to = contrast('#000000', backs[0]) >= contrast('#ffffff', backs[0]) ? '#000000' : '#ffffff';
+    for (var step = 1; step <= 50; step++) {
+      var shade = mix(fg, to, step / 50);
+      if (least(shade, backs) >= min) return shade;
+    }
+    return to;
+  }
+
+  var STATUS = ['work', 'done', 'you', 'good', 'low', 'critical'];
+
+  /* The whole page's colours from an accent, a background and a text colour.
+     status holds the Style's own state colours (work, done, you and Lively's
+     good, low, critical) as the page shows them, so each can be kept readable
+     on the new background. nudged names the picks that were too faint and are
+     shown as the nearest readable shade instead. */
+  function palette(picks, status) {
+    var bg = picks.bg, dark = luminance(bg) < 0.18;
+    var surface = mix(bg, '#ffffff', dark ? 0.05 : 0.7), surface2 = mix(bg, '#ffffff', dark ? 0.09 : 0.35);
+    var backs = [bg, surface, surface2], nudged = [];
+    var ink = readable(picks.ink, backs, READABLE);
+    if (ink !== picks.ink) nudged.push('ink');
+    var accent = readable(picks.accent, backs, READABLE);
+    if (accent !== picks.accent) nudged.push('accent');
+    var ink2 = readable(mix(ink, bg, 0.35), backs, READABLE);
+    var line = mix(bg, ink, dark ? 0.14 : 0.1), edge = mix(bg, ink, dark ? 0.28 : 0.22);
+    var vars = {
+      '--bg': bg, '--surface': surface, '--surface-2': surface2, '--ink': ink, '--ink-2': ink2,
+      '--line': line, '--edge': edge, '--code': mix(bg, ink, 0.06),
+      '--hull': surface, '--hull-ink': ink, '--hull-2': ink2, '--hull-line': line, '--hull-soft': surface2,
+      '--here': accent, '--here-bg': mix(surface, accent, 0.14), '--mark': accent,
+      '--on-here': contrast('#ffffff', accent) >= contrast('#111111', accent) ? '#ffffff' : '#111111',
+      'color-scheme': dark ? 'dark' : 'light'
+    };
+    Object.keys(status || {}).forEach(function (name) {
+      if (STATUS.indexOf(name) < 0 || !isHex(status[name])) return;
+      var shade = readable(status[name].toLowerCase(), [surface, surface2], READABLE);
+      vars['--' + name] = shade;
+      if (name === 'work' || name === 'done' || name === 'you') vars['--' + name + '-bg'] = mix(surface, shade, 0.14);
+      if (name === 'critical') { vars['--alert-ink'] = shade; vars['--alert-bg'] = mix(surface, shade, 0.14); }
+    });
+    return { vars: vars, nudged: nudged, dark: dark };
+  }
+  /* Every property a colour scheme may put on the page, so the next one starts clean. */
+  var COLOUR_PROPS = Object.keys(palette({ accent: '#000000', bg: '#ffffff', ink: '#000000' },
+    { work: '#000000', done: '#000000', you: '#000000', good: '#000000', low: '#000000', critical: '#000000' }).vars);
+
+  /* Whether the page is dark now: the setting, or with Auto this computer's. */
+  function isDark(settings, systemDark) {
+    var kept = clean(settings);
+    return kept.theme === 'dark' || (kept.theme === 'auto' && !!systemDark);
+  }
+
+  /* The three colours the page wears in light or dark, or null for the page's own. */
+  function picksFor(settings, dark) {
+    var kept = clean(settings), mode = dark ? 'dark' : 'light';
+    if (kept.colours === 'custom') return kept.custom ? kept.custom[mode] : null;
+    return SCHEMES[kept.colours] ? SCHEMES[kept.colours][mode] : null;
+  }
+
+  /* The page's own colours, from its Style and light or dark, as it shows
+     them with no scheme on: its three picks and its state colours. */
+  function own(element) {
+    var out = { picks: null, status: {} }, saved = {};
+    if (typeof getComputedStyle !== 'function') return out;
+    COLOUR_PROPS.forEach(function (name) {
+      saved[name] = element.style.getPropertyValue(name);
+      element.style.removeProperty(name);
+    });
+    var style = getComputedStyle(element);
+    function read(name) {
+      var value = String(style.getPropertyValue(name) || '').trim().toLowerCase();
+      return isHex(value) ? value : null;
+    }
+    var picks = { accent: read('--here'), bg: read('--bg'), ink: read('--ink') };
+    if (picks.accent && picks.bg && picks.ink) out.picks = picks;
+    STATUS.forEach(function (name) { var value = read('--' + name); if (value) out.status[name] = value; });
+    COLOUR_PROPS.forEach(function (name) { if (saved[name]) element.style.setProperty(name, saved[name]); });
     return out;
   }
 
@@ -2748,8 +2906,10 @@ SETTINGS_JS = r"""
     return Math.round(WRAP_REM * Math.max(1, 100 / step) * 100) / 100 + 'rem';
   }
 
-  /* Put the settings on the page's root element; the stylesheet does the rest. */
-  function apply(element, settings) {
+  /* Put the settings on the page's root element; the stylesheet does the rest,
+     except a colour scheme's colours, which go on the element itself.
+     systemDark says whether this computer is in dark mode, for Auto. */
+  function apply(element, settings, systemDark) {
     var kept = clean(settings);
     element.style.fontSize = TEXT_STEPS[kept.text] + '%';
     element.style.setProperty('--wrap', wrapWidth(kept.text));
@@ -2758,11 +2918,19 @@ SETTINGS_JS = r"""
     element.setAttribute('data-theme', kept.theme);
     element.setAttribute('data-motion', kept.motion);
     element.setAttribute('data-keys', kept.keys);
+    element.setAttribute('data-colours', kept.colours);
+    COLOUR_PROPS.forEach(function (name) { element.style.removeProperty(name); });
+    var picks = picksFor(kept, isDark(kept, systemDark));
+    if (picks) {
+      var vars = palette(picks, own(element).status).vars;
+      Object.keys(vars).forEach(function (name) { element.style.setProperty(name, vars[name]); });
+    }
     return kept;
   }
 
   var api = { KEY: KEY, OLD_KEY: OLD_KEY, TEXT_STEPS: TEXT_STEPS, TEXT_NAMES: TEXT_NAMES, SPLITS: SPLITS,
-              DEFAULTS: DEFAULTS, clean: clean, load: load, save: save, apply: apply };
+              DEFAULTS: DEFAULTS, SCHEMES: SCHEMES, READABLE: READABLE, clean: clean, load: load, save: save,
+              apply: apply, isDark: isDark, picksFor: picksFor, own: own, palette: palette, contrast: contrast };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMSettings = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -3669,18 +3837,73 @@ $('sideSwitch').addEventListener('click',e=>{const b=e.target.closest('button');
 /* ---- settings ---- */
 let storage=null;try{storage=window.localStorage;}catch(e){}
 let settings=FS.load(storage);
+let dim=null;try{dim=window.matchMedia('(prefers-color-scheme: dark)');}catch(e){}
+function systemDark(){return !!(dim&&dim.matches);}
+function put(next){return FS.apply(document.documentElement,next,systemDark());}
+/* Colours: one button per scheme, painted in the light or dark the page shows now. */
+{const box=$('schemes');
+  ['default'].concat(Object.keys(FS.SCHEMES),['custom']).forEach(name=>{
+    const b=el('button');b.type='button';b.dataset.set='colours';b.dataset.value=name;
+    const sw=el('span','sw'+(name==='custom'?' own':''));sw.setAttribute('aria-hidden','true');
+    if(name!=='custom')for(let i=0;i<3;i++)sw.appendChild(el('i'));
+    add(b,sw,el('span','',name==='default'?'Default':name==='custom'?'Custom':FS.SCHEMES[name].name));
+    box.appendChild(b);});}
+const PICKERS={accent:'pickAccent',bg:'pickBg',ink:'pickInk'};
+/* The page's own colours, for Default's swatch and for a picker with nothing kept yet to start from. */
+function own(){return FS.own(document.documentElement).picks||{accent:'#47707f',bg:'#ece8e1',ink:'#2a2a28'};}
+function mode(){return FS.isDark(settings,systemDark())?'dark':'light';}
+function colourNote(nudged){
+  if(!nudged.length)return '';
+  const what=nudged.length>1?'The text and accent colours were':nudged[0]==='ink'?'That text colour was':'That accent was';
+  return what+' too faint to read on this background, so '+(nudged.length>1?'each is':'it is')+' shown in the nearest readable shade.';}
+function drawColours(){
+  const dark=mode()==='dark';
+  document.querySelectorAll('#schemes button').forEach(b=>{
+    const picks=b.dataset.value==='default'?own():FS.SCHEMES[b.dataset.value]?FS.SCHEMES[b.dataset.value][mode()]:null;
+    if(!picks)return;const is=b.querySelectorAll('.sw i');
+    ['bg','ink','accent'].forEach((k,i)=>{is[i].style.background=picks[k];});});
+  const custom=settings.colours==='custom';$('pickers').hidden=!custom;
+  if(custom){const picks=FS.picksFor(settings,dark)||own();
+    Object.keys(PICKERS).forEach(k=>{$(PICKERS[k]).value=picks[k];});}
+  $('colourHint').textContent=custom?'Your colours for '+mode()+' are kept apart from those for '+(dark?'light':'dark')+'.'
+    :'Each scheme has its own light and dark.';
+}
 function drawSettings(){
   $('textSize').max=String(FS.TEXT_STEPS.length-1);$('textSize').value=String(settings.text);
   $('textNow').textContent=FS.TEXT_NAMES[settings.text];
   document.querySelectorAll('#settings [data-set]').forEach(b=>b.setAttribute('aria-pressed',String(settings[b.dataset.set]===b.dataset.value)));
   $('lessMotion').checked=settings.motion==='less';
   $('keyHints').checked=settings.keys==='show';
+  drawColours();
 }
-function change(name,value){
-  const next=Object.assign({},settings);next[name]=value;
-  settings=FS.apply(document.documentElement,FS.save(storage,next));drawSettings();autosize();
+function changeAll(values){
+  settings=put(FS.save(storage,Object.assign({},settings,values)));drawSettings();autosize();
   homeDivider.label();
 }
+function change(name,value){const values={};values[name]=value;changeAll(values);}
+/* Custom starts from the colours on screen, for light and for dark alike, and keeps what was picked before. */
+function startCustom(){
+  if(settings.colours==='custom')return;
+  const custom=Object.assign({light:null,dark:null},settings.custom||{});
+  ['light','dark'].forEach(m=>{if(!custom[m])custom[m]=FS.picksFor(settings,m==='dark');});
+  if(!custom[mode()])custom[mode()]=own();
+  $('colourNote').textContent='';
+  changeAll({colours:'custom',custom:custom});
+}
+/* A pick shows at once; letting go keeps it, moved to a readable shade when it was too faint, and says so. */
+function pick(input,keep){
+  const set=Object.assign({},FS.picksFor(settings,mode()==='dark')||own());set[input.dataset.pick]=input.value.toLowerCase();
+  const custom=Object.assign({light:null,dark:null},settings.custom||{});
+  const made=FS.palette(set,{});$('colourNote').textContent=colourNote(made.nudged);
+  if(keep){set.ink=made.vars['--ink'];set.accent=made.vars['--here'];}
+  custom[mode()]=set;
+  if(keep)changeAll({custom:custom});
+  else put(Object.assign({},settings,{custom:custom}));
+}
+Object.keys(PICKERS).forEach(k=>{const input=$(PICKERS[k]);
+  input.addEventListener('input',()=>pick(input,false));input.addEventListener('change',()=>pick(input,true));});
+$('colourReset').addEventListener('click',()=>{$('colourNote').textContent='';changeAll({colours:'default',custom:null});});
+if(dim&&dim.addEventListener)dim.addEventListener('change',()=>{settings=put(settings);drawSettings();});
 function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
 $('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
   $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();$('textSize').focus();}});
@@ -3689,7 +3912,9 @@ $('textSize').addEventListener('input',e=>change('text',Number(e.target.value)))
 $('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
 $('keyHints').addEventListener('change',e=>change('keys',e.target.checked?'show':'hide'));
 $('resetSizes').addEventListener('click',()=>{Object.keys(FS.SPLITS).forEach(n=>change(n,FS.DEFAULTS[n]));});
-$('settings').addEventListener('click',e=>{const b=e.target.closest('[data-set]');if(b)change(b.dataset.set,b.dataset.value);});
+$('settings').addEventListener('click',e=>{const b=e.target.closest('[data-set]');if(!b)return;
+  if(b.dataset.set==='colours'){$('colourNote').textContent='';if(b.dataset.value==='custom'){startCustom();return;}}
+  change(b.dataset.set,b.dataset.value);});
 document.addEventListener('click',e=>{if(!$('settings').hidden&&!e.target.closest('#settings')&&!e.target.closest('#gear'))closeSettings();});
 $('gear').prepend(icon('sliders'));$('settingsClose').appendChild(icon('close'));$('keysClose').appendChild(icon('close'));
 $('keysBtn').addEventListener('click',()=>openKeys($('keysSheet').hidden));
@@ -3704,7 +3929,7 @@ function divider(node,main,name){
     node.setAttribute('aria-valuenow',String(Math.round(settings[name]*100)));}
   function put(value,keep){const range=FS.SPLITS[name];
     value=Math.min(range[1],Math.max(range[0],value));
-    if(keep)change(name,value);else{settings[name]=value;FS.apply(document.documentElement,settings);label();}}
+    if(keep)change(name,value);else{settings[name]=value;put(settings);label();}}
   node.addEventListener('pointerdown',e=>{
     if(e.button!==0)return;e.preventDefault();node.setPointerCapture(e.pointerId);node.classList.add('drag');
     const moved=ev=>{const r=main.getBoundingClientRect();put((ev.clientX-r.left)/r.width,false);};
@@ -3753,8 +3978,9 @@ def head_html(nonce: str, title: str) -> str:
 <meta name="mobile-web-app-capable" content="yes">
 <style nonce="{nonce}">{PAGE_CSS}</style>
 <script nonce="{nonce}" src="/settings.js"></script>
-<script nonce="{nonce}">(function(){{var s=null;try{{s=window.localStorage;}}catch(e){{}}
-FMSettings.apply(document.documentElement,FMSettings.load(s));}})();</script>
+<script nonce="{nonce}">(function(){{var s=null,d=false;try{{s=window.localStorage;}}catch(e){{}}
+try{{d=window.matchMedia('(prefers-color-scheme: dark)').matches;}}catch(e){{}}
+FMSettings.apply(document.documentElement,FMSettings.load(s),d);}})();</script>
 """
 
 
@@ -3853,6 +4079,16 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 <button type="button" data-set="theme" data-value="light">Light</button>
 <button type="button" data-set="theme" data-value="dark">Dark</button></div>
 <p class="hint">Auto follows this computer.</p></div>
+<div class="set"><div class="lbl">Colours</div>
+<div class="swatches" id="schemes" role="group" aria-label="Colour schemes"></div>
+<div class="pickers" id="pickers" hidden>
+<label class="pick"><input type="color" id="pickAccent" data-pick="accent">Accent</label>
+<label class="pick"><input type="color" id="pickBg" data-pick="bg">Background</label>
+<label class="pick"><input type="color" id="pickInk" data-pick="ink">Text</label>
+</div>
+<p class="hint" id="colourNote" role="status"></p>
+<button class="btn small" id="colourReset" type="button">Back to default</button>
+<p class="hint" id="colourHint"></p></div>
 <div class="set"><div class="lbl">Movement</div>
 <label class="switch"><input id="lessMotion" type="checkbox">Reduce motion</label></div>
 <div class="set"><div class="lbl">Keyboard</div>
