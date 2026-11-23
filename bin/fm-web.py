@@ -3874,7 +3874,7 @@ function draw(){
   if(!M)return;
   if(tab!=='home'&&!project(tab))tab='home';
   if(!chose&&(!openCall||!need(openCall)))openCall=M.needs.length?M.needs[0].id:null;
-  if(confirming&&!(confirming.steer?tab===confirming.steer.factory&&project(tab):confirming.older?olderItem(confirming.item):need(confirming.item)))confirming=null;
+  if(confirming&&!(confirming.steer?tab===confirming.steer.factory&&project(tab)&&project(tab).you_steer!==(confirming.steer.who==='you'):confirming.older?olderItem(confirming.item):need(confirming.item)))confirming=null;
   if(talk&&talk.item&&!need(talk.item))talk=null;
   if(hl&&!(hl.kind==='call'?need(hl.id):project(hl.id)))hl=null;
   const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
