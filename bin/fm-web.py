@@ -761,6 +761,10 @@ def _starts_turn(text: str) -> bool:
     return not (tag and tag.group(1) in BASH_MODE_TAGS)
 
 
+def _words(text: str) -> str:
+    return " ".join(text.split())
+
+
 class Conversation:
     """Folds transcript entries into display items, oldest first."""
 
@@ -785,9 +789,10 @@ class Conversation:
         self.pictures: Dict[str, Tuple[str, ...]] = {}
         # Messages typed while the first mate works, as Claude Code's own
         # queue records them ("queue-operation" entries), oldest first: each
-        # is its timestamp, its words, and whether it reads as the owner's own
-        # message, until the transcript shows it read in or taken out.
-        self.queue: List[Tuple[str, str, bool]] = []
+        # is its timestamp, its words, whether it reads as the owner's own
+        # message, and whether the transcript already shows it read in, until
+        # the queue takes it out.
+        self.queue: List[List[Any]] = []
 
     def add(self, entry: Dict[str, Any]) -> None:
         if not isinstance(entry, dict) or entry.get("isSidechain"):
@@ -833,41 +838,46 @@ class Conversation:
         An enqueue adds one; a remove names the words it takes out; popAll
         and clear empty it. A dequeue names nothing: the owner's messages go
         before the machinery's notices, so it takes the oldest of the owner's,
-        else the oldest. A message queued before the part of the transcript
-        read is unknown here, so its dequeue or remove can at worst hide one
-        still waiting: the page may miss a waiting message, never show a read
-        one as waiting. _delivered covers the rest.
+        else the oldest. The transcript may show a message read in before or
+        after its dequeue or remove, so _delivered only marks it read and the
+        queue operation takes a marked one first. A message queued before the
+        part of the transcript read is unknown here, so its dequeue or remove
+        can at worst hide one still waiting: the page may miss a waiting
+        message, never show a read one as waiting.
         """
         operation = entry.get("operation")
         if operation == "enqueue":
             text = _block_text(entry.get("content"))
             ts = str(entry.get("timestamp") or "")
             shown = _classify_user_string("", ts, text, "") if text.strip() else None
-            self.queue.append((ts, text, shown is not None and shown["kind"] == "user"))
+            self.queue.append([ts, text, shown is not None and shown["kind"] == "user", False])
         elif operation == "dequeue":
-            owners = [index for index, queued in enumerate(self.queue) if queued[2]]
-            if owners:
-                del self.queue[owners[0]]
-            elif self.queue:
-                del self.queue[0]
+            self._take([queued for queued in self.queue if queued[3]]
+                       or [queued for queued in self.queue if queued[2]] or self.queue)
         elif operation == "remove":
-            self._delivered(_block_text(entry.get("content")))
+            words = _words(_block_text(entry.get("content")))
+            matching = [queued for queued in self.queue if _words(queued[1]) == words]
+            self._take([queued for queued in matching if queued[3]] or matching)
         elif operation in ("popAll", "clear"):
             self.queue.clear()
 
+    def _take(self, candidates: List[List[Any]]) -> None:
+        if candidates:
+            self.queue.remove(candidates[0])
+
     def _delivered(self, text: str) -> None:
         """The transcript shows <text> read in: it is no longer waiting."""
-        words = " ".join(text.split())
-        for index, (_, queued, _owner) in enumerate(self.queue):
-            if " ".join(queued.split()) == words:
-                del self.queue[index]
+        words = _words(text)
+        for queued in self.queue:
+            if not queued[3] and _words(queued[1]) == words:
+                queued[3] = True
                 return
 
     def waiting_items(self) -> List[Dict[str, Any]]:
         """The owner's messages still queued, as faded bubbles to show."""
         waiting: List[Dict[str, Any]] = []
-        for index, (ts, text, owner) in enumerate(self.queue):
-            if not owner:
+        for index, (ts, text, owner, read) in enumerate(self.queue):
+            if not owner or read:
                 continue
             item = _user_item("waiting:" + picture_id(f"{index}:{ts}:{text}"), ts, text)
             self._render_user(item)

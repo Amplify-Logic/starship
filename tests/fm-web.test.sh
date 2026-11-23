@@ -342,6 +342,40 @@ test_a_message_typed_mid_turn_shows_as_waiting_until_it_is_read() {
   out=$(conversation "$home")
   assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" "a message read in as the next turn is no longer waiting"
   assert_equals "$(jq -r '[.items[] | select(.kind == "user")] | length' <<<"$out")" "3" "it shows once"
+  printf '%s\n' '{"type":"queue-operation","operation":"dequeue","timestamp":"2026-11-23T18:56:00.200Z"}' >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" "its dequeue after the read-in takes nothing else"
+  # Two messages wait; the first is read in as the next turn before its dequeue
+  # lands: that dequeue takes the one read in, and the second still waits.
+  {
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:56:10Z","content":"alpha"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:56:11Z","content":"bravo"}'
+    printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s2","timestamp":"2026-11-23T18:56:20Z"}'
+    printf '%s\n' '{"type":"user","uuid":"u3","timestamp":"2026-11-23T18:56:20.100Z","origin":{"kind":"human"},"message":{"role":"user","content":"alpha"}}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.waiting[].html] | join("|")' <<<"$out")" "<p>bravo</p>" "the one read in no longer waits"
+  printf '%s\n' '{"type":"queue-operation","operation":"dequeue","timestamp":"2026-11-23T18:56:20.200Z"}' >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.waiting[].html] | join("|")' <<<"$out")" "<p>bravo</p>" "a late dequeue does not hide the one still waiting"
+  {
+    printf '%s\n' '{"type":"queue-operation","operation":"dequeue","timestamp":"2026-11-23T18:56:30Z"}'
+    printf '%s\n' '{"type":"user","uuid":"u4","timestamp":"2026-11-23T18:56:30.100Z","origin":{"kind":"human"},"message":{"role":"user","content":"bravo"}}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" "a dequeue before its read-in also leaves nothing waiting"
+  # The same words queued twice: one read in mid-turn, then removed, leaves the
+  # other waiting.
+  {
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:56:40Z","content":"yes"}'
+    printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:56:41Z","content":"yes"}'
+    printf '%s\n' '{"type":"attachment","uuid":"q2","timestamp":"2026-11-23T18:56:42Z","attachment":{"type":"queued_command","prompt":"yes","origin":{"kind":"human"}}}'
+    printf '%s\n' '{"type":"queue-operation","operation":"remove","timestamp":"2026-11-23T18:56:42.100Z","content":"yes","reason":"absorbed_mid_turn"}'
+  } >> "$file"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '[.waiting[] | "\(.ts) \(.html)"] | join("|")' <<<"$out")" "2026-11-23T18:56:41Z <p>yes</p>" \
+    "the second of two identical messages still waits"
+  printf '%s\n' '{"type":"queue-operation","operation":"popAll","timestamp":"2026-11-23T18:56:50Z"}' >> "$file"
   # A dequeue names nothing: it takes the owner's oldest before a notice.
   {
     printf '%s\n' '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-23T18:57:00Z","content":"<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>"}'
