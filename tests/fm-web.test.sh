@@ -8,7 +8,8 @@
 # POST, sends that only ever reach bin/fm-desk-voice.sh send with images saved
 # in the floater's shots folder, the mirror of the Factory pane's screen and
 # the bridge strip's fields in the page's plain words, a button's action handed
-# to bin/fm-factory.py act and nowhere else, the settings kept in the browser,
+# to bin/fm-factory.py act and nowhere else, the settings kept in the browser
+# and the colours they put on the page, always readable,
 # the page's own rules (the chat folded, links labelled, keys naming buttons),
 # the page shown before signing in with its public icons and manifest, the
 # one-time link open signs in with, and the launcher's start/status/url/stop.
@@ -1244,7 +1245,8 @@ test_settings_are_kept_in_the_browser() {
 const S = require(process.argv[2]);
 const kept = {};
 const storage = { getItem: k => (k in kept ? kept[k] : null), setItem: (k, v) => { kept[k] = String(v); } };
-const page = () => ({ style: { props: {}, setProperty(k, v) { this.props[k] = v; } }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+const page = () => ({ style: { props: {}, setProperty(k, v) { this.props[k] = v; }, getPropertyValue(k) { return this.props[k] || ''; },
+  removeProperty(k) { delete this.props[k]; } }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
 const out = [];
 out.push('first visit: ' + JSON.stringify(S.load(storage)));
 kept['fm-web-settings'] = JSON.stringify({ text: 0, style: 'lively', theme: 'dark', motion: 'less' });
@@ -1264,16 +1266,97 @@ out.push('chat width: ' + S.TEXT_NAMES.map((name, text) => { const p = page(); S
 console.log(out.join('\n'));
 JS
 ) || fail "the settings script did not run: $out"
-  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55}
-after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55}
-next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4}
-on the page: 120% {"--wrap":"48rem","--split":"0.4"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide"}
-a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75}
-unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55}
-no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55} 0
+  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
+after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"colours":"default","custom":null}
+next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"colours":"default","custom":null}
+on the page: 120% {"--wrap":"48rem","--split":"0.4"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide","data-colours":"default"}
+a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"colours":"default","custom":null}
+unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
+no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null} 0
 sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal
 chat width: Smaller 60rem, Small 53.33rem, Normal 48rem, Large 48rem, Largest 48rem' "the settings a browser keeps and what they put on the page"
   pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel size, drop a size kept for a panel that is gone, and smaller text widens the chat"
+}
+
+# The colour schemes: the settings script, fetched as the browser fetches it,
+# puts a scheme's light or dark on the page, keeps custom colours for each
+# apart, takes them all off for Default, and never shows text too faint to read.
+test_colours_are_kept_and_kept_readable() {
+  command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
+  local home out
+  home=$(make_home colours)
+  serve_home "$home"
+  curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/settings.js" > "$home/settings.js"
+  out=$(node - "$home/settings.js" <<'JS'
+const S = require(process.argv[2]);
+const kept = {};
+const storage = { getItem: k => (k in kept ? kept[k] : null), setItem: (k, v) => { kept[k] = String(v); } };
+const page = () => ({ style: { props: {}, setProperty(k, v) { this.props[k] = v; }, getPropertyValue(k) { return this.props[k] || ''; },
+  removeProperty(k) { delete this.props[k]; } }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+const wears = el => ['--bg', '--here', '--ink'].map(k => el.style.props[k] || '-').join(' ');
+const out = [];
+const el = page();
+S.apply(el, S.save(storage, { colours: 'slate' }), false);
+out.push('slate, auto, light computer: ' + wears(el) + ' ' + el.attrs['data-colours']);
+S.apply(el, S.load(storage), true);
+out.push('slate, auto, dark computer: ' + wears(el) + ' ' + el.style.props['color-scheme']);
+S.apply(el, S.save(storage, { colours: 'slate', theme: 'light' }), true);
+out.push('slate, light chosen, dark computer: ' + wears(el));
+S.apply(el, S.save(storage, { colours: 'default' }), true);
+out.push('back to default: ' + JSON.stringify(el.style.props));
+const custom = { light: { accent: '#AA3300', bg: '#fff8e0', ink: '#202020' }, dark: null };
+S.apply(el, S.save(storage, { colours: 'custom', custom }), false);
+out.push('custom in light: ' + wears(el) + ' kept ' + JSON.stringify(S.load(storage).custom));
+S.apply(el, S.load(storage), true);
+out.push('custom in dark, none picked there: ' + wears(el));
+out.push('bad colours: ' + JSON.stringify(S.clean({ colours: 'neon', custom: { light: { accent: 'red', bg: '#ffffff', ink: '#000000' } } })));
+const faint = S.palette({ accent: '#ffeb3b', bg: '#ffffff', ink: '#eeeeee' }, {});
+out.push('faint picks: nudged ' + faint.nudged.join(',') + ', text ' + faint.vars['--ink'] + ', accent ' + faint.vars['--here']);
+const backs = v => [v['--bg'], v['--surface'], v['--surface-2']];
+const low = v => Math.min(...['--ink', '--ink-2', '--here'].flatMap(k => backs(v).map(b => S.contrast(v[k], b))));
+out.push('faint picks now read at least: ' + (low(faint.vars) >= S.READABLE));
+out.push('wcag: black on white ' + S.contrast('#000000', '#ffffff') + ', #777777 on white ' + S.contrast('#777777', '#ffffff').toFixed(2) +
+  ', #767676 on white ' + S.contrast('#767676', '#ffffff').toFixed(2) + ', AA ' + S.READABLE);
+out.push('mid-grey backgrounds: ' + ['#707070', '#727272', '#747474', '#7a7a7a'].map(bg => {
+  const made = S.palette({ accent: '#ff0000', bg, ink: '#ffffff' }, { work: '#7e6431' });
+  const work = Math.min(...['--surface', '--surface-2'].map(k => S.contrast(made.vars['--work'], made.vars[k])));
+  return bg + (made.nudged.indexOf('bg') >= 0 ? ' lifted' : '') + (low(made.vars) >= 4.5 && work >= 4.5 ? ' reads' : ' FAINT');
+}).join(', '));
+out.push('schemes: ' + Object.keys(S.SCHEMES).map(name => ['light', 'dark'].map(mode => {
+  const made = S.palette(S.SCHEMES[name][mode], {});
+  return S.SCHEMES[name].name + ' ' + mode + (made.nudged.length ? ' nudged' : '') + (low(made.vars) >= S.READABLE ? ' reads' : ' FAINT') + (made.dark === (mode === 'dark') ? '' : ' WRONG SHADE');
+}).join(', ')).join(', '));
+global.getComputedStyle = () => ({ getPropertyValue: k => ({ '--work': ' #7E6431', '--you': '#9F5749', '--here': '#47707F', '--bg': '#ECE8E1', '--ink': '#2A2A28' })[k] || '' });
+const dark = page();
+S.apply(dark, { colours: 'custom', custom: { light: { accent: '#ffcc66', bg: '#101010', ink: '#f0f0f0' } } }, false);
+const p = dark.style.props;
+out.push("the style's own colours on a dark custom background: work " + p['--work'] + ' reads ' + (S.contrast(p['--work'], p['--surface']) >= S.READABLE) +
+  ', you ' + p['--you'] + ' reads ' + (S.contrast(p['--you'], p['--surface']) >= S.READABLE) + ', done untouched ' + (p['--done'] === undefined));
+out.push('own colours: ' + JSON.stringify(S.own(dark).picks) + ', scheme put back ' + (dark.style.props['--bg'] === '#101010'));
+console.log(out.join('\n'));
+JS
+) || fail "the settings script did not run: $out"
+  assert_equals "$out" 'slate, auto, light computer: #e6e8ee #4a5ba8 #22252e slate
+slate, auto, dark computer: #14161c #a3b1f0 #e6e8ef dark
+slate, light chosen, dark computer: #e6e8ee #4a5ba8 #22252e
+back to default: {"--wrap":"48rem","--split":"0.55"}
+custom in light: #fff8e0 #aa3300 #202020 kept {"light":{"accent":"#aa3300","bg":"#fff8e0","ink":"#202020"},"dark":null}
+custom in dark, none picked there: - - -
+bad colours: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
+faint picks: nudged ink,accent, text #727272, accent #80761e
+faint picks now read at least: true
+wcag: black on white 21, #777777 on white 4.48, #767676 on white 4.54, AA 4.5
+mid-grey backgrounds: #707070 lifted reads, #727272 lifted reads, #747474 lifted reads, #7a7a7a reads
+schemes: Sea light reads, Sea dark reads, Green light reads, Green dark reads, Warm light reads, Warm dark reads, Slate light reads, Slate dark reads, Paper light reads, Paper dark reads
+the style'"'"'s own colours on a dark custom background: work #a08c67 reads true, you #b67f75 reads true, done untouched true
+own colours: {"accent":"#47707f","bg":"#ece8e1","ink":"#2a2a28"}, scheme put back true' "the colours a browser keeps and what they put on the page"
+  out=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/")
+  assert_contains "$out" 'aria-label="Colour schemes"' "the settings offer the schemes"
+  assert_contains "$out" 'type="color" id="pickAccent"' "an accent picker"
+  assert_contains "$out" 'type="color" id="pickBg"' "a background picker"
+  assert_contains "$out" 'type="color" id="pickInk"' "a text picker"
+  assert_contains "$out" '>Back to default<' "and one way back"
+  pass "a colour scheme wears its own light and dark, custom colours are kept for each apart, Default takes them all off, and text too faint to read is moved to the nearest readable shade"
 }
 
 # The page's rules, fetched as the browser fetches them and run without a page:
@@ -1457,6 +1540,7 @@ test_a_restart_waits_for_a_send_under_way
 test_a_failed_restart_keeps_sends_and_buttons_working
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
+test_colours_are_kept_and_kept_readable
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_the_live_line_says_what_is_happening_in_plain_words
 test_the_weekly_page_opens_from_the_mirror
