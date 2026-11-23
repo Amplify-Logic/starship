@@ -1241,23 +1241,6 @@ def _job_model(job: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _feed_model(feed: Dict[str, Any]) -> Dict[str, Any]:
-    title = str(feed.get("title") or "")
-    return {
-        "title": title[:1] + title[1:].lower(),
-        "events": [
-            {
-                "when": event.get("when") or "",
-                "actor": event.get("actor") or "",
-                "word": plain_word(event.get("word")),
-                "mark": MARKS.get(event.get("colour") or "", ""),
-                "text": plain_ending(event.get("text")),
-            }
-            for event in feed.get("events") or []
-        ],
-    }
-
-
 def _need_model(need: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": need.get("id"),
@@ -1326,6 +1309,21 @@ def _shelves_model(shelves: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _new_model(item: Dict[str, Any]) -> Dict[str, Any]:
+    """One outcome as New on the overview and Lately on a project's tab tell it: its word as a label, then the work."""
+    return {
+        "id": item.get("id"),
+        "label": (lambda word: word[:1].upper() + word[1:])(plain_word(item.get("word")))
+        if item.get("word") in PLAIN_WORDS
+        else item.get("label") or "",
+        "text": item.get("text") or "",
+        "when": item.get("when") or "",
+        "pr": item.get("pr") or "",
+        "read": bool(item.get("read")),
+        "mark": MARKS.get(item.get("colour") or "", ""),
+    }
+
+
 def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
     page = factory.get("page") or {}
     nxt = factory.get("next")
@@ -1340,21 +1338,7 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
         "badge": factory.get("badge") or "",
         "now": factory.get("now") or "",
         "jobs": [_job_model(job) for job in factory.get("jobs") or []],
-        "new": [
-            {
-                "id": item.get("id"),
-                "label": (lambda word: word[:1].upper() + word[1:])(plain_word(item.get("word")))
-                if item.get("word") in PLAIN_WORDS
-                else item.get("label") or "",
-                "text": item.get("text") or "",
-                "when": item.get("when") or "",
-                "pr": item.get("pr") or "",
-                "read": bool(item.get("read")),
-                "mark": MARKS.get(item.get("colour") or "", ""),
-            }
-            for item in factory.get("new") or []
-            if isinstance(item, dict)
-        ],
+        "new": [_new_model(item) for item in factory.get("new") or [] if isinstance(item, dict)],
         "more": factory.get("more") or 0,
         "more_words": factory.get("more_words") or "",
         "routine": [
@@ -1364,8 +1348,16 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
         "next": {"title": nxt.get("title") or "", "words": nxt.get("words") or ""} if isinstance(nxt, dict) else None,
         "page": {
             "needs": list(page.get("needs") or []),
-            "queue": [plain_phrase(part) for part in page.get("queue") or []],
-            "jobs": [_job_model(job) for job in page.get("jobs") or []],
+            # The tab top to bottom, as the pane's page (fm-factory.py View.page_parts).
+            "state": page.get("state") or "",
+            "now": [_job_model(job) for job in page.get("now") or []],
+            "lately": [_new_model(item) for item in page.get("lately") or [] if isinstance(item, dict)],
+            "lately_since": page.get("lately_since") or "",
+            "next": [_job_model(job) for job in page.get("next") or []],
+            "lined": page.get("lined") or 0,
+            "coming": [
+                {"title": item.get("title") or "", "when": item.get("when") or ""} for item in page.get("coming") or []
+            ],
             "folded": [
                 {
                     "words": plain_phrase(group.get("words")),
@@ -1383,7 +1375,6 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
                 {"when": item.get("when") or "", "what": item.get("what") or ""} for item in page.get("learned") or []
             ],
             "shelves": _shelves_model(page.get("shelves") or {}),
-            "feed": _feed_model(page.get("feed") or {}),
             # The pane lists what was said oldest first, above its keys line; the page reads from the top.
             "talk": [
                 {"when": line.get("when") or "", "who": line.get("who") or "", "said": line.get("said") or ""}
@@ -2411,9 +2402,9 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 
 /* The two sides, with a divider that moves between them. */
 .main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,calc((100% - .75rem) * var(--split,.55))) .75rem minmax(0,1fr);padding:.5rem .625rem .375rem}
-/* A project's tab is one column: its work list names every worker. */
+/* A project's tab: its Needs you beside the rest on a wide screen (.pp-cols). */
 #project.main{display:block}
-#project .pane{height:100%;max-width:64rem;margin:0 auto}
+#project .pane{height:100%;max-width:84rem;margin:0 auto}
 .divider{position:relative;cursor:col-resize;border-radius:.375rem;touch-action:none;outline-offset:-2px}
 .divider::after{content:"";position:absolute;top:50%;left:50%;width:.25rem;height:2.75rem;transform:translate(-50%,-50%);border-radius:999px;background:var(--line);transition:background .15s}
 .divider:hover::after,.divider:focus-visible::after,.divider.drag::after{background:var(--here)}
@@ -2618,7 +2609,6 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .quiet-facs h4{font-size:.84rem;font-weight:600;color:var(--ink-2)}
 .quiet-facs li{display:flex;flex-wrap:wrap;gap:.1rem .625rem;align-items:baseline;margin-top:.3rem;font-size:.875rem}
 .quiet-facs .w{color:var(--ink-2)}
-.steer{margin-left:auto;display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--ink-2)}
 .steer-note{margin-left:auto;font-size:.8rem;color:var(--here);font-weight:600}
 .seg{display:flex;border:1px solid var(--line);border-radius:.45rem;overflow:hidden;background:var(--surface)}
 .seg button{border:0;background:none;padding:.1rem .56rem;font-size:.8rem;color:var(--ink-2)}
@@ -2640,7 +2630,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 /* A row too narrow for its title and its state puts the state under the title, never squeezing the title. */
 .jobline{display:flex;flex-wrap:wrap;gap:0 .56rem;align-items:baseline;margin-top:.375rem;font-size:.9rem}
 .jobline .dot{align-self:center}
-.jobline .t{flex:1 1 auto;min-width:0}
+.jobline .t{flex:1 1 14rem;min-width:0}
 .jobline .w{margin-left:auto;font-size:.8rem;color:var(--ink-2);white-space:nowrap}
 .jobline .w.you{color:var(--you)}.jobline .w.done{color:var(--done)}.jobline .w.work{color:var(--work)}
 .jobline.sel{border-radius:.5rem;box-shadow:0 0 0 3px var(--here-bg);background:var(--here-bg);padding:.15rem .4rem}
@@ -2658,7 +2648,23 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .pp-head{padding:.625rem .875rem .5rem;border-bottom:1px solid var(--line)}
 .pp-head h2{font-size:1.125rem;font-weight:600}
 .pp-head>p{color:var(--ink-2);font-size:.875rem}
-.pp-head .steer{margin-left:0}
+.pp-head .about{color:var(--ink-2);font-size:.875rem}
+.pp-state{font-size:.9rem;margin-top:.2rem}
+.pp-state.you{color:var(--you)}
+.pp-col .news{font-size:.875rem;margin-top:.3rem}
+.pp-head .acts{align-items:center;gap:.4rem .9rem;flex-wrap:wrap;margin-top:.5rem}
+.steer-line{font-size:.82rem;color:var(--ink-2)}
+.lk-btn{border:0;background:none;padding:0;font:inherit;color:var(--here);text-decoration:underline;text-underline-offset:.2rem;cursor:pointer}
+.lk-btn:disabled{opacity:.6;cursor:default}
+/* A wide tab sets Needs you beside the rest; a narrow one, or one with nothing that needs you, is one column. */
+.pp-cols{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:0 .75rem;align-items:start}
+.pp-cols.one{grid-template-columns:minmax(0,1fr)}
+.pp-col{min-width:0}
+.pp-cols.one .pp-col{max-width:48rem}
+.dated li{display:grid;grid-template-columns:7.5rem minmax(0,1fr);gap:.56rem;padding:.3rem 0;border-top:1px solid var(--line);font-size:.9rem}
+.dated li:first-child{border-top:0}
+.dated .when{color:var(--ink-2);font-size:.82rem;font-variant-numeric:tabular-nums;padding-top:.05rem}
+.sec>h4{font-size:.84rem;font-weight:600;color:var(--ink-2);margin-top:.6rem}
 .all{font-size:.84rem;color:var(--ink-2);margin-top:.5rem}
 .list li{padding:.375rem 0;border-top:1px solid var(--line);font-size:.9rem;display:flex;gap:.56rem;align-items:baseline}
 .list li:first-child{border-top:0}
@@ -2771,6 +2777,8 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .side-switch button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
 .main[data-side="chat"] #panelPane,.main[data-side="projects"] #chatPane{display:none}
 #project .pane{height:auto}
+.pp-cols{grid-template-columns:minmax(0,1fr)}
+.dated li{grid-template-columns:5.6rem minmax(0,1fr)}
 .gear span{display:none}
 #compose{position:sticky;bottom:0;border-radius:0 0 .875rem .875rem}
 .settings{right:.5rem}
@@ -3516,16 +3524,6 @@ function steps(job,cls){
     if(i<job.step)li.appendChild(icon('check'));li.appendChild(document.createTextNode(name));ol.appendChild(li);});
   return ol;
 }
-function steerSwitch(p){
-  const box=el('div','steer');box.appendChild(el('span','','Who steers'));
-  const seg=el('div','seg');
-  const a=btn('','Starship','steer',{factory:p.id,who:'Starship'});a.setAttribute('aria-pressed',String(!p.you_steer));
-  const b=btn('','You','steer',{factory:p.id,who:'you'});b.setAttribute('aria-pressed',String(p.you_steer));
-  a.disabled=b.disabled=acting;
-  add(seg,a,b);box.appendChild(seg);
-  const h=el('kbd','kh','s');h.setAttribute('aria-hidden','true');box.appendChild(h);
-  return box;
-}
 function talkBox(head){
   const box=el('div','talk');
   box.appendChild(el('p','talk-head',head));
@@ -3628,18 +3626,6 @@ function jobLine(job,p){
   if(job.read)line.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));
   return line;
 }
-function feedList(feed,named){
-  const ul=el('ul','feed');
-  feed.events.slice().reverse().forEach(e=>{
-    const li=el('li');li.appendChild(el('time','',e.when));
-    const d=el('div');
-    if(named)d.appendChild(el('span','who',e.actor));
-    d.appendChild(el('span','word '+e.mark,e.word));
-    d.appendChild(linked(e.text,true));
-    li.appendChild(d);ul.appendChild(li);
-  });
-  return ul;
-}
 function section(title,count,small){
   const sec=el('section','sec');const h=el('h3','',title);
   if(count!=null)h.appendChild(el('span','n',String(count)));
@@ -3695,13 +3681,6 @@ function shelves(sh,ownTab){
   }
   return parts;
 }
-function feedSection(feed,named){
-  const comma=feed.title.indexOf(', ');
-  const sec=section(comma<0?feed.title:feed.title.slice(0,comma),null,comma<0?'':feed.title.slice(comma+2));
-  sec.dataset.sec='feed';
-  sec.appendChild(feed.events.length?feedList(feed,named):el('p','empty','Nothing new.'));
-  return sec;
-}
 
 function drawTabs(){
   const tabs=$('tabs');
@@ -3752,6 +3731,20 @@ function drawTop(){
   if(mirrorError)top.appendChild(el('p','notice bad',mirrorError));
   if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');top.appendChild(n);}
 }
+/* One outcome, as New on the overview and Lately on a project's tab tell it. */
+function newsLine(n,p){
+  const line=el('p','news');
+  add(line,el('time','',n.when),el('span','verb '+n.mark,n.label+':'));
+  if(n.pr){const a=el('a','lk',n.text);a.href=n.pr;a.target='_blank';a.rel='noopener noreferrer';a.title='See what changed';line.appendChild(a);}
+  else line.appendChild(linked(n.text,true));
+  if(n.read)line.appendChild(btn('btn small plain','Read it','read',{factory:p.id,job:n.id}));
+  return line;
+}
+/* A list that names its first few and folds the rest behind one line. */
+function folded(words,items,key,cls){
+  const d=el('details','quiet');d.dataset.fold=key;d.appendChild(el('summary','',words));
+  const ul=el('ul',cls||'list');items.forEach(li=>ul.appendChild(li));d.appendChild(ul);return d;
+}
 function drawHome(){
   $('clock').textContent=M.clock;
   drawTop();
@@ -3780,12 +3773,7 @@ function drawHome(){
       add(line,el('b','',r.kind),el('span','',r.words.join(', ')),r.now?el('span','r',r.now):null);now.appendChild(line);});
     part('Now',now);
     if(p.new.length){const dd=el('dd');
-      p.new.forEach(n=>{const line=el('p','news');
-        add(line,el('time','',n.when),el('span','verb '+n.mark,n.label+':'));
-        if(n.pr){const a=el('a','lk',n.text);a.href=n.pr;a.target='_blank';a.rel='noopener noreferrer';a.title='See what changed';line.appendChild(a);}
-        else line.appendChild(linked(n.text,true));
-        if(n.read)line.appendChild(btn('btn small plain','Read it','read',{factory:p.id,job:n.id}));
-        dd.appendChild(line);});
+      p.new.forEach(n=>dd.appendChild(newsLine(n,p)));
       if(p.more)dd.appendChild(el('p','line',p.more_words));
       part('New',dd);}
     if(p.next){const dd=el('dd');const line=el('p');
@@ -3799,50 +3787,84 @@ function drawHome(){
   if(!M.projects.length)facs.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
   body.replaceChildren(needs,facs);
 }
+/* A project's tab reads top to bottom, as the pane's page: what it is for and one sentence of
+   state, Talk to this crew with who steers as a quiet line, Needs you with its older questions,
+   then Happening now, Lately, Up next, Coming back, How this crew works and the Conversation.
+   A wide screen sets Needs you beside the rest; a narrow one is one column. */
 function drawProject(p){
   const head=$('ppHead');
-  const row=el('div','rowb');
-  add(row,steerSwitch(p),btn('btn','Talk to this crew','talk',{kind:'talk',factory:p.id},'t'));
-  head.replaceChildren(el('h2','',p.name),el('p','',p.about),row);
+  const row=el('div','rowb acts');
+  const steer=el('p','steer-line');
+  const asking=confirming&&confirming.steer&&confirming.steer.factory===p.id;
+  steer.appendChild(document.createTextNode(p.you_steer?'You steer this factory. ':'Starship steers this factory. '));
+  if(!asking){const ch=btn('lk-btn','Change','steer',{factory:p.id,who:p.you_steer?'Starship':'you'});ch.disabled=acting;steer.appendChild(ch);}
+  add(row,btn('btn','Talk to this crew','talk',{kind:'talk',factory:p.id},'t'),steer);
+  const top=el('div','pp-title');
+  add(top,el('h2','',p.name),p.about?el('p','about',p.about):null,p.page.state?el('p','pp-state'+(p.page.needs.length?' you':''),p.page.state):null);
+  head.replaceChildren(top,row);
+  if(asking){
+    const box=el('div','confirm');
+    box.appendChild(el('p','',p.you_steer?'Hand '+p.name+' back to Starship to steer?':'Steer '+p.name+' yourself from now on?'));
+    box.appendChild(el('p','unsent','Not sent yet. Starship is told of the change.'));
+    const rowb=el('div','rowb');const go=btn('btn primary','Change who steers','send',null,'Enter');go.disabled=acting;
+    add(rowb,go,btn('btn','Cancel','cancel',null,'Escape'));box.appendChild(rowb);head.appendChild(box);
+  }
   if(talk&&talk.kind==='talk'&&talk.factory===p.id)head.appendChild(talkBox('Talk to the '+p.name+' crew'));
   if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');head.appendChild(n);}
-  const parts=[];
+  const left=[],right=[];
   const mine=M.needs.filter(n=>n.project===p.id);
-  const shelved=shelves(p.page.shelves,true);
-  if(mine.length||shelved.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n,true)));
-    shelved.forEach(part=>s.appendChild(part));parts.push(s);}
-  const work=section('Work',null,p.page.queue.join(', '));
-  p.page.jobs.forEach(job=>work.appendChild(job.busy?jobCard(job,p,false):jobLine(job,p)));
-  p.page.folded.forEach(group=>{
-    const d=el('details','quiet');d.dataset.fold=group.words;d.appendChild(el('summary','',group.words));
-    const ul=el('ul','list');
-    group.jobs.forEach((j,i)=>{const li=el('li');add(li,clip('',V.plainText(j.title),'fold:'+group.words+':'+i),el('span','w',j.queue));ul.appendChild(li);});
-    d.appendChild(ul);work.appendChild(d);
-  });
-  if(!p.page.jobs.length&&!p.page.folded.length)work.appendChild(el('p','empty','Nothing under way here.'));
-  parts.push(work);
-  if(p.page.rules.length){
-    const s=section('How this crew works');const ul=el('ul','bul');
-    p.page.rules.forEach(r=>ul.appendChild(el('li','',r)));s.appendChild(ul);
-    if(p.page.rules_size)s.appendChild(el('p','all'+(p.page.rules_mark==='over'?' warn':p.page.rules_mark==='near'?' near':''),p.page.rules_size));
-    parts.push(s);
+  const older=shelves({older:p.page.shelves.older,coming:{heading:''}},true);
+  if(mine.length||older.length){const s=section('Needs you',mine.length);s.dataset.sec='needs';
+    mine.forEach(n=>s.appendChild(callCard(n,true)));older.forEach(part=>s.appendChild(part));left.push(s);}
+  const now=section('Happening now');now.dataset.sec='now';
+  if(p.now)now.appendChild(el('p','line',p.now));
+  p.page.now.forEach(job=>now.appendChild(job.busy?jobCard(job,p,false):jobLine(job,p)));
+  p.routine.forEach(r=>{const line=el('p','line');
+    add(line,el('b','',r.kind),el('span','',r.words.join(', ')),r.now?el('span','r',r.now):null);now.appendChild(line);});
+  right.push(now);
+  const lately=section('Lately',null,p.page.lately_since);lately.dataset.sec='lately';
+  p.page.lately.forEach(n=>lately.appendChild(newsLine(n,p)));
+  if(!p.page.lately.length)lately.appendChild(el('p','empty','Nothing new.'));
+  right.push(lately);
+  const next=section('Up next',null,p.page.lined?p.page.lined+' lined up':'');next.dataset.sec='next';
+  p.page.next.forEach(job=>next.appendChild(jobLine(job,p)));
+  p.page.folded.forEach(group=>next.appendChild(folded(group.words,group.jobs.map((j,i)=>{
+    const li=el('li');add(li,clip('',V.plainText(j.title),'fold:'+group.words+':'+i),el('span','w',j.queue));return li;}),group.words)));
+  if(!p.page.next.length&&!p.page.folded.length)next.appendChild(el('p','empty','Nothing lined up.'));
+  right.push(next);
+  if(p.page.coming.length){
+    const s=section('Coming back',null,p.page.coming.length+' put off to a date');s.dataset.sec='coming';
+    const item=c=>{const li=el('li');add(li,el('span','when',c.when),el('span','t',c.title));return li;};
+    const ul=el('ul','dated');p.page.coming.slice(0,3).forEach(c=>ul.appendChild(item(c)));s.appendChild(ul);
+    const rest=p.page.coming.slice(3);
+    if(rest.length)s.appendChild(folded(rest.length+' more, the furthest on '+rest[rest.length-1].when,rest.map(item),'coming','dated'));
+    right.push(s);
   }
+  const works=section('How this crew works');works.dataset.sec='rules';
+  if(p.page.rules.length){const ul=el('ul','bul');p.page.rules.forEach(r=>ul.appendChild(el('li','',r)));works.appendChild(ul);}
+  if(p.page.rules_size)works.appendChild(el('p','all'+(p.page.rules_mark==='over'?' warn':p.page.rules_mark==='near'?' near':''),p.page.rules_size));
   if(p.page.learned.length){
-    const s=section('What it has learned');const ul=el('ul','bul');
+    works.appendChild(el('h4','','Learned lately'));const ul=el('ul','bul');
     p.page.learned.forEach(l=>{const li=el('li');if(l.when)li.appendChild(el('time','',l.when));
       li.appendChild(document.createTextNode(l.what));ul.appendChild(li);});
-    s.appendChild(ul);parts.push(s);
+    works.appendChild(ul);
   }
-  if(p.page.talk.length){
-    const s=section('Talk');const ul=el('ul','feed');
+  if(!p.page.rules.length&&!p.page.learned.length)works.appendChild(el('p','empty','No rules written down yet.'));
+  right.push(works);
+  const conv=section('Conversation');conv.dataset.sec='talk';
+  if(p.page.talk.length){const ul=el('ul','feed');
     p.page.talk.forEach(t=>{const li=el('li');li.appendChild(el('time','',t.when));
       const d=el('div');d.appendChild(el('span','who',t.who+': '));d.appendChild(document.createTextNode(t.said));
       li.appendChild(d);ul.appendChild(li);});
-    s.appendChild(ul);parts.push(s);
-  }
-  parts.push(feedSection(p.page.feed,false));
+    conv.appendChild(ul);}
+  else conv.appendChild(el('p','empty','Nothing said here yet. Talk to this crew to start.'));
+  right.push(conv);
+  const cols=el('div','pp-cols'+(left.length?'':' one'));
+  const l=el('div','pp-col');left.forEach(x=>l.appendChild(x));
+  const r=el('div','pp-col');right.forEach(x=>r.appendChild(x));
+  if(left.length)cols.appendChild(l);cols.appendChild(r);
   const open=new Set(Array.from($('ppBody').querySelectorAll('details[open]')).map(d=>d.dataset.fold));
-  $('ppBody').replaceChildren.apply($('ppBody'),parts);
+  $('ppBody').replaceChildren(cols);
   $('ppBody').querySelectorAll('details').forEach(d=>{if(open.has(d.dataset.fold))d.open=true;});
 }
 function drawKeys(){
@@ -3854,7 +3876,7 @@ function draw(){
   if(!M)return;
   if(tab!=='home'&&!project(tab))tab='home';
   if(!chose&&(!openCall||!need(openCall)))openCall=M.needs.length?M.needs[0].id:null;
-  if(confirming&&!(confirming.older?olderItem(confirming.item):need(confirming.item)))confirming=null;
+  if(confirming&&!(confirming.steer?tab===confirming.steer.factory&&project(tab):confirming.older?olderItem(confirming.item):need(confirming.item)))confirming=null;
   if(talk&&talk.item&&!need(talk.item))talk=null;
   if(hl&&!(hl.kind==='call'?need(hl.id):project(hl.id)))hl=null;
   const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
@@ -3956,6 +3978,8 @@ async function perform(d){
       {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
     case 'send':{
       const c=confirming;
+      if(c&&c.steer){answer=await act(V.noteFor({act:'steer',factory:c.steer.factory,who:c.steer.who},null));
+        if(answer&&answer.ok)confirming=null;break;}
       if(c&&c.older){const o=olderItem(c.item);if(!o)return;
         answer=await act(V.noteFor({act:c.older},o));
         if(answer&&answer.ok){oldSent[o.id]={asking:o.asking,words:c.older==='revive'?'you asked to bring it back':'you said it is no longer needed'};confirming=null;}
@@ -3972,7 +3996,10 @@ async function perform(d){
       break;}
     case 'settled':{const n=need(d.id);if(!n)return;answer=await act(V.noteFor({act:'settled'},n));
       if(answer&&answer.ok)asked[n.id]=n.asking;break;}
-    case 'steer':answer=await act(V.noteFor(d,null));break;
+    case 'steer':
+      /* On a project's tab who steers changes after a confirmation, as an answer does. */
+      if(tab!=='home'&&!d.sure){confirming={steer:{factory:d.factory,who:d.who}};talk=null;draw();return;}
+      answer=await act(V.noteFor(d,null));break;
     case 'read':answer=await act(V.noteFor(d,null));break;
     default:return;
   }

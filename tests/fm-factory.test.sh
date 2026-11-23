@@ -629,11 +629,23 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (typed) · s who steers · q quit" "keys"
   assert_not_contains "$out" "first report" "a pane with work shows no first-run hint"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
-  assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
-  assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
-  assert_contains "$out" "   12 Nov  Search results read better with the price on the first line." "a lesson"
+  # A factory's page reads top to bottom: what it is for, one sentence of state, then its parts in order.
+  assert_equals "$(printf '%s\n' "$out" | sed -n 6,7p | tr -s ' ')" " Sample Shop Starship steers
+ online shop for handmade cups" "the page opens with the factory and what it is for, and no crew counters"
+  has_line "$out" " 1 thing needs you. 2 jobs are running, and 1 job has stopped." "one sentence of state"
+  assert_equals "$(printf '%s\n' "$out" | sed 1d | grep -E '^ [A-Z][A-Z ]+[A-Z]( |$)' | sed -E 's/  .*//' | tr '\n' '|')" \
+    " NEEDS YOU| HAPPENING NOW| LATELY| UP NEXT| COMING BACK| HOW THIS CREW WORKS| CONVERSATION|" "the page's parts in order"
+  has_line "$out" " UP NEXT 2 lined up" "Up next says how many are lined up"
+  has_line "$out" " · Gift wrap at checkout next" "the first in line"
   has_line "$out" " · 1 on hold" "the rest of the queue folds into a count per queue word"
-  has_line "$out" " ↺ Nothing comes back this week. 1 is put off to a later date." "a call put off to a date is on its shelf"
+  has_line "$out" " COMING BACK 1 put off to a date" "Coming back says how many are put off"
+  has_line "$out" " Tue 1 Dec Charge tax abroad" "a call put off to a date with the day it comes back"
+  assert_not_contains "$out" "comes back this week" "the page kept the overview's coming-back shelf"
+  assert_not_contains "$out" "queued" "the page kept a line of queue counters"
+  assert_not_contains "$out" "Asked you" "Lately repeated a call NEEDS YOU lists"
+  assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
+  has_line "$out" " Learned lately" "lessons under how the crew works"
+  assert_contains "$out" "   12 Nov  Search results read better with the price on the first line." "a lesson"
   pass "factory record: the plain screen carries every state as a word"
 }
 
@@ -673,7 +685,7 @@ test_a_factory_page_shows_its_rules_size_against_the_cap() {
   has_line "$out" " rules 1,501 / 1,500 characters · over the cap, so its jobs get none of these rules" \
     "rules over the cap are said to be left out"
   out=$(python3 "$FACTORY" --plain --width 92 --factory shop-api) || fail "--plain --factory shop-api failed"
-  assert_contains "$out" "none written down yet" "a factory with no rules"
+  assert_contains "$out" "No rules written down yet." "a factory with no rules"
   assert_not_contains "$out" "characters" "a factory with no rules showed a size"
   pass "factory page: rules show their size against the brief's cap only near it and over it"
 }
@@ -699,11 +711,10 @@ test_the_whole_queue_is_counted_in_sight() {
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_not_contains "$out" "6 queued" "the overview still opens with the whole queue's counts"
   assert_not_contains "$out" "5 queued" "a factory on the overview still leads with its queue's counters"
-  # In a narrow pane a factory page's queue line wraps between counts, never inside one.
+  # A factory's page has no line of queue counters either: Up next says how many are lined up.
   out=$(python3 "$FACTORY" --plain --width 66 --factory sample-shop) || fail "--plain failed"
-  assert_equals "$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,$p' | sed -n 3,4p)" \
-    "     5 queued  ·  2 in line  ·  1 on hold
-               ·  2 wait on you, 1 of them deferred to a date" "a narrow queue line broke inside a count"
+  assert_not_contains "$out" "5 queued" "a factory's page still opens its work with its queue's counters"
+  has_line "$out" " UP NEXT 2 lined up" "a factory's page lost how many are lined up"
   # Work that waits on other work, or on a date still ahead, starts on its own;
   # a date that has passed starts nothing.
   snap=$(jq '.backlog.records += [
@@ -726,8 +737,6 @@ test_the_whole_queue_is_counted_in_sight() {
     "9 queued · 2 start on their own · 2 in line · 2 on hold · 3 wait on you, 1 of them deferred to a date" \
     "the queue line with work that starts on its own"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
-  has_line "$out" " 8 queued · 2 start on their own · 2 in line · 2 on hold" "a factory's page does not open its work with its queue"
-  has_line "$out" " · 2 wait on you, 1 of them deferred to a date" "a factory's page lost who its queue waits on"
   has_line "$out" " · 2 start on their own · 2 on hold" "the rest of the queue is not folded by queue word"
   # A call for the owner that other open work blocks waits on that work, not
   # on the owner; only an aged call is an older call; any other is just one more.
@@ -754,8 +763,8 @@ test_the_whole_queue_is_counted_in_sight() {
     "the factory page calls every held call an older call"
   # The older call and the one put off to a date are on NEEDS YOU's shelves, not in the folded counts.
   assert_contains "$out" "· 1 older question is still open." "the older call is not on its shelf"
-  assert_contains "$out" "↺ Nothing comes back this week. 1 is put off to a later date. The next is on 1 Dec." \
-    "the call put off to a date is not on its shelf"
+  assert_contains "$out" "COMING BACK 1 put off to a date Tue 1 Dec Charge tax abroad" \
+    "the call put off to a date is not under Coming back"
   pass "factory queue: the whole queue is counted by what starts it and per factory; the overview opens with sentences"
 }
 
@@ -1105,15 +1114,16 @@ SH
   assert_equals "$(q '.feed[] | select(.job == "shop-recon") | "\(.word)|\(.answer)|\(.text)"')" \
     "settled||Gift cards for staff" "a call closed on evidence says an older answer"
   out=$(python3 "$FACTORY" --plain --width 110 --factory sample-shop) || fail "--plain failed"
-  has_line "$out" " today closed Stamp card at checkout was closed; no change or report on record." \
+  # The factory's own page tells the same outcomes under LATELY, in New's words.
+  has_line "$out" " today Closed: Stamp card at checkout, with no change or report on record." \
     "a job closed with nothing built does not read closed"
-  has_line "$out" " today closed Old checkout redesign was closed; no change or report on record." \
+  has_line "$out" " today Closed: Old checkout redesign, with no change or report on record." \
     "a job closed with its change unmerged does not read closed"
-  has_line "$out" " today settled Free shipping over fifty. You answered: Yes, from fifty." \
+  has_line "$out" " today Settled: Free shipping over fifty. You answered: Yes, from fifty." \
     "an answered call does not read settled, with what the owner answered"
-  has_line "$out" " 07:30 went live Faster cart" "a merged change does not read went live at its merge"
-  has_line "$out" " today went live Tidy the price list" "a local landing does not read went live"
-  has_line "$out" " 07:12 report ready Why the cart is slow" "a report does not read report ready when it was written"
+  has_line "$out" " 07:30 Went live: Faster cart" "a merged change does not read went live at its merge"
+  has_line "$out" " today Went live: Tidy the price list" "a local landing does not read went live"
+  has_line "$out" " 07:12 Report ready: Why the cart is slow" "a report does not read report ready when it was written"
   assert_not_contains "$(printf '%s\n' "$out" | grep -E 'Stamp card at checkout|Old checkout|Free shipping')" "went live" \
     "work that was only closed reads as live"
   # On the overview each factory tells what is new, newest first, led by what
@@ -1151,8 +1161,8 @@ SH
   assert_equals "$(cat "$opened" 2>/dev/null)" "https://example.invalid/s/pull/5" \
     "a click on a See what changed line did not open that change"
   unset FM_FACTORY_OPEN
-  # The factory's page lists its eight newest events, four of which New already
-  # shows, so more than four more cannot all be there.
+  # The factory's page lists the eight newest of the same outcomes under Lately,
+  # four of which New already shows, so more than four more cannot all be there.
   snap=$(jq '(.backlog.records[] | select(.id == "shop-dropped")) as $row
     | .backlog.records += [range(1; 6) | . as $n | $row + {id: "shop-old\($n)", title: "Old idea \($n)"}]' \
     "$FM_FACTORY_SNAPSHOT") || fail "could not close more work"
@@ -1235,7 +1245,7 @@ PY
     "a job half an hour old with no step named does not read at work"
   assert_not_contains "$out" "needs a look" "a row still reads needs a look"
   assert_not_contains "$out" "no step reported" "a row still reads as if a step were missing"
-  assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.factories[] | select(.id == "sample-shop") | .page.jobs[]
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.factories[] | select(.id == "sample-shop") | (.page.now + .page.next)[]
       | select(.id | test("shop-(why|images|banner|cart)$")) | "\(.id)=\(.state): \(.words)"] | sort | join("; ")')" \
     "shop-banner=busy: just started; shop-cart=busy: at work; shop-images=needs a look: stopped: it is stuck, Starship is on it; shop-why=with Starship: finished, Starship is reading the report" \
     "a second screen is not handed the same words beside each state"
@@ -1252,13 +1262,13 @@ test_a_call_with_a_card_is_not_listed_again_under_work() {
   write_world
   local out work
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
-  assert_contains "$(printf '%s\n' "$out" | sed -n '/NEEDS YOU/,/WORK, IN ORDER/p')" "Which payment provider for the shop" \
+  assert_contains "$(printf '%s\n' "$out" | sed -n '/NEEDS YOU/,/HAPPENING NOW/p')" "Which payment provider for the shop" \
     "the page lost the call's card"
-  work=$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,/RULES THIS CREW FOLLOWS/p')
+  work=$(printf '%s\n' "$out" | sed -n -e '/HAPPENING NOW/,/LATELY/p' -e '/UP NEXT/,/HOW THIS CREW WORKS/p')
   assert_not_contains "$work" "Which payment provider for the shop" "a question with a card is listed again under the page's work"
   assert_contains "$work" "Search that forgives typos" "the page's other work left with the call"
   out=$(python3 "$FACTORY" --plain --width 92 --factory garden-journal) || fail "--plain --factory failed"
-  work=$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,/RULES THIS CREW FOLLOWS/p')
+  work=$(printf '%s\n' "$out" | sed -n -e '/HAPPENING NOW/,/LATELY/p' -e '/UP NEXT/,/HOW THIS CREW WORKS/p')
   assert_not_contains "$work" "Harvest chart" "a question whose worker waits is listed again under the page's work"
   assert_not_contains "$work" "Share a garden page as a picture" "finished work with a card is listed again under the page's work"
   assert_contains "$work" "Garden reminders" "the page's other work left with the calls"
@@ -1267,7 +1277,7 @@ test_a_call_with_a_card_is_not_listed_again_under_work() {
     "garden-chart=decision for you garden-share=ready to merge shop-provider=decision for you" \
     "the record lost the jobs behind the calls"
   assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "garden-journal") | .page
-      | "\(.needs | join(",")) | \(.jobs | map(.id) | join(","))"')" \
+      | "\(.needs | join(",")) | \(.now + .next | map(.id) | join(","))"')" \
     "garden-chart,garden-share | garden-water" "a second screen is handed the calls again as work"
   pass "factory page: a call that has a card under NEEDS YOU is not listed again under the page's work"
 }
@@ -4135,7 +4145,7 @@ test_without_a_routine_mark_every_run_shows_as_before() {
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   has_line "$out" " now ● Reminder pass 0750 10 min" "the running pass has its own card"
   assert_not_contains "$out" "↻" "a routine line without a mark"
-  has_line "$(python3 "$FACTORY" --plain --width 92 --factory garden-journal)" " 07:10 report ready Reminder pass 0700" \
+  has_line "$(python3 "$FACTORY" --plain --width 92 --factory garden-journal)" " 07:10 Report ready: Reminder pass 0700" \
     "a finished pass is in the feed"
   pass "factory pane: without a routine mark every run shows as before"
 }

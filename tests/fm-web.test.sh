@@ -728,22 +728,32 @@ write_screen() {  # <home>
             "when": "today", "pr": null, "read": true, "title": "Why the soil dries out", "colour": "green"}],
    "more": 2, "more_words": "and 2 more, on its own page",
    "next": {"title": "Harvest notes", "once_you_answer": true, "then": 1, "words": ", once you answer, then 1 more lined up"},
-   "page": {"needs": ["garden-chart", "garden-share"], "queue": ["3 queued", "2 in line", "1 deferred to a date"],
-    "jobs": [], "workers": [
+   "page": {"needs": ["garden-chart", "garden-share"],
+    "state": "2 things need you. 1 job is running. 1 change went live in the last 12 hours.",
+    "now": [{"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
+      "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false}],
+    "lately": [{"id": "garden-beds", "word": "went live", "label": "Went live", "text": "Raised beds", "when": "06:05",
+                "pr": "https://example.invalid/g/pull/9", "read": false, "title": "Raised beds", "colour": "green"}],
+    "lately_since": "in the last 12 hours",
+    "next": [{"id": "garden-notes", "title": "Harvest notes", "state": "next", "words": "next", "elapsed": "",
+              "colour": "mist", "quiet": false, "step": 1, "queue": "in line", "read": false}],
+    "lined": 2,
+    "coming": [{"id": "garden-seeds", "title": "Charge for seeds", "when": "Mon 16 Nov"}],
+    "workers": [
      {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
       "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false}],
     "folded": [{"words": "1 deferred to a date", "jobs": [{"title": "Charge for seeds", "queue": "deferred"}]}],
     "rules": ["English only."], "rules_size": "rules 1,400 / 1,500 characters · near the cap; past it its jobs get none of these rules",
     "rules_mark": "near", "learned": [],
-    "feed": {"title": "LAST 12 HOURS", "events": []},
     "talk": [{"when": "Fri 12:00", "who": "you", "said": "Keep the rows wide."},
              {"when": "Fri 13:00", "who": "Starship", "said": "Done, a hand apart."},
              {"when": "06:00", "who": "you", "said": "Are the labels in?"}]}},
   {"id": "recipe-box", "name": "Recipe Box", "state": "idle", "steered_by": "Starship", "about": ["0 workers, 0 busy"],
    "quiet": true, "quiet_words": "Idle since 06:00, nothing lined up.", "badge": "", "now": "Nothing is running.",
    "jobs": [], "routine": [], "new": [], "more": 0, "next": null,
-   "page": {"needs": [], "queue": ["nothing queued"], "jobs": [], "workers": [], "folded": [], "rules": [],
-    "rules_size": "", "rules_mark": "", "learned": [], "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}}],
+   "page": {"needs": [], "state": "Nothing needs you. Nothing is running.", "now": [], "lately": [],
+    "lately_since": "in the last 12 hours", "next": [], "lined": 0, "coming": [], "workers": [], "folded": [],
+    "rules": [], "rules_size": "", "rules_mark": "", "learned": [], "talk": []}}],
  "factories_heading": "new since you looked at 06:00",
  "steps": ["planning", "building", "checking", "ready to merge"], "voice": false}
 JSON
@@ -823,8 +833,12 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
     "a project's New"
   assert_equals "$(m '.projects[0] | "\(.more) \(.more_words)"')" "2 and 2 more, on its own page" \
     "how many more New leaves to the project's page"
-  assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title)"')" \
-    "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds" \
+  # A project's own page top to bottom, as the pane's page (View.page_parts), with no line of queue counters.
+  assert_equals "$(m '.projects[0].page | [.state, (.now | map(.title) | join(",")),
+      (.lately | map("\(.when) \(.label): \(.text) \(.pr)") | join(",")), .lately_since,
+      (.next | map(.title) | join(",")), .lined, (.coming | map("\(.when) \(.title)") | join(",")),
+      "\(.folded[0].words): \(.folded[0].jobs[0].title)", has("queue"), has("feed")] | map(tostring) | join(" | ")')" \
+    "2 things need you. 1 job is running. 1 change went live in the last 12 hours. | Garden reminders | 06:05 Went live: Raised beds https://example.invalid/g/pull/9 | in the last 12 hours | Harvest notes | 2 | Mon 16 Nov Charge for seeds | 1 put off to a date: Charge for seeds | false | false" \
     "a project's own page"
   # The page draws no column of workers beside a project's page: its work list
   # already names each one, so the mirror hands the page no second list of them.
