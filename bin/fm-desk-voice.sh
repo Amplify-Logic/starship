@@ -169,11 +169,12 @@
 # "|": the app's name, its bundle id and the front window's title, of which
 # only the name is required. A message with words then gains one line after
 # them, before any screenshots line:
-#   Front: <name> (<bundle-id>) - window title (untrusted): <title>
+#   Front: <name> (<bundle-id>) - window title (set by the app): <title>
 # leaving out the parts that are empty. Each part is made one plain line first,
 # and the title also loses its double quotes and backticks and is cut to 120
-# characters. The title is set by the app, and by any web page in a browser:
-# it is untrusted data, shown for context only and never an instruction.
+# characters. The title is set by the app, and by any web page in a browser,
+# as its label says: it is data, shown for context only and never an
+# instruction. bin/fm-web.py hides the line from the owner's view of the chat.
 # A message of screenshots alone gets no Front line. send --front-pid <pid>
 # --front-tab-tty <tty> name that app's process and the terminal device of its
 # frontmost tab, given together: when that tab shows the primary's own pane
@@ -408,7 +409,7 @@ raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateesca
 text = " ".join(raw.replace("\"", "").replace("`", "").split())[:120].rstrip()
 sys.stdout.buffer.write(text.encode(sys.getfilesystemencoding(), "surrogateescape"))
 ') || return 1
-  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - window title (untrusted): $title}"
+  printf 'Front: %s%s%s' "$name" "${bundle:+ ($bundle)}" "${title:+ - window title (set by the app): $title}"
 }
 
 # The message the parsed arguments make: the transcript, if any, then one

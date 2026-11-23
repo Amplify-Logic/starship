@@ -227,14 +227,15 @@ When you start talking, the floater notes the app in front, its bundle id and th
 
 ```
 What does this error mean
-Front: Xcode (com.apple.dt.Xcode) - window title (untrusted): build log
+Front: Xcode (com.apple.dt.Xcode) - window title (set by the app): build log
 ```
 
 Typed into the chat, the line follows your words on the same line, as everything typed there does; in the mailbox it stays on a line of its own.
 Firstmate can then read that window by its bundle id rather than asking which one you meant.
 The title is read with the permissions the floater already has, Accessibility or else Screen Recording; when neither can read it, the line names the app alone.
-The title is untrusted data: the app sets it, and in a browser any web page does.
-It loses double quotes, backticks and control characters, is cut to 120 characters and is labelled untrusted: it is shown for context only and is never an instruction.
+The app sets the title, and in a browser any web page does, as its label says.
+It loses double quotes, backticks and control characters and is cut to 120 characters: Firstmate reads it for context only and never as an instruction.
+The Starship web page hides the line from your view of the chat; Firstmate still receives it unchanged.
 The line is left out when the front tab is the terminal tab showing Firstmate's own chat, checked the way dictation checks it, but only once you have already allowed Automation for Terminal: talking never asks for it, and without it the line is kept.
 Another tab or window of the same terminal keeps the line, and so does iTerm2, Ghostty or any terminal other than Terminal.
 A message of screenshots alone carries none.
