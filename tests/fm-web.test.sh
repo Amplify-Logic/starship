@@ -1210,6 +1210,13 @@ out.push('faint picks: nudged ' + faint.nudged.join(',') + ', text ' + faint.var
 const backs = v => [v['--bg'], v['--surface'], v['--surface-2']];
 const low = v => Math.min(...['--ink', '--ink-2', '--here'].flatMap(k => backs(v).map(b => S.contrast(v[k], b))));
 out.push('faint picks now read at least: ' + (low(faint.vars) >= S.READABLE));
+out.push('wcag: black on white ' + S.contrast('#000000', '#ffffff') + ', #777777 on white ' + S.contrast('#777777', '#ffffff').toFixed(2) +
+  ', #767676 on white ' + S.contrast('#767676', '#ffffff').toFixed(2) + ', AA ' + S.READABLE);
+out.push('mid-grey backgrounds: ' + ['#707070', '#727272', '#747474', '#7a7a7a'].map(bg => {
+  const made = S.palette({ accent: '#ff0000', bg, ink: '#ffffff' }, { work: '#7e6431' });
+  const work = Math.min(...['--surface', '--surface-2'].map(k => S.contrast(made.vars['--work'], made.vars[k])));
+  return bg + (made.nudged.indexOf('bg') >= 0 ? ' lifted' : '') + (low(made.vars) >= 4.5 && work >= 4.5 ? ' reads' : ' FAINT');
+}).join(', '));
 out.push('schemes: ' + Object.keys(S.SCHEMES).map(name => ['light', 'dark'].map(mode => {
   const made = S.palette(S.SCHEMES[name][mode], {});
   return S.SCHEMES[name].name + ' ' + mode + (made.nudged.length ? ' nudged' : '') + (low(made.vars) >= S.READABLE ? ' reads' : ' FAINT') + (made.dark === (mode === 'dark') ? '' : ' WRONG SHADE');
@@ -1233,6 +1240,8 @@ custom in dark, none picked there: - - -
 bad colours: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
 faint picks: nudged ink,accent, text #727272, accent #80761e
 faint picks now read at least: true
+wcag: black on white 21, #777777 on white 4.48, #767676 on white 4.54, AA 4.5
+mid-grey backgrounds: #707070 lifted reads, #727272 lifted reads, #747474 lifted reads, #7a7a7a reads
 schemes: Sea light reads, Sea dark reads, Green light reads, Green dark reads, Warm light reads, Warm dark reads, Slate light reads, Slate dark reads
 the style'"'"'s own colours on a dark custom background: work #a08c67 reads true, you #b67f75 reads true, done untouched true
 own colours: {"accent":"#47707f","bg":"#ece8e1","ink":"#2a2a28"}, scheme put back true' "the colours a browser keeps and what they put on the page"

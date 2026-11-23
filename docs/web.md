@@ -133,7 +133,7 @@ The Settings button opens one small panel:
 - **Colours**: Default is the page's own colours; Sea, Green, Warm and Slate are ready-made schemes, picked with one click from their swatches, each with its own light and dark.
   Custom opens three colour pickers, Accent, Background and Text, that change the page as you pick; it starts from the colours on screen, and keeps its picks for light and for dark apart.
   Every other colour on the page, its panels, lines and status colours, follows from those three.
-  Text and accent are always kept readable: a pick too faint against its background is moved to the nearest readable shade, and the panel says so.
+  Text and accent are always kept readable: a pick too faint against its background is moved to the nearest readable shade, a mid-grey background that no text reads well on is shown a shade lighter, and the panel says so.
   **Back to default** returns to the page's own colours.
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
 - **Show key hints**: the small key letters on the buttons and the line of keys at the bottom.

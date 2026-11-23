@@ -2792,11 +2792,11 @@ SETTINGS_JS = r"""
     return Math.min.apply(null, backs.map(function (b) { return contrast(fg, b); }));
   }
   /* The colour itself when it reads on every background given, else the
-     nearest shade of it that does: moved toward black on a light background,
-     toward white on a dark one. */
+     nearest shade of it that does: moved toward black or white, whichever
+     reads better on all of them. */
   function readable(fg, backs, min) {
     if (least(fg, backs) >= min) return fg;
-    var to = contrast('#000000', backs[0]) >= contrast('#ffffff', backs[0]) ? '#000000' : '#ffffff';
+    var to = least('#000000', backs) >= least('#ffffff', backs) ? '#000000' : '#ffffff';
     for (var step = 1; step <= 50; step++) {
       var shade = mix(fg, to, step / 50);
       if (least(shade, backs) >= min) return shade;
@@ -2810,11 +2810,17 @@ SETTINGS_JS = r"""
      status holds the Style's own state colours (work, done, you and Lively's
      good, low, critical) as the page shows them, so each can be kept readable
      on the new background. nudged names the picks that were too faint and are
-     shown as the nearest readable shade instead. */
+     shown as the nearest readable shade instead. A mid-grey background on
+     which neither black nor white text reads is lifted until black does. */
   function palette(picks, status) {
-    var bg = picks.bg, dark = luminance(bg) < 0.18;
-    var surface = mix(bg, '#ffffff', dark ? 0.05 : 0.7), surface2 = mix(bg, '#ffffff', dark ? 0.09 : 0.35);
-    var backs = [bg, surface, surface2], nudged = [];
+    var bg = picks.bg, dark = luminance(bg) < 0.18, nudged = [];
+    var backsOf = function (b) { return [b, mix(b, '#ffffff', dark ? 0.05 : 0.7), mix(b, '#ffffff', dark ? 0.09 : 0.35)]; };
+    if (dark && least('#ffffff', backsOf(bg)) < READABLE) dark = false;
+    if (!dark) {
+      var lifted = readable(bg, ['#000000'], READABLE);
+      if (lifted !== bg) { bg = lifted; nudged.push('bg'); }
+    }
+    var backs = backsOf(bg), surface = backs[1], surface2 = backs[2];
     var ink = readable(picks.ink, backs, READABLE);
     if (ink !== picks.ink) nudged.push('ink');
     var accent = readable(picks.accent, backs, READABLE);
@@ -3853,9 +3859,11 @@ const PICKERS={accent:'pickAccent',bg:'pickBg',ink:'pickInk'};
 function own(){return FS.own(document.documentElement).picks||{accent:'#47707f',bg:'#ece8e1',ink:'#2a2a28'};}
 function mode(){return FS.isDark(settings,systemDark())?'dark':'light';}
 function colourNote(nudged){
-  if(!nudged.length)return '';
-  const what=nudged.length>1?'The text and accent colours were':nudged[0]==='ink'?'That text colour was':'That accent was';
-  return what+' too faint to read on this background, so '+(nudged.length>1?'each is':'it is')+' shown in the nearest readable shade.';}
+  const lifted=nudged.indexOf('bg')>=0?'No text reads well on that background, so it is shown a shade lighter.':'';
+  const faint=nudged.filter(n=>n!=='bg');
+  if(!faint.length)return lifted;
+  const what=faint.length>1?'The text and accent colours were':faint[0]==='ink'?'That text colour was':'That accent was';
+  return (lifted?lifted+' ':'')+what+' too faint to read on this background, so '+(faint.length>1?'each is':'it is')+' shown in the nearest readable shade.';}
 function drawColours(){
   const dark=mode()==='dark';
   document.querySelectorAll('#schemes button').forEach(b=>{
@@ -3927,17 +3935,17 @@ drawSettings();
 function divider(node,main,name){
   function label(){node.setAttribute('aria-orientation','vertical');
     node.setAttribute('aria-valuenow',String(Math.round(settings[name]*100)));}
-  function put(value,keep){const range=FS.SPLITS[name];
+  function place(value,keep){const range=FS.SPLITS[name];
     value=Math.min(range[1],Math.max(range[0],value));
     if(keep)change(name,value);else{settings[name]=value;put(settings);label();}}
   node.addEventListener('pointerdown',e=>{
     if(e.button!==0)return;e.preventDefault();node.setPointerCapture(e.pointerId);node.classList.add('drag');
-    const moved=ev=>{const r=main.getBoundingClientRect();put((ev.clientX-r.left)/r.width,false);};
+    const moved=ev=>{const r=main.getBoundingClientRect();place((ev.clientX-r.left)/r.width,false);};
     const done=()=>{node.classList.remove('drag');node.removeEventListener('pointermove',moved);
-      node.removeEventListener('pointerup',done);node.removeEventListener('pointercancel',done);put(settings[name],true);};
+      node.removeEventListener('pointerup',done);node.removeEventListener('pointercancel',done);place(settings[name],true);};
     node.addEventListener('pointermove',moved);node.addEventListener('pointerup',done);node.addEventListener('pointercancel',done);
   });
-  node.addEventListener('dblclick',()=>put(FS.DEFAULTS[name],true));
+  node.addEventListener('dblclick',()=>place(FS.DEFAULTS[name],true));
   node.addEventListener('keydown',e=>{
     const range=FS.SPLITS[name];const now=settings[name];
     let next=null;
@@ -3945,7 +3953,7 @@ function divider(node,main,name){
     else if(e.key==='Home')next=range[0];else if(e.key==='End')next=range[1];
     else if(e.key==='Enter')next=FS.DEFAULTS[name];
     if(next===null)return;
-    e.preventDefault();e.stopPropagation();put(next,true);
+    e.preventDefault();e.stopPropagation();place(next,true);
   });
   label();
   return {label:label};
