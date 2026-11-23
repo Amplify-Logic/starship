@@ -33,21 +33,28 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
    ↺ Nothing comes back this week. 1 is put off to a later date.
      The next is on 1 Dec.
 
- RIGHT NOW
+ YOUR FACTORIES  new since you looked at 03:46
 
-   Sample Shop   8 queued · 4 in line
-     ● Search that forgives typos                                                   47 min
-       ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge
-       running the search tests: 41 of 58 passed
-       next  Gift wrap at checkout · then 3 more
+   Sample Shop                                                                  1 needs you
+     now   ● Search that forgives typos                                              47 min
+             ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge
+             running the search tests: 41 of 58 passed
+           ● Gift cards at checkout
+             stopped: its checks raised a question, Starship is on it
+     new   14:12  Report ready: Why the cart is slow
+                  r  Read the report
+           11:41  Went live: Faster cart
+                  o  See what changed
+           today  Settled: Free shipping over fifty? You answered: Yes, from fifty.
+     next  Gift wrap at checkout, then 3 more lined up
 
-   Recipe Box   idle since 06:46 · nothing queued
+   Garden Journal                                                                2 need you
+     now   Nothing is running.
+     new   13:57  PR ready: Share a garden page as a picture
 
- SINCE YOU LAST LOOKED, 03:46
+ QUIET FOR NOW
 
-   today    Sample Shop     closed     Stamp card at checkout was closed; no change or report on record.
-   12:36    Garden Journal  asked you  Harvest chart needs your call.
-   13:57    Garden Journal  PR ready   Share a garden page as a picture has its PR ready.
+   Recipe Box   Idle since 06:46, nothing lined up.
 
  ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (voice) · s who steers · q quit
 ```
@@ -60,13 +67,13 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   After the total it says what will start each of them: `start on their own` is work that waits on other work or on a date still ahead and needs no word from you, `parked until <date>` is work parked until a date still ahead, which is looked at again on that date and never starts by itself, counted once: `parked until <date>` when every parked job shares one date, else `parked, soonest <date>`, with each job's own date only in the opened list, `in line` is queued with nothing set to start it, `on hold` is held with no date ahead, `wait on other work` is a decision for you that other open work still blocks, so it cannot be decided yet, and `wait on you` is every other decision held for you, with the ones deferred to a date counted apart.
   A count of zero is left out, and in a narrow pane the line wraps between counts.
   Work listed as in flight that has no worker is not queued; it reads `no worker` on its factory's page.
-- On a first run, with nothing waiting on you and no work in the backlog, open or finished, RIGHT NOW says to ask Starship for a first report, and with no factory at all the keys line offers only `q quit`, the one key that does something there.
+- On a first run, with nothing waiting on you and no work in the backlog, open or finished, YOUR FACTORIES says to ask Starship for a first report, and with no factory at all the keys line offers only `q quit`, the one key that does something there.
 - NEEDS YOU comes first, across all factories, most pressing first: the decisions that have waited longest, then finished work, then a second mate's ready PRs.
   That is the one order `fm_owner_calls` gives, so the first card, marked `first up`, is always the call the bridge strip names as most urgent.
   It lists exactly the owner's calls behind the strip's `decisions for you` and `ready to merge`, the calls the tap page also shows: each decision held for the owner that waits on him now (not aged, deferred to a date, or waiting on other work), and each PR or ready branch waiting for the merge word whose task carries no open captain hold.
   `fm_owner_calls` in `bin/fm-fleet-status-lib.sh` owns that count, and the merges are the work the overview reading read as ready, so the list is the count.
   It also counts each PR a second mate has ready for the merge word, read from what the mate reports to this home: a PR is listed once its child's done outcome reaches this home, not at its registration, never when that mate has `yolo` on and merges it itself, and only while that child's newest outcome is done; it is dropped for good once the PR is merged or closed, unless a closed PR's child reports done on it again. Such a PR is listed in the factory of its repository and names its mate (`from <mate>`).
-  A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs are in the `needs a look` state the status bar counts, which a job's row spells `waiting on Starship`.
+  A worker's question and an ask-user review finding go to Starship, which answers them or holds them for the owner, so they never appear here; their jobs are in the `needs a look` state the status bar counts, which a job's row spells as stopped with Starship on it (below).
   A question shows its why, the options and suggestion its tap card carries (`bin/fm-tap-desk.sh shapes`, including any recorded with `fm-tap-desk.sh mark`), and what it holds up.
   The open card shows the whole why and the whole suggestion, wrapped to the pane's width and never cut short.
   In a call's title, why and suggestion, a file path is left out, and so is a work item's id or a revision mark such as `(r2)` alone in brackets; any other bracketed words stay, and `Read the report` still opens the file. Options, the feed and the talk keep their words as written.
@@ -82,19 +89,26 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   On a listed question `b` asks Starship to bring it back into NEEDS YOU and `n` says it is no longer needed; each opens a confirmation first, as an answer does, and goes to Starship as a note, after which the question says what you asked until Starship acts on it.
   The coming back shelf, marked `↺`, lists the calls put off to a date that come back within a week, each with its date from the record, and says how many more are put off and the date the next of them comes back.
   A factory's page keeps the same two shelves for that factory's own calls.
-- RIGHT NOW lists each factory with its own queue: how many of its jobs have not started, and how many of those are in line; a factory the owner steers also says `you steer`, and one Starship steers says nothing.
-  A busy job shows its title, how long it has run, the four steps (planning, building, checking, ready to merge), and what it is doing this minute.
-  One that has named no step yet reads `just started` for its first five minutes and `at work` after that.
+- YOUR FACTORIES tells each factory as Now, New and Next, in one block, as `View.told` in `bin/fm-factory.py` composes it for both screens.
+  The head names the factory and, on the right, how many things there need you (`2 need you`); a factory the owner steers also says `you steer`, and one Starship steers says nothing, since the switch is the `s` key.
+  Now is what runs or stopped there: a busy job shows its title, how long it has run, the four steps (planning, building, checking, ready to merge), and what it is doing this minute; one that has named no step yet reads `just started` for its first five minutes and `at work` after that.
   A job with no sign of life for 15 minutes says `quiet for N min, no sign of life` instead, and its light stops moving.
+  A job that is not busy but waits, stopped, failed or is a call of yours that has started is one row with its state in words, and with nothing busy Now opens with `Nothing is running.`
   A job with something to read shows the same `r  Read the report` line.
-  An idle factory is one faint row.
-  A factory with [routine work](#routine-work) adds one `↻` line per routine kind under it, idle or not.
-- SINCE YOU LAST LOOKED is one rolling list since the owner last looked at the pane: the time, who acted (a factory, Starship, or you), one word, and a sentence.
-  A look is a key pressed in the pane, or the pane focused in Herdr for a few seconds; focus alone keeps a look going for at most 15 minutes after the focus began or the last key press, so a pane left focused all day does not hold the list back. Only Herdr saying the pane is not focused ends a focus; a failed or unreadable answer from Herdr changes nothing. A look ends 15 minutes after its last key press or counted focus, and while one is under way the list keeps starting where the look before it ended.
-  Its heading names that time; with no look recorded yet it reads LAST 12 HOURS, and it never reaches back more than two days, reading LAST 48 HOURS when the last look is older.
-  A factory's own tab records no look, since it shows one factory only.
-  It holds outcomes (`finished`, `report ready`, `PR ready`, `went live`, `closed`, `settled`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear.
-  A `report ready`, `went live` or `settled` row leads with that word and then names the work by its title alone, such as `went live  Faster cart`.
+  A factory with [routine work](#routine-work) adds one `↻` line per routine kind under Now.
+  New is what came out of the factory since the owner last looked: `Went live:`, `Report ready:`, `Settled:`, `PR ready:`, `Finished:`, `Failed:` or `Closed:` in front of the work's title, newest first, each with its time, at most four, then how many more there are, with `, on its own page` only when that page's eight newest events hold them all.
+  A settled call says what the owner answered, from its resolution record's `Captain decision:` words, a report shows its `r  Read the report` line, a change that went live through a PR shows an `o  See what changed` line, and work that went live is told once, so its earlier finished or PR ready is left out.
+  Next is the first job in line and how many more are lined up after it, or `, once you answer` when the next job waits on a call of yours.
+  A factory with nothing that needs you, nothing in Now and nothing new is quiet: it folds into one line under QUIET FOR NOW, saying since when it is idle, or that nothing is running, how many jobs are lined up, and how many of its calls are put off with the date the next comes back.
+  The heading says since when New tells what moved, in the third sentence's words: since the owner last looked, or the last 12 or 48 hours.
+- New starts where the owner last looked at the pane.
+  A look is a key pressed in the pane, or the pane focused in Herdr for a few seconds; focus alone keeps a look going for at most 15 minutes after the focus began or the last key press, so a pane left focused all day does not hold New back. Only Herdr saying the pane is not focused ends a focus; a failed or unreadable answer from Herdr changes nothing. A look ends 15 minutes after its last key press or counted focus, and while one is under way New keeps starting where the look before it ended.
+  With no look recorded yet it covers the last 12 hours, and it never reaches back more than two days.
+  A factory's own tab records no look, since it shows one factory only, and lists the same outcomes in its own feed, with what the owner and Starship said.
+- A factory's feed is one rolling list since that start: the time, one word, and a sentence.
+  It holds outcomes (`finished`, `report ready`, `PR ready`, `went live`, `closed`, `settled`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear, and the overview's New holds the outcomes alone.
+  A `report ready`, `went live` or `settled` row leads with that word and then names the work by its title alone, such as `went live  Faster cart`, and a settled call adds what the owner answered.
+  A change that went live through a pull request takes its time from the PR's merge, read once with `gh` and kept in `state/factory/merged-at.json`, and a report from when its file was written; work closed with only its day on record shows `today` or the day.
   A ship's `done` is an outcome only when it is the ready report, so a build handed into the checks is not listed as finished; a scout's `done` reads `report ready`.
   A [routine](#routine-work) job's `finished`, `report ready`, `PR ready`, `went live`, `closed` and `settled` are left out; its `failed` and `asked you` are listed as usual.
   A closed work item reads `went live` only with its merged change or local landing on record and `report ready` only with its report; one closed with neither reads `settled` when it was a call of the owner's, and `closed` otherwise, such as dropped or superseded work.
@@ -104,7 +118,7 @@ When the screen is taller than the pane, the sentences stay on top and the keys 
 The highlight keeps itself in sight as it moves, `pgup`, `pgdn` and the mouse wheel scroll the view, and the row under the sentences and the row above the keys say how many lines are out of sight above or below.
 The pane asks the terminal for mouse reports to see the wheel, so Herdr's own text selection does not work inside it.
 
-The pane asks for mouse button reports too, so a click on a `Read the report` line reads that item; a click anywhere else does nothing.
+The pane asks for mouse button reports too, so a click on a `Read the report` line reads that item and a click on a `See what changed` line opens that PR in the browser; a click anywhere else does nothing.
 
 Colour only repeats what the words already say: cyan is where you are, amber is work under way, green is done or ready to merge, red is a decision for you.
 The pane and the worker copies in a factory's tab select light or dark colours, including the highlighted rows: the remembered [workspace theme](fork-configuration.md#workspace-theme-configworkspace-theme) when one is set, repainting in place when it is switched, else the terminal background at startup; plain-text output is unchanged.
@@ -113,7 +127,8 @@ The pane and the worker copies in a factory's tab select light or dark colours, 
 ## Reading the work
 
 A call or job has something to read when its task has a report or a page of its own in the home (`data/<id>/report.md` or `data/<id>/page.html`), or when its hold reason names a report under the home's `data/`; only then does it show `r  Read the report`.
-`r` reads the highlighted call, or on a highlighted factory the first job the screen shows with that line, and a click reads the line it lands on.
+`r` reads the highlighted call, or on a highlighted factory the first job or report in New the screen shows with that line, and a click reads the line it lands on.
+A closed report in New has something to read the same way, by its work item's id or the report it names.
 The pane hands those to `bin/fm-read.sh`, which opens the task's own `page.html` when there is one and otherwise renders the reports into one calm reading page under `.lavish/`, then opens it in Lavish, or in the browser when Lavish is not installed.
 The reader runs in the background, so the pane never waits on it, and when it cannot open the page the pane says why.
 A scout writes that `page.html` beside its report, in whatever form best presents its work.
@@ -133,7 +148,7 @@ routine: Reminder pass, Weekly harvest summary
 - Otherwise the line lists kinds of jobs, separated by commas: a job is of a kind when its title starts with that kind as a whole word, ignoring case (`Reminder pass 07:50`); a job with no title is matched by its id.
 - Without the line, or with `routine: no`, nothing is routine and the pane shows every job as it always has.
 
-Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass under way, is one line:
+Under its factory's Now in YOUR FACTORIES, each routine kind that ran today, or has a pass under way, is one line:
 
 ```text
      ↻ Reminder pass  4 runs today · last started 07:50                             busy
@@ -144,9 +159,9 @@ Under its factory in RIGHT NOW, each routine kind that ran today, or has a pass 
 - The right side says `busy` while a pass runs, or `waiting` while one is paused on a wait it declared.
 - A pass that runs as expected, or waits, folds into that line instead of drawing its own card.
 - A pass that needs a look or failed, is quiet with no sign of life, stopped, without a worker, or a decision for you or ready to merge keeps its own row as usual.
-- SINCE YOU LAST LOOKED leaves out a routine pass that finished, had its report or its PR ready, went live, or was closed or settled, while a failed one and a call it put to you are listed as usual.
+- New and the feed leave out a routine pass that finished, had its report or its PR ready, went live, or was closed or settled, while a failed one and a call it put to you are listed as usual.
 - A pass folded into that line is left out of the factory's busy crew and of whether the factory is at work, so a factory whose only busy work is a folded pass counts as idle, since its last pass or outcome; the top's running count still counts it, since it shows the overview's figures, as the strip and the status bar do.
-- Such a factory reads idle on the overview too, sorted with the idle factories, while any other card it would show, such as a pass that needs a look, still shows under its head with its routine line; only with nothing busy at all does it drop those cards, keeping its idle row and its routine lines.
+- Such a factory reads idle on the overview too, sorted with the idle factories, while any other card it would show, such as a pass that needs a look, still shows in its Now with its routine line, and a factory with a routine line is never folded as quiet.
 - A factory's own tab still lists every routine pass with the rest of its work.
 
 ## A factory's own tab
@@ -176,6 +191,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `k` | Keep the highlighted finished work and ask Starship to land it, after `enter` confirms it. |
 | `c` | Ask for changes to the highlighted finished work, in the talk box, typed. |
 | `r` | Read the highlighted call's report, or on a factory the first shown job's; a click on a `Read the report` line reads that one. |
+| `o` | On a factory on the overview, open the PR of the first change in its New that went live, in the browser (`FM_FACTORY_OPEN` stands in for the opener); a click on a `See what changed` line opens that one. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through: by voice where the desk voice is set up, typed otherwise. |
 | `s` | Switch who steers the highlighted factory, both ways. |
 | `b` `n` | On a listed older question, ask Starship to bring it back into NEEDS YOU, or say it is no longer needed, after `enter` confirms it. |
@@ -255,7 +271,7 @@ The record is always built by the code on disk, so a running pane or worker copy
 The live pane holds that reload while the talk box, a confirmation or a notice is showing, so a draft or a sent or not-sent line is never lost, and reloads on the first frame after.
 
 `bin/fm-factory.py --screen` prints what the screen shows as data, schema `fm-factory-screen.v1`, for a second screen that lays the pane out its own way, such as the web page ([web.md](web.md)).
-It is the overview and every factory's page as the pane selects and words them: the three sentences and the part each leads to, the first card, the two shelves, the stopped jobs, each call with its answers and how long it has waited, each factory's row and jobs with the step a busy one is on and what it is doing, the feed with its times, and for a factory's page its whole queue, shown and folded jobs, rules, lessons, talk and the jobs whose workers its tab shows.
+It is the overview and every factory's page as the pane selects and words them: the three sentences and the part each leads to, the first card, the two shelves, the stopped jobs, each call with its answers and how long it has waited, each factory told as Now, New and Next (its badge, its jobs with the step a busy one is on and what it is doing, its routine lines, its New with times, links and what can be read, its Next, or its one quiet line) and the heading over them, and for a factory's page its whole queue, shown and folded jobs, rules, lessons, talk and the jobs whose workers its tab shows.
 It answers from the cached record at once and keeps that record current the way a live pane does, starting a due refresh or a rebuild of the owner's calls in the background.
 `bin/fm-factory.py act` is the writing keys for such a screen: it reads one action as JSON on stdin, sends the note that key sends under the same request id, and prints whether it went and the words the pane would say.
 An action that names the asking its screen showed sends nothing once the record's differs.
@@ -265,7 +281,7 @@ The record's schema is `fm-factory.v1`:
 
 | Field | What it holds |
 | --- | --- |
-| `as_of`, `since` | When the record was built and the start of SINCE YOU LAST LOOKED, as UTC times and epochs. |
+| `as_of`, `since` | When the record was built and the start of New and the feed, as UTC times and epochs. |
 | `snapshot_epoch`, `calls_signal` | When the workers in it were read, and the owner's calls signal its calls were read under. |
 | `read_at` | When the refresh began reading, in fractional epoch seconds; a pane keeps a card it just asked about checking until a record read after the press arrives. |
 | `since_from` | What that start is: `last look`, or `12 hours` with no look recorded yet, or `48 hours` when the last look is older than that. |
@@ -276,14 +292,14 @@ The record's schema is `fm-factory.v1`:
 | `news` | How many changes went live and reports came in since the feed's start, before the feed is cut short. |
 | `needs_you[]` | Each of the owner's calls, most pressing first: its `id`, `factory`, `kind` (`question` or `finished work`), `title`, `ask`, `why`, `options[]` (`key`, `label`, `suggested`), `suggested_by`, a `recommendation` that is not one of the options, `holds_up[]`, `since`, `pr`, `for`, the person it waits on, `mate`, the second mate whose PR it is (absent for this home's own work), `answered`, when the owner answered it since it was asked and with which option (`at` and the option `key`, null for a keep), or null, `checking`, true while Starship re-checks a question the owner marked already settled, `summary[]`, the short section a finished-work PR opens with as `label` and `text` pairs in the order In short, See it, You need to, Risk (empty for a question, or for a PR without that section), and `read`, the sources `bin/fm-read.sh` is given (empty when there is nothing to read). |
 | `factories[]` | Each factory: `id`, `name`, `about`, `projects`, `steered_by`, `state`, `idle_since`, `crew`, `needs` (the ids of its items in `needs_you`), `jobs[]`, `next`, `queue` (its own counts, as above), `rules`, `rules_size` (the characters its rules take in a brief, measured against the top-level `rules_cap`, as [the registry](fork-configuration.md#factory-registry-datafactoriesmd) describes), `learned`, and `talk`, plus `routine` (the [routine](#routine-work) kinds its registry entry names, or `Routine work` for `routine: yes`) and `routine_runs[]`, one per routine kind that ran today or has a pass under way: `kind`, `today`, `last` and `last_word`, `running`, and `folded` (the ids of the jobs the line stands for on the overview). |
-| `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from (null when no step is known), `last_sign_of_life` and where it came from, `quiet`, `until`, `pr`, `queue`, `parked_until` (the date a `parked` job is parked until, else null), `routine` (its routine kind, or null), and `read`. |
-| `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `word`, and `text`. |
+| `factories[].jobs[]` | Each job: `id`, `title`, `kind`, `state`, `step`, `started`, `doing` and where it came from (null when no step is known), `last_sign_of_life` and where it came from, `quiet`, `until`, `pr`, `queue`, `parked_until` (the date a `parked` job is parked until, else null), `look` (for a `needs a look` job, what it waits on Starship for: `checks`, `question` or `stuck`, else null), `routine` (its routine kind, or null), and `read`. |
+| `feed[]` | Each event: `at` (or a `date` when only the day is known), `actor`, `factory`, `job`, `word`, and `text`; an outcome also has the work's `title`, a change that went live its `pr`, a report its `read`, and a settled call the owner's `answer`. |
 
 Every state is a word: a job is `busy`, `decision for you`, `ready to merge`, `needs a look`, `failed`, `waiting`, `stopped` (its worker is gone, which the overview counts, and Starship recovers it), `no worker`, `no reading`, `with Starship`, `finished`, `next`, `later`, `on hold`, `on hold until <date>`, or `waits on other work`; a factory is `needs you`, `at work`, or `idle`.
 A job reads `ready to merge` only once the shared overview reading lists it as ready, so it is counted in the strip's `ready to merge`; until then it stays `busy` at `checking`.
-A pipeline (`run-step`) reading that comes back `unknown` on a worker the overview's liveness check reads alive also stays `busy` at `checking`, as the overview counts it busy, so the row does not drop out of RIGHT NOW between readings; on a worker not read alive it reads `no reading`.
+A pipeline (`run-step`) reading that comes back `unknown` on a worker the overview's liveness check reads alive also stays `busy` at `checking`, as the overview counts it busy, so the row does not drop out of Now between readings; on a worker not read alive it reads `no reading`.
 The words the overview also uses mean what [status-bar.md](status-bar.md#fleet-words) says; `with Starship` is finished work that is Starship's turn, such as a scout report it reads first, and `no reading` a job whose state could not be read.
-A job's row says three of those states in fuller words, so it is plain whose turn it is, while the record keeps the state word: `needs a look` reads `waiting on Starship`, `stopped` reads `stopped, Starship is on it` for a job the overview counts stopped (the one the top sentence counts) and plain `stopped` otherwise, and `with Starship` reads `finished, now with Starship`, or `finished, its report is with Starship` for a scout.
+A job's row says three of those states in fuller words, so it is plain whose turn it is, while the record keeps the state word: `needs a look` reads by its `look`, `stopped: its checks raised a question, Starship is on it` (`checks`), `stopped: it asked Starship a question, Starship is on it` (`question`), `stopped: it is stuck, Starship is on it` (`stuck`, a blocked worker), else `waiting on Starship`; `stopped` reads `stopped, Starship is on it` for a job the overview counts stopped (the one the top sentence counts) and plain `stopped` otherwise; and `with Starship` reads `finished, now with Starship`, or `finished, Starship is reading the report` for a scout.
 A job nobody has started also says where it stands in the queue: its `queue` is `starts on its own`, `parked`, `in line`, `on hold`, `waits on other work`, `waits on you`, `older call`, or `deferred`, and null for a job with a worker.
 
 ## Where each part comes from
@@ -304,7 +320,7 @@ A job nobody has started also says where it stands in the queue: its `queue` is 
 | How long a job has run | Its spawn time in the task's metadata |
 | What a job is doing this minute | The worker's stated step, else the checks' own state, else nothing, which a row reads as `just started` or `at work` |
 | The last sign of life | The newest of the worker's turn times (`state/<id>.busy-state`), its last finished turn, its last status line, its stated step, and the last time its pane text was seen to change |
-| The feed | The `[at=]` times on `done` and `failed` status lines, when each of the owner's calls was held, completed work items, the who-steers log, and the owner's own notes and Starship's replies from the inbox |
+| The feed and New | The `[at=]` times on `done` and `failed` status lines, when each of the owner's calls was held, completed work items, the who-steers log, and the owner's own notes and Starship's replies from the inbox; a merged change's time from its PR (`gh pr view`), a report's from its file, and a settled call's answer from its resolution record |
 | Rules and what it has learned | The factory registry |
 
 The pane text check reads each running worker's pane through `bin/fm-peek.sh` once per record and remembers when it last changed in `state/factory/activity.json`.
@@ -339,5 +355,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's answer, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

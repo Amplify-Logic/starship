@@ -681,8 +681,8 @@ write_screen() {  # <home>
                  {"words": "1 ready to merge", "colour": "green"}, {"words": "1 idle", "colour": "faint"}],
  "queue": ["4 queued", "2 in line", "2 wait on you, 1 of them deferred to a date"],
  "sentences": [{"words": "2 things need you. 1 more is put off to a date.", "to": "needs", "colour": "red"},
-               {"words": "1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them.", "to": "now", "colour": "amber"},
-               {"words": "1 change went live since you looked at 06:00.", "to": "feed", "colour": "green"}],
+               {"words": "1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them.", "to": "factories", "colour": "amber"},
+               {"words": "1 change went live since you looked at 06:00.", "to": "factories", "colour": "green"}],
  "first_up": "garden-chart",
  "shelves": {"older": {"heading": "1 older question is still open",
                        "note": "It left Needs you after waiting with no date set, waiting since 1 Oct.",
@@ -709,7 +709,8 @@ write_screen() {  # <home>
                {"label": "You need to", "text": "Nothing."}, {"label": "Risk", "text": "Low."}]}],
  "factories": [
   {"id": "garden-journal", "name": "Garden Journal", "state": "needs you", "steered_by": "you",
-   "about": ["a phone journal for a vegetable garden", "2 workers, 1 busy"], "queue": "3 queued · 2 in line",
+   "about": ["a phone journal for a vegetable garden", "2 workers, 1 busy"],
+   "quiet": false, "quiet_words": "", "badge": "2 need you", "now": "",
    "jobs": [
     {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
      "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false},
@@ -717,7 +718,15 @@ write_screen() {  # <home>
      "elapsed": "", "colour": "green", "quiet": false, "step": 3, "queue": "", "read": false},
     {"id": "garden-labels", "title": "Print seed labels", "state": "waiting", "words": "waiting · tries again 09:30",
      "elapsed": "", "colour": "amber", "quiet": false, "step": 1, "queue": "", "read": false}],
-   "routine": [], "next": {"title": "Harvest notes", "once_you_answer": true, "then": 1},
+   "routine": [],
+   "new": [{"id": "garden-share", "word": "PR ready", "label": "PR ready", "text": "The queued orders page",
+            "when": "06:11", "pr": null, "read": false, "title": "The queued orders page", "colour": "green"},
+           {"id": "garden-beds", "word": "went live", "label": "Went live", "text": "Raised beds",
+            "when": "06:05", "pr": "https://example.invalid/g/pull/9", "read": false, "title": "Raised beds", "colour": "green"},
+           {"id": "garden-soil", "word": "report ready", "label": "Report ready", "text": "Why the soil dries out",
+            "when": "today", "pr": null, "read": true, "title": "Why the soil dries out", "colour": "green"}],
+   "more": 2, "more_words": "and 2 more, on its own page",
+   "next": {"title": "Harvest notes", "once_you_answer": true, "then": 1, "words": ", once you answer, then 1 more lined up"},
    "page": {"needs": ["garden-chart", "garden-share"], "queue": ["3 queued", "2 in line", "1 deferred to a date"],
     "jobs": [], "workers": [
      {"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
@@ -730,15 +739,11 @@ write_screen() {  # <home>
              {"when": "Fri 13:00", "who": "Starship", "said": "Done, a hand apart."},
              {"when": "06:00", "who": "you", "said": "Are the labels in?"}]}},
   {"id": "recipe-box", "name": "Recipe Box", "state": "idle", "steered_by": "Starship", "about": ["0 workers, 0 busy"],
-   "queue": "idle since 06:00 · nothing queued", "jobs": [], "routine": [], "next": null,
+   "quiet": true, "quiet_words": "Idle since 06:00, nothing lined up.", "badge": "", "now": "Nothing is running.",
+   "jobs": [], "routine": [], "new": [], "more": 0, "next": null,
    "page": {"needs": [], "queue": ["nothing queued"], "jobs": [], "workers": [], "folded": [], "rules": [],
     "rules_size": "", "rules_mark": "", "learned": [], "feed": {"title": "LAST 12 HOURS", "events": []}, "talk": []}}],
- "feed": {"title": "SINCE YOU LAST LOOKED, 2 h ago", "events": [
-  {"when": "06:00", "actor": "Recipe Box", "factory": "recipe-box", "word": "went live", "text": "A landed gentry recipe", "colour": "green"},
-  {"when": "06:11", "actor": "Garden Journal", "factory": "garden-journal", "word": "PR ready",
-   "text": "The queued orders page has its PR ready.", "colour": "green"},
-  {"when": "07:20", "actor": "Garden Journal", "factory": "garden-journal", "word": "asked you",
-   "text": "Harvest chart needs your call.", "colour": "red"}]},
+ "factories_heading": "new since you looked at 06:00",
  "steps": ["planning", "building", "checking", "ready to merge"], "voice": false}
 JSON
   cat > "$1/strip.fields" <<'FIELDS'
@@ -779,7 +784,7 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '.band.stopped | "\(.project) \(.job)"')" "garden-journal garden-labels" \
     "the alert's stopped does not open the job that stopped"
   assert_equals "$(m '[.sentences[] | "\(.to) [\(.mark)] \(.words)"] | join(" / ")')" \
-    "needs [you] 2 things need you. 1 more is put off to a date. / now [work] 1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them. / feed [done] 1 change went live since you looked at 06:00." \
+    "needs [you] 2 things need you. 1 more is put off to a date. / factories [work] 1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them. / factories [done] 1 change went live since you looked at 06:00." \
     "the three sentences, each with the part it leads to"
   assert_equals "$(m '.shelves.older | "\(.heading)|\(.items[0].id) \(.items[0].asking) \(.items[0].project_name) \(.items[0].since)"')" \
     "1 older question is still open|garden-units 2026-10-01 Garden Journal since 1 Oct" "the older questions shelf"
@@ -808,9 +813,15 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '.projects[0].jobs | map("\(.title): \(.words) [\(.mark)]") | join("; ")')" \
     "Garden reminders: sorting the queued reminders [work]; The queued orders page: ready for your OK [done]; Print seed labels: waiting, tries again 09:30 [work]" \
     "a project's jobs"
-  assert_equals "$(m '.projects[0] | "\(.you_steer) \(.queue | join(", ")) | \(.next.title) \(.next.once_you_answer) | \(.about)"')" \
-    "true 3 waiting to start, 2 in line | Harvest notes true | a phone journal for a vegetable garden. 2 workers, 1 busy" \
-    "a project's row"
+  assert_equals "$(m '.projects[0] | "\(.you_steer) \(.quiet) \(.badge) | \(.next.title)\(.next.words) | \(.about)"')" \
+    "true false 2 need you | Harvest notes, once you answer, then 1 more lined up | a phone journal for a vegetable garden. 2 workers, 1 busy" \
+    "a project's block"
+  # New is told as the pane tells it, each led by its word, with its time and its link; only the pane's jargon word changes.
+  assert_equals "$(m '.projects[0].new | map("\(.when) \(.label): \(.text) [\(.mark)] \(.pr) \(.read)") | join(" / ")')" \
+    "06:11 Ready for your OK: The queued orders page [done]  false / 06:05 Went live: Raised beds [done] https://example.invalid/g/pull/9 false / today Report ready: Why the soil dries out [done]  true" \
+    "a project's New"
+  assert_equals "$(m '.projects[0] | "\(.more) \(.more_words)"')" "2 and 2 more, on its own page" \
+    "how many more New leaves to the project's page"
   assert_equals "$(m '.projects[0].page | "\(.queue | join(", ")) | \(.folded[0].words): \(.folded[0].jobs[0].title)"')" \
     "3 waiting to start, 2 in line, 1 put off to a date | 1 put off to a date: Charge for seeds" \
     "a project's own page"
@@ -825,12 +836,9 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '.projects[0].page.talk | map("\(.when) \(.who): \(.said)") | join(" / ")')" \
     "06:00 you: Are the labels in? / Fri 13:00 Starship: Done, a hand apart. / Fri 12:00 you: Keep the rows wide." \
     "a project's conversation, newest first"
-  assert_equals "$(m '.projects[1] | "\(.idle) \(.queue | join(", "))"')" "true idle since 06:00, nothing waiting to start" \
-    "an idle project"
-  assert_equals "$(m '.feed.title')" "Since you last looked, 2 h ago" "the feed's heading"
-  assert_equals "$(m '.feed.events | map("\(.word): \(.text) [\(.mark)]") | join("; ")')" \
-    "went live: A landed gentry recipe [done]; ready for your OK: The queued orders page is ready for your OK. [done]; asked you: Harvest chart needs your call. [you]" \
-    "the feed"
+  assert_equals "$(m '.projects[1] | "\(.quiet) \(.quiet_words)"')" "true Idle since 06:00, nothing lined up." \
+    "a quiet project is one line of words"
+  assert_equals "$(m '.factories_heading')" "new since you looked at 06:00" "since when New tells what moved"
   assert_equals "$(mirror "$home" "?since=$(jq -r .version <<<"$out")" | jq -c .)" \
     "{\"version\":\"$(jq -r .version <<<"$out")\",\"unchanged\":true,\"clock\":\"Sat 08:00\"}" "an unchanged reading is not sent again"
   # Without the strip the band still has the pane's counts and its first call.
