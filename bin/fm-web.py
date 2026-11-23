@@ -2394,6 +2394,7 @@ details.quiet.err summary{color:var(--you)}
 #row{display:flex;gap:.5rem;align-items:flex-end}
 #input{flex:1;min-width:0;resize:none;min-height:2.5rem;max-height:12.5rem;padding:.5rem .75rem;border-radius:.625rem;border:1px solid var(--line);background:var(--bg);outline:none}
 #input:focus{border-color:var(--here)}
+#input::placeholder{color:var(--ink-2);opacity:1}
 #input.suggested::placeholder{color:var(--ink-2);opacity:.85}
 #thumbs{display:flex;gap:.375rem;flex-wrap:wrap}
 #thumbs:empty{display:none}
