@@ -436,12 +436,13 @@ tasks.append(task("recipe-start", ("done", "status-log"), "PR merged", "recipe-b
 rows.append(row("recipe-start", "Calmer start screen", "recipe-box", "done",
                 completion={"verb": "merged", "date": "2026-11-14"}, pr_url="https://example.invalid/r/pull/3"))
 rows.append(row("shop-provider", "Which payment provider for the shop", "sample-shop", "queued", kind="captain",
-                captain_actionable=True, hold_kind="captain", hold_bucket="live", hold_set="2026-11-13T23:00:00Z",
+                captain_actionable=True, hold_kind="captain", hold_bucket="live", hold_set="2026-11-14T06:00:00Z",
                 hold_reason="Saved cards need a provider."))
-# An undated decision past the aging threshold no longer waits on the owner.
+# An undated decision past the aging threshold no longer waits on the owner
+# now: it is an older question, on NEEDS YOU's shelf.
 rows.append(row("recipe-units", "Metric or cups in the recipes", "garden-journal", "queued", kind="captain",
                 captain_actionable=False, hold_kind="captain", hold_bucket="aged", hold_set="2026-10-01T09:00:00Z",
-                hold_reason=None))
+                hold_reason="Ask the testers which they use."))
 # A decision deferred to a date is not the owner's call until then.
 rows.append(row("shop-tax", "Charge tax abroad", "sample-shop", "queued", kind="captain",
                 hold_kind="captain", hold_bucket="dated", hold_set="2026-11-12T09:00:00Z",
@@ -451,11 +452,11 @@ shapes = {"schema": "fm-tap-shapes.v1", "not_shown": [], "decisions": [
      "options": ["this week", "this season", "both side by side"], "recommended_option": "this week",
      "recommendation": "this week", "held_since": asked_at},
     # Its options were recorded with fm-tap-desk.sh mark; its reason names none.
-    {"id": "shop-provider", "identity": "2026-11-13T23:00:00Z#0", "title": "Which payment provider for the shop",
+    {"id": "shop-provider", "identity": "2026-11-14T06:00:00Z#0", "title": "Which payment provider for the shop",
      "question": "Saved cards need a provider.",
      "options": ["the current one", "a cheaper new one", "wait until after the holidays"],
      "recommended_option": "", "recommendation": "Stay with the current one until the holidays are over.",
-     "held_since": "2026-11-13T23:00:00Z"},
+     "held_since": "2026-11-14T06:00:00Z"},
     {"id": "recipe-units", "identity": "2026-10-01T09:00:00Z#0", "title": "Metric or cups in the recipes",
      "question": "", "options": [], "recommended_option": "", "recommendation": "",
      "held_since": "2026-10-01T09:00:00Z"}]}
@@ -514,7 +515,7 @@ test_the_record_words_every_state() {
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | "\(.state) \(.idle_since)"')" "idle 1794636000" \
     "an idle factory knows since when"
   assert_equals "$(q '[.feed[] | "\(.word)|\(.actor)"] | join(" ")')" \
-    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal went live|Recipe Box asked you|Sample Shop" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Sample Shop asked you|Garden Journal went live|Recipe Box" \
     "the feed, newest first: outcomes and the owner's calls only"
   assert_equals "$(q "[$shop | select(.queue != null) | \"\(.id)=\(.queue)\"] | join(\" \")")" \
     "shop-provider=waits on you shop-gift=in line shop-reviews=in line shop-later=on hold shop-tax=deferred" \
@@ -592,9 +593,12 @@ test_the_plain_screen_is_the_record_as_text() {
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_equals "$(FM_TERMINAL_THEME=light python3 "$FACTORY" --plain --width 92)" "$out" "light leaves plain output unchanged"
   assert_equals "$(FM_TERMINAL_THEME=dark python3 "$FACTORY" --plain --width 92)" "$out" "dark leaves plain output unchanged"
-  assert_contains "$out" " STARSHIP  │  2 busy  ·  2 decisions for you  ·  1 ready to merge  ·  1 idle" "count line"
+  assert_contains "$(printf '%s\n' "$out" | sed -n 1p)" " STARSHIP  │  3 things need you." "the wordmark leads the first sentence"
+  assert_contains "$(printf '%s\n' "$out" | sed -n 1,5p | sed 's/Sat 08:00//' | tr '\n' ' ' | tr -s ' ')" \
+    "3 things need you. 1 older question is still open, and 1 more is put off to a date. 2 jobs are running. 1 hit a problem, and Starship is on it. 1 change went live in the last 12 hours." \
+    "the three sentences"
   assert_equals "$(printf '%s\n' "$out" | grep -F ' ▸ ● ' | tr -s ' ')" \
-    " ▸ ● Harvest chart Garden Journal · waiting 3 h" "the cursor starts on the first question"
+    " ▸ ● Harvest chart first up · Garden Journal · waiting 3 h" "the cursor starts on the first question"
   assert_contains "$out" "       1  this week  · Starship suggests this" "suggested option"
   assert_not_contains "$out" "None" "a missing value printed as None"
   assert_contains "$out" "       t  Talk it through · typed" "talk it through, and how"
@@ -619,7 +623,8 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_contains "$out" " RULES THIS CREW FOLLOWS" "rules heading"
   assert_contains "$out" "   · Anything that touches payments waits for your yes." "a rule"
   assert_contains "$out" "   12 Nov  Search results read better with the price on the first line." "a lesson"
-  has_line "$out" " · 1 on hold · 1 deferred to a date" "the rest of the queue folds into a count per queue word"
+  has_line "$out" " · 1 on hold" "the rest of the queue folds into a count per queue word"
+  has_line "$out" " ↺ Nothing comes back this week. 1 is put off to a later date." "a call put off to a date is on its shelf"
   pass "factory record: the plain screen carries every state as a word"
 }
 
@@ -680,16 +685,16 @@ test_the_whole_queue_is_counted_in_sight() {
     "6 0 2 1 3 1" "the queue's counts"
   assert_equals "$(q '[.factories[] | "\(.id)=\(.queue.total)/\(.queue.in_line)"] | join(" ")')" \
     "sample-shop=5/2 garden-journal=1/0 recipe-box=0/0" "each factory keeps its own count"
+  # The overview opens with three sentences rather than rows of counts; each
+  # factory says its own queue.
   out=$(python3 "$FACTORY" --plain --width 92 --height 30) || fail "--plain failed"
-  assert_equals "$(printf '%s\n' "$out" | sed -n 2p)" \
-    " 6 queued  ·  2 in line  ·  1 on hold  ·  3 wait on you, 1 of them deferred to a date" \
-    "the queue is not the line under the count line"
+  assert_not_contains "$out" "6 queued" "the overview still opens with the whole queue's counts"
   has_line "$out" " Sample Shop 5 queued · 2 in line" "a factory at work does not say its own queue"
-  # In a narrow pane the line wraps between counts, never inside one.
-  out=$(python3 "$FACTORY" --plain --width 60 --height 30) || fail "--plain failed"
-  assert_equals "$(printf '%s\n' "$out" | sed -n 2,3p)" \
-    " 6 queued  ·  2 in line  ·  1 on hold
-           ·  3 wait on you, 1 of them deferred to a date" "a narrow queue line broke inside a count"
+  # In a narrow pane a factory page's queue line wraps between counts, never inside one.
+  out=$(python3 "$FACTORY" --plain --width 66 --factory sample-shop) || fail "--plain failed"
+  assert_equals "$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,$p' | sed -n 3,4p)" \
+    "     5 queued  ·  2 in line  ·  1 on hold
+               ·  2 wait on you, 1 of them deferred to a date" "a narrow queue line broke inside a count"
   # Work that waits on other work, or on a date still ahead, starts on its own;
   # a date that has passed starts nothing.
   snap=$(jq '.backlog.records += [
@@ -714,7 +719,7 @@ test_the_whole_queue_is_counted_in_sight() {
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
   has_line "$out" " 8 queued · 2 start on their own · 2 in line · 2 on hold" "a factory's page does not open its work with its queue"
   has_line "$out" " · 2 wait on you, 1 of them deferred to a date" "a factory's page lost who its queue waits on"
-  has_line "$out" " · 2 start on their own · 2 on hold · 1 deferred to a date" "the rest of the queue is not folded by queue word"
+  has_line "$out" " · 2 start on their own · 2 on hold" "the rest of the queue is not folded by queue word"
   # A call for the owner that other open work blocks waits on that work, not
   # on the owner; only an aged call is an older call; any other is just one more.
   snap=$(jq '.backlog.records += [
@@ -736,9 +741,13 @@ test_the_whole_queue_is_counted_in_sight() {
     "12 queued · 2 start on their own · 2 in line · 2 on hold · 1 waits on other work · 5 wait on you, 1 of them deferred to a date" \
     "a call blocked by other work is counted as waiting on the owner"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop | tr '\n' ' ' | tr -s ' ') || fail "--plain --factory failed"
-  assert_contains "$out" "· 1 waits on other work · 1 more waits on you · 1 older call waits on you · 1 deferred to a date" \
+  assert_contains "$out" "· 1 waits on other work · 1 more waits on you" \
     "the factory page calls every held call an older call"
-  pass "factory queue: the whole queue is counted under the count line, by what starts it, and per factory"
+  # The older call and the one put off to a date are on NEEDS YOU's shelves, not in the folded counts.
+  assert_contains "$out" "· 1 older question is still open." "the older call is not on its shelf"
+  assert_contains "$out" "↺ Nothing comes back this week. 1 is put off to a later date. The next is on 1 Dec." \
+    "the call put off to a date is not on its shelf"
+  pass "factory queue: the whole queue is counted by what starts it and per factory; the overview opens with sentences"
 }
 
 # On 2026-11-17 the owner saw "41 start on their own" folded on a factory's
@@ -782,7 +791,7 @@ test_parked_work_says_until_when_it_is_parked() {
     "the queue line does not say until when work is parked"
   assert_not_contains "$(q .queue_line)" "on their own" "parked work reads as starting on its own"
   out=$(python3 "$FACTORY" --plain --width 120 --factory sample-shop) || fail "--plain --factory failed"
-  has_line "$out" " · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+  has_line "$out" " · 3 parked, soonest 1 Dec · 2 on hold" \
     "the folded count line does not say until when work is parked"
   assert_not_contains "$out" "Wrapping paper samples" "a folded job was listed before its line was opened"
   pass "factory queue: parked work says until when it is parked, never that it starts on its own"
@@ -797,7 +806,7 @@ test_a_folded_count_line_opens_on_every_job_it_stands_for() {
   # The factory's page has one call for the owner, then the folded line.
   DRIVE_FACTORY=sample-shop drive_keys DOWN "SNAP:$dir/on-fold" ENTER "SNAP:$dir/listed" ESC "SNAP:$dir/hidden"
   screen=$(screen_of "$dir/on-fold" 50 100)
-  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold" \
     "the folded count line cannot be highlighted"
   assert_contains "$screen" "enter list them" "the keys line does not say enter lists the folded jobs"
   screen=$(screen_of "$dir/listed" 50 100)
@@ -806,12 +815,12 @@ test_a_folded_count_line_opens_on_every_job_it_stands_for() {
   has_line "$screen" " · Gift tag colours parked until 1 Dec" "a parked job that also waits on other work is not listed"
   has_line "$screen" " · New year banner parked until 5 Jan 2027" "a job parked to another date is not listed"
   has_line "$screen" " · Spring sale page on hold" "a job on hold is not listed with its queue word"
-  has_line "$screen" " · Charge tax abroad deferred" "a deferred call is not listed with its queue word"
+  assert_not_contains "$screen" "· Charge tax abroad" "a call put off to a date is listed again among the folded jobs"
   assert_contains "$screen" "esc hide the list" "the keys line does not say esc hides the list"
   assert_not_contains "$screen" "esc back" "the keys line names esc for going back while esc hides the list"
   screen=$(screen_of "$dir/hidden" 50 100)
   assert_not_contains "$screen" "Wrapping paper samples" "esc did not hide the list"
-  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold · 1 deferred to a date" \
+  has_line "$screen" " ▸ · 3 parked, soonest 1 Dec · 2 on hold" \
     "esc left the factory's page instead of hiding the list"
   pass "factory pane: enter on a folded count line lists every job it stands for, esc hides them"
 }
@@ -865,12 +874,12 @@ test_only_the_highlighted_call_opens_as_a_card() {
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_contains "$out" "       1  this week  · Starship suggests this" "the highlighted call is not open"
-  has_line "$out" " ● Which payment provider for the shop Sample Shop · waiting 9 h" \
+  has_line "$out" " ● Which payment provider for the shop Sample Shop · waiting 2 h" \
     "the second call is not one line with its factory and its wait"
   assert_not_contains "$out" "Stay with the current one" "a call that is not highlighted opened as a card"
   assert_equals "$(printf '%s\n' "$out" | grep -c 'Talk it through')" "1" "more than one call is open"
   out=$(python3 "$FACTORY" --plain --width 92 --item shop-provider) || fail "--plain --item failed"
-  has_line "$out" " ● Harvest chart Garden Journal · waiting 3 h" "the call the highlight left stayed open"
+  has_line "$out" " ● Harvest chart first up · Garden Journal · waiting 3 h" "the call the highlight left stayed open"
   assert_contains "$out" "       Starship suggests: Stay with the current one until the holidays are over." \
     "the highlighted call does not show its recommendation"
   assert_equals "$(printf '%s\n' "$out" | grep -c 'Talk it through')" "1" "more than one call is open"
@@ -1254,7 +1263,8 @@ test_ready_work_the_overview_has_not_listed_reads_busy() {
 # A worker whose checks are running reads steadily busy at checking, "checks
 # running", as the count line counts it: on a validating reading, and on an
 # unknown run-step reading between two while the worker lives. A dead worker's
-# unknown reading reads "no reading" rather than claiming checks run.
+# unknown reading reads "stopped" rather than claiming checks run, as the
+# bridge strip's "1 stopped" counts it.
 test_a_worker_whose_checks_run_reads_checks_running() {
   reset_case
   write_registry
@@ -1263,7 +1273,7 @@ test_a_worker_whose_checks_run_reads_checks_running() {
   local reading verdict s d want
   for reading in "alive|working|validating (running) · run: r9|busy|checking|checks running" \
     "alive|unknown|selected run status unverified; run ids: r9|busy|checking|checks running" \
-    "dead|unknown|selected run status unverified; run ids: r9|no reading|null|null"; do
+    "dead|unknown|selected run status unverified; run ids: r9|stopped|null|null"; do
     IFS='|' read -r verdict s d want <<<"$reading"
     printf '#!/usr/bin/env bash\necho %s\n' "$verdict" > "$TMP_ROOT/case$CASE/probe"
     chmod +x "$TMP_ROOT/case$CASE/probe"
@@ -1280,7 +1290,7 @@ test_a_worker_whose_checks_run_reads_checks_running() {
         "the factory's busy count for a live worker on a $s reading"
     fi
   done
-  pass "factory record: a live worker whose checks run reads checks running between readings; a dead one reads no reading"
+  pass "factory record: a live worker whose checks run reads checks running between readings; a dead one reads stopped"
 }
 
 # A worker whose checks are parked at review, short of a decision, is still in
@@ -1332,10 +1342,10 @@ test_held_decisions_come_through_a_non_markdown_adapter() {
   # written with milliseconds, still says how long the decision has waited.
   jq '(.records[] | select(.id == "shop-provider")) |= del(.hold_set)' "$FM_TEST_AXI_BACKLOG" \
     > "$HOME_FIX/adapter.next" && mv "$HOME_FIX/adapter.next" "$FM_TEST_AXI_BACKLOG"
-  jq '(.decisions[] | select(.id == "shop-provider")).held_since = "2026-11-13T23:00:00.000Z"' "$HOME_FIX/shapes.json" \
+  jq '(.decisions[] | select(.id == "shop-provider")).held_since = "2026-11-14T06:00:00.000Z"' "$HOME_FIX/shapes.json" \
     > "$HOME_FIX/shapes.next" && mv "$HOME_FIX/shapes.next" "$HOME_FIX/shapes.json"
   take_record
-  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .since')" "1794610800" \
+  assert_equals "$(q '.needs_you[] | select(.id == "shop-provider") | .since')" "1794636000" \
     "a held_since with milliseconds lost the decision's waiting time"
   # Ready work held there until a date reads on hold, exactly as on a markdown home.
   local held
@@ -1345,7 +1355,9 @@ test_held_decisions_come_through_a_non_markdown_adapter() {
   take_record
   assert_equals "$(q '.factories[] | .jobs[] | select(.id == "garden-share") | .state')" "on hold until 2026-12-01" \
     "ready work held until a date on a non-markdown backlog lost its held word"
-  assert_equals "$(q '[.needs_you[] | .id] | join(" ")')" "garden-chart shop-provider" \
+  # With no hold time on record the provider call waits since its row's day,
+  # the day before the chart's, so it is the more pressing of the two.
+  assert_equals "$(q '[.needs_you[] | .id] | join(" ")')" "shop-provider garden-chart" \
     "ready work held until a date on a non-markdown backlog is under NEEDS YOU"
   pass "factory record: held decisions on a non-markdown backlog reach NEEDS YOU through the adapter"
 }
@@ -1446,7 +1458,8 @@ test_work_no_factory_claims_is_still_shown() {
 
 # write_crowded_world: the sample fleet plus more calls for the owner than a
 # small pane holds: a question whose title lists several calls and whose
-# option is long, a title with no space to break at, and four more plain ones.
+# option is long, a title with no space to break at, and four more plain ones,
+# all held hours before the sample's own calls, so they come first in that order.
 write_crowded_world() {
   write_world
   python3 - "$HOME_FIX" "$NOW" <<'PY'
@@ -1463,7 +1476,7 @@ def held(rid, title, repo, minutes_ago, reason):
         "completion": {"verb": None, "date": None}, "pr_url": None})
     return stamp
 stamp = held("shop-packaging", "Packaging: three calls from the supplier visit (recycled boxes now or after "
-             "the holidays, tell the printer today or on return, ask about the ribbon colour)", "sample-shop", 1,
+             "the holidays, tell the printer today or on return, ask about the ribbon colour)", "sample-shop", 540,
              "Three calls from the supplier visit, each small but each holding up the holiday orders.")
 shapes["decisions"].append({
     "id": "shop-packaging", "identity": stamp + "#0", "title": snap["backlog"]["records"][-1]["title"],
@@ -1472,12 +1485,12 @@ shapes["decisions"].append({
                 "wait until January"],
     "recommended_option": "", "recommendation": "", "held_since": stamp})
 held("shop-rename", "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link", "sample-shop",
-     2, "The catalogue needs one name.")
+     480, "The catalogue needs one name.")
 for index, title in enumerate(["Which courier for parcels going abroad after the new year",
                                "Whether the shop shows prices with tax or without it for visitors from abroad",
                                "Opening hours over the holidays for the shop and the order service",
                                "A thank-you card in every parcel, or only in the first order"]):
-    held("shop-extra-%d" % index, title, "sample-shop", 3 + index, "Needs your view.")
+    held("shop-extra-%d" % index, title, "sample-shop", 420 - 60 * index, "Needs your view.")
 json.dump(snap, open(snap_path, "w"), indent=1)
 json.dump(shapes, open(shapes_path, "w"), indent=1)
 PY
@@ -1533,7 +1546,7 @@ test_a_small_pane_shows_its_height_and_says_what_is_below() {
   assert_not_contains "$out" "more lines above" "the first screen says something is above it"
   # A one-line row keeps its factory and its wait, ends its title on a whole
   # word, and says it was shortened.
-  has_line "$out" " ● Whether the shop shows prices with… Sample Shop · waiting 4 min" \
+  has_line "$out" " ● Whether the shop shows prices with… Sample Shop · waiting 6 h" \
     "a one-line row is cut mid-word, without an ellipsis, or lost how long it waits"
   # The highlighted card shows its whole title and each option in full, wrapped.
   out=$(python3 "$FACTORY" --plain --width 70 --height 40 --item shop-packaging) || fail "--plain --item failed"
@@ -1565,7 +1578,7 @@ test_a_small_pane_scrolls_to_everything() {
   assert_not_contains "$first" "LAST 12 HOURS" "the fixture is too small to need scrolling"
   # Highlighting the title with no space to break at opens its card, which
   # breaks that title across lines rather than clipping it.
-  drive_keys DOWN DOWN "SNAP:$dir/opened"
+  drive_keys DOWN "SNAP:$dir/opened"
   assert_contains "$(screen_of "$dir/opened" 40 70 | sed -n '/Rename-the/,/Talk it through/p' | sed 's/^ *//' \
     | tr -d '\n')" "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link" \
     "an opened card clipped a title with no space in it"
@@ -1596,7 +1609,7 @@ test_a_narrow_talk_box_always_shows_what_is_typed() {
   # The box floats just under the highlighted question's card, names what it
   # is about and how it takes words, and shows every typed character with the
   # cursor at its end, broken across lines where the field ends.
-  drive_keys DOWN t "half typed note that is longer than the seventy columns this pane has to show it in" \
+  drive_keys t "half typed note that is longer than the seventy columns this pane has to show it in" \
     "SNAP:$dir/talk" ESC
   screen=$(screen_of "$dir/talk" 40 70)
   assert_contains "$(printf '%s\n' "$screen" | sed -n '/Already settled/{n;p;}')" "╭─ Tell Starship · about Packaging" \
@@ -1725,13 +1738,21 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
   s() { jq -r "$1" "$screen"; }
   plain=$(python3 "$FACTORY" --plain --width 100) || fail "--plain failed"
   assert_equals "$(s .schema)" "fm-factory-screen.v1" "schema"
-  assert_contains "$plain" "$(s '[.count_words[].words] | join("  ·  ")')" "the count line is the plain screen's"
-  assert_equals "$(s '[.count_words[].colour] | join(" ")')" "amber red green faint" "each count says what its colour means"
-  has_line "$plain" " $(s '.queue | join(" · ")')" "the queue line is the plain screen's"
+  assert_equals "$(s '[.sentences[] | "\(.to): \(.words)"] | join(" | ")')" \
+    "needs: 3 things need you. 1 older question is still open, and 1 more is put off to a date. | now: 2 jobs are running. 1 hit a problem, and Starship is on it. | feed: 1 change went live in the last 12 hours." \
+    "the three sentences, each with the part it speaks for"
+  assert_contains "$(printf '%s\n' "$plain" | sed -n 1,5p | sed 's/Sat 08:00//' | tr '\n' ' ' | tr -s ' ')" \
+    "$(s '[.sentences[].words] | join(" ")')" "the sentences are the plain screen's"
+  assert_equals "$(s '[.sentences[].colour] | join(" ")')" "red amber green" "each sentence says what its colour means"
+  assert_equals "$(s .first_up)" "garden-chart" "the first card is the one marked first up"
+  assert_equals "$(s '.shelves.older | "\(.heading)|\(.items | map("\(.id) \(.factory_name) \(.since)") | join(","))"')" \
+    "1 older question is still open|recipe-units Garden Journal since 1 Oct" "the older questions shelf"
+  assert_equals "$(s '.shelves.coming | "\(.heading)|\(.rest)|\(.after)|\(.items | length)"')" \
+    "Nothing comes back this week|1 is put off to a later date.|The next is on 1 Dec.|0" "the coming back shelf"
   assert_equals "$(s '[.needs[] | "\(.id)|\(.kind)|\(.factory_name)|\(.waited)"] | join(" ")')" \
-    "garden-chart|question|Garden Journal|waiting 3 h shop-provider|question|Sample Shop|waiting 9 h garden-share|finished work|Garden Journal|ready 1 h 49 min" \
+    "garden-chart|question|Garden Journal|waiting 3 h shop-provider|question|Sample Shop|waiting 2 h garden-share|finished work|Garden Journal|ready 1 h 49 min" \
     "the owner's calls, in the pane's order, with how long each has waited"
-  has_line "$plain" " ▸ ● $(s '.needs[0].ask') $(s '.needs[0].factory_name') · $(s '.needs[0].waited')" \
+  has_line "$plain" " ▸ ● $(s '.needs[0].ask') first up · $(s '.needs[0].factory_name') · $(s '.needs[0].waited')" \
     "a call's head is the plain screen's"
   assert_equals "$(s '.needs[0] | "\(.asking) \(.why)"')" \
     "$((NOW - 3 * 3600)) The harvest chart can open on this week or this season." "a call names its asking and its why"
@@ -1757,8 +1778,9 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
   local page='.factories[0].page'
   plain=$(python3 "$FACTORY" --plain --width 100 --factory sample-shop) || fail "--plain --factory failed"
   has_line "$plain" " · $(s "$page.folded | map(.words) | join(\" · \")")" "the folded counts are the page's"
-  assert_equals "$(s "$page.folded | map(.jobs[].title) | join(\", \")")" "Discount codes, Charge tax abroad" \
+  assert_equals "$(s "$page.folded | map(.jobs[].title) | join(\", \")")" "Discount codes" \
     "a folded count names the jobs it stands for"
+  assert_equals "$(s "$page.shelves.coming.after")" "The next is on 1 Dec." "the page's own coming back shelf"
   assert_equals "$(s "$page.needs | join(\" \")")" "shop-provider" "the page's own calls"
   has_line "$plain" " $(s '.factories[0].about | join(" · ")')" "the line under the page's name is the page's"
   assert_equals "$(s "$page.workers | map(.title) | join(\", \")")" \
@@ -1769,6 +1791,157 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
     "12 Nov Search results read better with the price on the first line." "a lesson"
   assert_equals "$(printf '{}' | python3 "$FACTORY" --screen --data >/dev/null 2>&1; echo $?)" "2" "--screen stands alone"
   pass "factory screen: --screen is the plain screen's selection and words, as data"
+}
+
+# On 2026-11-22 the top of the overview said 9 decisions while the line under
+# it said 47 wait on you, with nothing to say what the rest were: 28 put off to
+# a date and 10 older questions that had left NEEDS YOU after two weeks with no
+# date and showed only in a collapsed line on a factory's page. The top now
+# says it in three sentences that count every call once, and NEEDS YOU keeps
+# the rest on two shelves: the older questions, each of which can be brought
+# back or let go, and the calls put off to a date, by the day they come back.
+test_every_call_is_counted_once_and_named_on_a_shelf() {
+  reset_case
+  write_registry
+  write_world
+  local snap out flat
+  snap=$(jq '.backlog.records += [
+      (.backlog.records[] | select(.id == "shop-tax")
+        | .id = "shop-sign" | .title = "Shop sign wording" | .hold_until = "2026-11-16"),
+      (.backlog.records[] | select(.id == "shop-tax")
+        | .id = "shop-boxes" | .title = "Boxes for the big cups" | .hold_until = "2026-11-20"),
+      (.backlog.records[] | select(.id == "shop-tax")
+        | .id = "shop-banner" | .title = "Banner wording" | .hold_until = null | .hold_bucket = "aged"
+        | .hold_set = "2026-09-20T09:00:00Z")]' "$FM_FACTORY_SNAPSHOT") || fail "could not add the held calls"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  take_record
+  assert_equals "$(q '[.older[] | "\(.id)/\(.factory)/\(.since)"] | join(" ")')" \
+    "shop-banner/sample-shop/2026-09-20 recipe-units/garden-journal/2026-10-01" "the older questions, oldest first"
+  assert_equals "$(q '[.coming_back[] | "\(.id)/\(.until)"] | join(" ")')" \
+    "shop-sign/2026-11-16 shop-boxes/2026-11-20 shop-tax/2026-12-01" "the calls put off to a date, soonest first"
+  out=$(python3 "$FACTORY" --plain --width 120) || fail "--plain failed"
+  flat=$(printf '%s\n' "$out" | sed -n 1,4p | sed 's/Sat 08:00//' | tr '\n' ' ' | tr -s ' ')
+  assert_contains "$flat" "3 things need you. 2 older questions are still open, and 3 more are put off to a date." \
+    "the first sentence does not count every call once"
+  has_line "$out" " · 2 older questions are still open. They left Needs you after waiting with no date set, the oldest since 20 Sep." \
+    "the older questions shelf"
+  has_line "$out" " ↺ 2 things come back this week. 1 more is put off to a later date." "the coming back shelf"
+  has_line "$out" " Mon 16 Nov Shop sign wording Sample Shop" "a call coming back this week has its date"
+  has_line "$out" " Fri 20 Nov Boxes for the big cups Sample Shop" "the next call coming back has its date"
+  has_line "$out" " After that, the next is on 1 Dec." "the rest says when the next comes back"
+  # A factory's page keeps its own shelves.
+  out=$(python3 "$FACTORY" --plain --width 120 --factory garden-journal) || fail "--plain --factory failed"
+  has_line "$out" " · 1 older question is still open. It left Needs you after waiting with no date set, waiting since 1 Oct." \
+    "a factory's page lost its older question"
+  assert_not_contains "$out" "Shop sign wording" "a factory's page shows another factory's calls"
+  pass "factory pane: every call is counted once at the top, and the ones NEEDS YOU does not list are on its shelves"
+}
+
+# An older question is one key away from coming back or going: b asks Starship
+# to bring it back into NEEDS YOU, n says it is no longer needed. Each opens a
+# confirmation first, as an answer does, and goes as a note to Starship, from
+# the pane and from a second screen alike.
+test_an_older_question_can_be_brought_back_or_let_go() {
+  reset_case
+  write_registry
+  write_world
+  local dir="$TMP_ROOT/case$CASE" screen out
+  # Down past the three calls onto the shelf, list it, then down onto its question.
+  drive_keys DOWN DOWN DOWN "SNAP:$dir/shelf" ENTER DOWN "SNAP:$dir/item" b "SNAP:$dir/confirm" ENTER "SNAP:$dir/sent"
+  assert_contains "$(screen_of "$dir/shelf" 50 100)" "enter list them" "the shelf does not say enter lists it"
+  screen=$(screen_of "$dir/item" 50 100)
+  has_line "$screen" " ▸ Garden Journal Metric or cups in the recipes since 1 Oct" "the listed question is not highlighted"
+  has_line "$screen" " b Bring back n No longer needed" "the question does not offer its two buttons"
+  assert_contains "$screen" "b bring back · n no longer needed" "the keys line does not name b and n"
+  screen=$(screen_of "$dir/confirm" 50 100)
+  assert_contains "$screen" "Bring back · Metric or cups in the recipes" "b sent at once instead of asking first"
+  assert_contains "$screen" "Ask Starship to bring Metric or cups in the recipes back into Needs you." "the box does not say what it sends"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.garden-journal.revive.recipe-units.2026-10-01" \
+    "the note is not named for the question and its asking"
+  assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" \
+    "Bring back: Metric or cups in the recipes. Hold it for me again so it is back in Needs you.
+
+(from the Factory pane; item recipe-units)" "the note does not ask Starship to bring it back"
+  screen=$(screen_of "$dir/sent" 50 100)
+  assert_contains "$screen" "SENT to Starship: bring back Metric or cups in the recipes" "the pane does not say it went"
+  has_line "$screen" " ▸ Garden Journal Metric or cups in the recipes since 1 Oct" "the question left its place"
+  has_line "$screen" " you asked to bring it back, waiting for Starship" "the question does not say what was asked of it"
+  take_record
+  assert_equals "$(q '.older[0].asked.what')" "revive" "the record does not keep what was asked"
+  assert_contains "$(q '[.feed[] | select(.word == "asked to bring back") | .text] | join("")')" "Bring back: Metric or cups" \
+    "the feed does not say what was asked"
+  # From a second screen: n's note, refused for a question that is not on the shelf or was asked again.
+  : > "$FM_FACTORY_TEST_NOTES"
+  out=$(act '{"action":"drop","item":"recipe-units","asking":"2026-10-01"}') || fail "act failed"
+  assert_equals "$out" '{"ok": true, "said": "✓ SENT to Starship: Metric or cups in the recipes is no longer needed"}' \
+    "what act says for no longer needed"
+  assert_equals "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.garden-journal.drop.recipe-units.2026-10-01" \
+    "the second screen's note is not the pane's"
+  assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "No longer needed: Metric or cups in the recipes. Close it" \
+    "the note does not say it is no longer needed"
+  : > "$FM_FACTORY_TEST_NOTES"
+  assert_contains "$(act '{"action":"revive","item":"recipe-units","asking":"2026-09-01"}')" '"ok": false' \
+    "a question asked again since was brought back"
+  assert_contains "$(act '{"action":"revive","item":"garden-chart"}')" '"ok": false' "a call in NEEDS YOU was brought back"
+  assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a refused action sent a note"
+  pass "factory pane: an older question can be brought back or let go, after a confirmation, as a note to Starship"
+}
+
+# On 2026-11-22 the header's "Most urgent" sat on the fifth card, because the
+# cards were sorted newest first while the strip named the first of another
+# list. The owner's calls now have one order, the longest waiting first, and
+# the first card, marked first up, is the call the bridge strip names.
+test_needs_you_is_most_pressing_first_and_the_strip_names_the_first() {
+  reset_case
+  write_registry
+  write_crowded_world
+  local strip screen
+  take_record
+  assert_equals "$(q '[.needs_you[] | .id] | join(" ")')" \
+    "shop-packaging shop-rename shop-extra-0 shop-extra-1 shop-extra-2 shop-extra-3 garden-chart shop-provider garden-share" \
+    "the calls are not the longest waiting first, questions before finished work"
+  screen=$(python3 "$FACTORY" --screen) || fail "--screen failed"
+  assert_equals "$(jq -r .first_up <<<"$screen")" "shop-packaging" "the first card is not the one marked first up"
+  strip=$(FM_HOME="$HOME_FIX" bash "$ROOT/bin/fm-bridge-strip.sh" fields) || fail "strip fields failed"
+  assert_equals "$(grep '^call_id=' <<<"$strip")" "call_id=shop-packaging" "the strip's most urgent call is not the first card"
+  has_line "$(python3 "$FACTORY" --plain --width 100 --item garden-chart)" \
+    " ● Packaging: three calls from the supplier visit (recycled… first up · Sample Shop · waiting 9 h" \
+    "the first card is not marked first up when closed"
+  pass "factory pane: NEEDS YOU is most pressing first, and its first card is the strip's most urgent call"
+}
+
+# On 2026-11-22 the header said "1 stopped" in red and nothing on the Factories
+# screens said which job had stopped: it read "needs a look". The job the
+# overview reads stopped now says so and who is dealing with it, the second
+# sentence counts it, and the screen names it for a second screen to open.
+test_a_stopped_job_says_so_and_who_is_on_it() {
+  reset_case
+  write_registry
+  write_world
+  local probe="$TMP_ROOT/case$CASE/probe" screen flat
+  printf 'window=tmux:fm-shop-coupons\n' >> "$HOME_FIX/state/shop-coupons.meta"
+  printf '#!/usr/bin/env bash\necho dead\n' > "$probe"
+  chmod +x "$probe"
+  FM_FLEET_STATE_PROBE=$probe overview_cached data > "$TMP_ROOT/case$CASE/record.json" || fail "--data failed"
+  assert_equals "$(q '.counts | "\(.lost) \(.lost_list | join(","))"')" "1 shop-coupons" "the overview's stopped job"
+  assert_equals "$(q '.factories[] | .jobs[] | select(.id == "shop-coupons") | .state')" "stopped" \
+    "the job the strip counts stopped reads needs a look"
+  screen=$(FM_FLEET_STATE_PROBE=$probe overview_cached python3 "$FACTORY" --screen) || fail "--screen failed"
+  assert_equals "$(jq -r '.stopped[0] | "\(.id) \(.factory)"' <<<"$screen")" "shop-coupons sample-shop" \
+    "the screen does not name the stopped job first"
+  assert_equals "$(jq -r '.sentences[1].words' <<<"$screen")" \
+    "2 jobs are running. 1 has stopped and 1 hit a problem, and Starship is on them." "the second sentence"
+  flat=$(FM_FLEET_STATE_PROBE=$probe overview_cached python3 "$FACTORY" --plain --width 100 | tr -s ' ')
+  assert_contains "$flat" " ● Gift cards at checkout stopped, Starship is on it" "the stopped job does not say so and who is on it"
+  # Old banner swap lost its worktree, which the overview does not count as
+  # stopped: no sentence counts it, so its row does not claim Starship is on it
+  # and the screen does not name it among the stopped jobs.
+  assert_contains "$flat" " ● Old banner swap stopped" "the uncounted job no longer reads stopped"
+  assert_not_contains "$flat" "Old banner swap stopped, Starship is on it" \
+    "a job the top sentence does not count says Starship is on it"
+  assert_equals "$(jq -r '[.stopped[].id] | join(",")' <<<"$screen")" "shop-coupons" \
+    "the screen names a stopped job the top sentence does not count"
+  pass "factory pane: the job the strip counts stopped says so and who is on it, and the screen names it"
 }
 
 # act <json>: one action from a second screen; prints its answer.
@@ -1879,7 +2052,7 @@ test_an_answer_is_never_dropped_silently() {
     "factory.garden-journal.answer.garden-chart.$((NOW - 3 * 3600)).2" "one answer went, the first one picked"
   screen=$(screen_of "$dir/sent" 50 100)
   has_line "$screen" " ✓ SENT to Starship: answer 2, this season (Harvest chart)" "the pane does not say the answer was sent"
-  has_line "$screen" " ▸ ● Harvest chart Garden Journal · answered 08:00, waiting for Starship" \
+  has_line "$screen" " ▸ ● Harvest chart first up · Garden Journal · answered 08:00, waiting for Starship" \
     "the card does not say it was answered"
   has_line "$screen" " ✓ 2 this season" "the answered option is not marked on the card"
   # The record carries it too, so the card keeps saying so after a restart,
@@ -1888,7 +2061,7 @@ test_an_answer_is_never_dropped_silently() {
   assert_equals "$(q '.needs_you[0].answered | "\(.key) \(.at)"')" "2 $((NOW - 60))" \
     "the record does not carry when a call was answered"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " ▸ ● Harvest chart Garden Journal · answered 07:59, waiting for Starship" \
+  has_line "$out" " ▸ ● Harvest chart first up · Garden Journal · answered 07:59, waiting for Starship" \
     "an answered call still reads as waiting"
   has_line "$out" " ✓ 2 this season" "the answered option is not marked on the card"
   assert_equals "$(q '[.needs_you[1:][] | .answered] | unique | tostring')" "[null]" "a call nobody answered reads as answered"
@@ -1921,12 +2094,12 @@ test_a_note_reaches_starship_through_the_real_inbox() {
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "1" \
     "the same answer twice is one note"
-  "$BINDIR/edit-world" reask garden-chart $((NOW - 600)) >/dev/null || fail "edit-world failed"
+  "$BINDIR/edit-world" reask garden-chart $((NOW - 9000)) >/dev/null || fail "edit-world failed"
   (unset FM_FACTORY_INBOX; drive_keys 2 ENTER)
   assert_equals "$(find "$HOME_FIX/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')" "2" \
     "the same question asked again later is a new note"
   assert_contains "$(cat "$HOME_FIX"/state/inbox/*.note)" \
-    "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 600)).2" \
+    "request_id=factory.garden-journal.answer.garden-chart.$((NOW - 9000)).2" \
     "the new note names when the question was asked again"
   pass "factory pane: an answer is a captain inbox note, saved once per question under its request id"
 }
@@ -2063,7 +2236,7 @@ test_a_parked_decision_leaves_the_live_pane_within_seconds() {
   write_registry
   write_world
   overview_cached python3 "$FACTORY" refresh || fail "the first record could not be built"
-  took=$(watch_pane '2 decisions for you' '1 decision for you' "$BINDIR/park-world garden-chart") \
+  took=$(watch_pane '3 things need you' '2 things need you' "$BINDIR/park-world garden-chart") \
     || fail "the live pane could not be driven"
   case "$took" in
     never|'no first screen'|'') fail "the live pane still showed the parked decision: $took" ;;
@@ -2087,7 +2260,7 @@ test_a_parked_call_leaves_the_pane_within_seconds_after_a_slow_refresh() {
   python3 "$FACTORY" refresh || fail "the first record could not be built"
   printf '{"ended": %s, "took": 90, "failed": false}\n' "$(date +%s)" > "$HOME_FIX/state/factory/rebuild.last" \
     || fail "the slow refresh could not be recorded"
-  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '2 decisions for you' '1 decision for you' "$BINDIR/park-world garden-chart") \
+  took=$(FM_FACTORY_LOADAVG=100000 watch_pane '3 things need you' '2 things need you' "$BINDIR/park-world garden-chart") \
     || fail "the live pane could not be driven"
   case "$took" in
     never|'no first screen'|'') fail "the live pane still showed the parked call: $took" ;;
@@ -2530,7 +2703,7 @@ test_already_settled_asks_starship_to_recheck_the_call() {
   assert_equals "$(q '[.needs_you[] | select(.checking) | .id] | join(" ")')" "garden-chart" \
     "a fast calls rebuild dropped checking"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " ▸ ● Harvest chart checking · Garden Journal · waiting 3 h" "the card head reads checking"
+  has_line "$out" " ▸ ● Harvest chart first up · checking · Garden Journal · waiting 3 h" "the card head reads checking"
   has_line "$out" " checking Starship is re-reading what you said about this" "the checking row"
   assert_not_contains "$(printf '%s\n' "$out" | sed -n '/Harvest chart/,/Which payment/p')" "x  Already settled?" \
     "a checking card offers the key again"
@@ -2553,7 +2726,7 @@ test_already_settled_asks_starship_to_recheck_the_call() {
   drive_keys x
   "$BINDIR/edit-world" reask garden-chart $((NOW - 600)) >/dev/null || fail "edit-world failed"
   take_record
-  assert_equals "$(q '.needs_you[0] | "\(.id) \(.checking)"')" "garden-chart false" \
+  assert_equals "$(q '.needs_you[] | select(.id == "garden-chart") | "\(.id) \(.checking)"')" "garden-chart false" \
     "a call held again since the request is not checking"
   # Finished work has no such key, and a refused request wakes no one.
   : > "$FM_FACTORY_TEST_NOTES"
@@ -2701,7 +2874,8 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   reset_case
   write_registry
   write_world
-  drive_keys DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
+  # Down past the three calls and the older questions shelf, onto the first factory.
+  drive_keys DOWN DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
   assert_equals "$(cut -f2- "$HOME_FIX/state/factory/steer.log")" "$(printf 'sample-shop\tyou')" \
     "s acts on the highlighted factory after a row above it left"
   reset_case
@@ -2714,7 +2888,7 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   assert_absent "$HOME_FIX/state/factory/steer.log" "keys typed into the box never steer"
   assert_contains "$(cat "$screen")" "Bigger picturesq2k" "the pane still runs and the box keeps every typed key"
   assert_contains "$(cat "$screen")" "This was settled elsewhere, so nothing will be sent" "the box says why"
-  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart $((NOW - 600))" ENTER
+  drive_keys 2 "SH:$BINDIR/edit-world reask garden-chart $((NOW - 9000))" ENTER
   assert_equals "$(cat "$FM_FACTORY_TEST_NOTES")" "" "a pending answer closes when its question is asked again"
   pass "factory pane: the highlight stays on its row; a talk box whose row left keeps its text and sends nothing"
 }
@@ -2723,12 +2897,12 @@ test_talking_never_changes_who_steers() {
   reset_case
   write_registry
   write_world
-  drive_keys DOWN DOWN DOWN t "Price on the first line (x2), as in data/shop/prices.md" ENTER
+  drive_keys DOWN DOWN DOWN DOWN t "Price on the first line (x2), as in data/shop/prices.md" ENTER
   assert_contains "$(jq -r .request_id "$FM_FACTORY_TEST_NOTES")" "factory.sample-shop.talk." "talk note"
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "To the Sample Shop crew: Price on the first line (x2), as in data/shop/prices.md" \
     "talk body"
   assert_absent "$HOME_FIX/state/factory/steer.log" "talking changed who steers"
-  drive_keys DOWN DOWN DOWN s
+  drive_keys DOWN DOWN DOWN DOWN s
   assert_contains "$(cat "$HOME_FIX/state/factory/steer.log")" "$(printf '\tsample-shop\tyou')" "s takes the helm"
   assert_contains "$(tail -n 1 "$FM_FACTORY_TEST_NOTES" | jq -r .body)" "I steer Sample Shop myself from now on." \
     "Starship is told"
@@ -2740,7 +2914,7 @@ test_talking_never_changes_who_steers() {
     "the change shows in the feed"
   assert_equals "$(q '[.factories[0].talk[] | "\(.who): \(.said)"] | join(" | ")')" \
     "you: Price on the first line (x2), as in data/shop/prices.md" "the talk keeps its history, word for word"
-  drive_keys DOWN DOWN DOWN s
+  drive_keys DOWN DOWN DOWN DOWN s
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "Starship" "s hands it back"
   pass "factory pane: talking goes to Starship and never moves the helm; only s does, both ways"
@@ -2809,7 +2983,7 @@ test_t_listens_first_and_sends_when_speech_stops() {
     "a soft voice did not end two seconds after it stopped"
   # Talking to a crew listens too.
   : > "$FM_FACTORY_TEST_NOTES"
-  FM_FACTORY_TEST_MIC=speech drive_keys DOWN DOWN DOWN t "WAIT:2"
+  FM_FACTORY_TEST_MIC=speech drive_keys DOWN DOWN DOWN DOWN t "WAIT:2"
   assert_equals "$(jq -r .body "$FM_FACTORY_TEST_NOTES" | sed -n 1p)" \
     "To the Sample Shop crew: ask the supplier about the ribbon first" "what was said to a crew was not sent"
   pass "factory pane: t listens first where the desk voice is set up, and sends when speech stops or on enter"
@@ -3349,7 +3523,7 @@ def drain(seconds, until):
                 break
     return seen
 drain(20, b"q quit")
-for key in (b"\x1b[B", b"\x1b[B", b"\x1b[B", b"t"):
+for key in (b"\x1b[B", b"\x1b[B", b"\x1b[B", b"\x1b[B", b"t"):
     os.write(fd, key)
     drain(0.3, b"\0never")
 os.write(fd, b"Half a thought")
@@ -3696,13 +3870,13 @@ SH
   take_record
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[0] | "\(.state)|\(.read | join(","))"')" \
     "needs a look|recipe-search" "the idle factory's finished work has a report to read"
-  # The stops run: three calls, then Sample Shop, Garden Journal and Recipe Box.
-  drive_keys DOWN DOWN DOWN DOWN DOWN r
+  # The stops run: three calls, the older questions shelf, then Sample Shop, Garden Journal and Recipe Box.
+  drive_keys DOWN DOWN DOWN DOWN DOWN DOWN r
   [ ! -s "$log" ] || fail "r on an idle factory read a job it draws no Read line for: $(cat "$log")"
-  drive_keys DOWN DOWN DOWN DOWN r
+  drive_keys DOWN DOWN DOWN DOWN DOWN r
   assert_equals "$(cat "$log")" "garden-share" "r on a factory did not read the job whose Read line it draws"
   : > "$log"
-  drive_keys DOWN DOWN DOWN DOWN DOWN $'\r' r
+  drive_keys DOWN DOWN DOWN DOWN DOWN DOWN $'\r' r
   assert_equals "$(cat "$log")" "recipe-search" "r on a factory's own page did not read the job the page draws"
   unset FM_FACTORY_READ FM_FACTORY_TEST_READ
   pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
@@ -3778,7 +3952,7 @@ test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-")) | "\(.job)=\(.word)"] | join(" ")')" \
     "remind-0715=failed" "only the failed reminder pass is in the feed"
   assert_equals "$(q '[.feed[] | select(.job // "" | startswith("remind-") | not) | "\(.word)|\(.actor)"] | join(" ")')" \
-    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Garden Journal went live|Recipe Box asked you|Sample Shop" \
+    "failed|Garden Journal PR ready|Garden Journal finished|Recipe Box asked you|Sample Shop asked you|Garden Journal went live|Recipe Box" \
     "the rest of the feed is as before"
   assert_equals "$(q .count_line)" "3 busy · 2 decisions for you · 1 ready to merge · 1 idle" \
     "the count line is not the overview's figures beside the folded pass"
@@ -3976,6 +4150,10 @@ fm_test_run \
   test_the_plain_screen_is_the_record_as_text \
   test_the_live_pane_repaints_when_the_theme_is_switched \
   test_the_screen_as_data_says_what_the_plain_screen_shows \
+  test_every_call_is_counted_once_and_named_on_a_shelf \
+  test_an_older_question_can_be_brought_back_or_let_go \
+  test_needs_you_is_most_pressing_first_and_the_strip_names_the_first \
+  test_a_stopped_job_says_so_and_who_is_on_it \
   test_an_action_from_a_second_screen_says_what_went_and_refuses_what_cannot \
   test_a_factory_page_shows_its_rules_size_against_the_cap \
   test_the_whole_queue_is_counted_in_sight \

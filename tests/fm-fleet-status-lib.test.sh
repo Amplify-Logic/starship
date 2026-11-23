@@ -1136,7 +1136,7 @@ test_the_owners_calls_follow_their_signal_between_readings() {
   assert_equals "$(cat "$STATE/.status-fleet-state")" "$reading" "the worker reading was refreshed for a call"
   assert_equals "$(cat "$CALLS")" "" "the canonical reader was asked about a worker for a call"
   # Calls read for other ready work are never shown for this reading.
-  printf '%s' "$reading" | awk -F'\t' 'BEGIN { OFS = "\t" } { $NF = "green other"; print }' \
+  printf '%s' "$reading" | awk -F'\t' 'BEGIN { OFS = "\t" } { $18 = "green other"; print }' \
     | tr -d '\n' > "$STATE/.status-fleet-state"
   assert_equals "$(calls_frame | cut -f14,15 | tr '\t' ' ')" "decision pick-a" \
     "calls read for other ready work were shown"

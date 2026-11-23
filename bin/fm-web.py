@@ -133,7 +133,7 @@ ANSI_TONES = {"92": "green", "93": "yellow", "91": "red", "91;1": "alarm", "95":
 ACT_BODY_MAX = 32 * 1024
 ACT_TEXT_MAX = 4000
 ACT_TIMEOUT_SECONDS = 120
-ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read")
+ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "revive", "drop")
 ACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,199}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{7,80}$")
 IMAGE_MAGIC = (
@@ -1209,6 +1209,44 @@ def _need_model(need: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _shelves_model(shelves: Dict[str, Any]) -> Dict[str, Any]:
+    """NEEDS YOU's two shelves as the pane words them: the older questions still open and the calls put off."""
+    older = shelves.get("older") or {}
+    coming = shelves.get("coming") or {}
+    return {
+        "older": {
+            "heading": older.get("heading") or "",
+            "note": older.get("note") or "",
+            "items": [
+                {
+                    "id": item.get("id"),
+                    "asking": item.get("asking"),
+                    "project": item.get("factory"),
+                    "project_name": item.get("factory_name") or "",
+                    "title": item.get("title") or "",
+                    "since": item.get("since") or "",
+                    "asked": item.get("asked") or "",
+                }
+                for item in older.get("items") or []
+            ],
+        },
+        "coming": {
+            "heading": coming.get("heading") or "",
+            "rest": coming.get("rest") or "",
+            "after": coming.get("after") or "",
+            "items": [
+                {
+                    "project": item.get("factory"),
+                    "project_name": item.get("factory_name") or "",
+                    "title": item.get("title") or "",
+                    "when": item.get("when") or "",
+                }
+                for item in coming.get("items") or []
+            ],
+        },
+    }
+
+
 def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
     page = factory.get("page") or {}
     nxt = factory.get("next")
@@ -1251,6 +1289,7 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
             "learned": [
                 {"when": item.get("when") or "", "what": item.get("what") or ""} for item in page.get("learned") or []
             ],
+            "shelves": _shelves_model(page.get("shelves") or {}),
             "feed": _feed_model(page.get("feed") or {}),
             # The pane lists what was said oldest first, above its keys line; the page reads from the top.
             "talk": [
@@ -1279,7 +1318,11 @@ def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, An
     needs = [_need_model(need) for need in screen.get("needs") or []]
     listed = {need["id"]: need for need in needs}
     call = None
-    if fields.get("call_id") and fields.get("call_title"):
+    if needs:
+        # The first card is the most pressing call, in the one order the strip's
+        # call is the first of too, so the header and the list always agree.
+        call = {"id": needs[0]["id"], "title": needs[0]["ask"], "question": needs[0]["question"], "listed": True}
+    elif fields.get("call_id") and fields.get("call_title"):
         # The strip names the call; the pane's card for it has its whole title.
         card = listed.get(fields["call_id"])
         call = {
@@ -1288,8 +1331,7 @@ def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, An
             "question": fields.get("call_kind") != "merge",
             "listed": card is not None,
         }
-    elif needs:
-        call = {"id": needs[0]["id"], "title": needs[0]["ask"], "question": needs[0]["question"], "listed": True}
+    stopped = [job for job in screen.get("stopped") or [] if isinstance(job, dict) and job.get("id")]
     return {
         "clock": screen.get("clock") or "",
         "band": {
@@ -1297,6 +1339,9 @@ def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, An
             "note": "" if known and counts.get("reading") != "past" else (fields.get("age") or "") if known else "reading the crew",
             "call": call,
             "alert": re.sub(r"\bfailed\b", "hit a problem", fields.get("alert") or ""),
+            # The job the alert's "stopped" opens: the one the overview reads stopped.
+            "stopped": {"project": stopped[0].get("factory"), "job": stopped[0].get("id")}
+            if stopped and "stopped" in (fields.get("alert") or "") else None,
             "night": fields.get("night") or "",
             "night_done": fields.get("night_mark") == "done",
             "battery": fields.get("battery") or "",
@@ -1307,6 +1352,14 @@ def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, An
             for piece in screen.get("count_words") or []
         ],
         "queue": [plain_phrase(words) for words in screen.get("queue") or []],
+        "sentences": [
+            {"words": plain_phrase(said.get("words")), "to": said.get("to") or "",
+             "mark": MARKS.get(said.get("colour") or "", "")}
+            for said in screen.get("sentences") or []
+            if isinstance(said, dict)
+        ],
+        "first_up": screen.get("first_up") or (needs[0]["id"] if needs else None),
+        "shelves": _shelves_model(screen.get("shelves") or {}),
         "needs": needs,
         "projects": [_project_model(factory) for factory in screen.get("factories") or []],
         "feed": _feed_model(screen.get("feed") or {}),
@@ -2365,6 +2418,26 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .sum{font-size:.9rem}
 .sum b{font-weight:600}
 .queue{font-size:.84rem;color:var(--ink-2);margin-top:.125rem}
+.says{display:flex;flex-direction:column;align-items:flex-start;gap:.1rem}
+.say{border:0;background:none;padding:0;text-align:left;font-size:.94rem;line-height:1.4;color:var(--ink)}
+.say:hover{text-decoration:underline;text-underline-offset:.15em}
+.say.c-you{color:var(--you);font-weight:600}
+.say.c-work{color:var(--ink)}
+.shelf{margin-top:.75rem;border-top:1px dashed var(--line);padding-top:.5rem}
+.shelf>h4{font-size:.9rem;font-weight:600}
+.shelf>.note-line{font-size:.84rem;color:var(--ink-2);margin:.1rem 0 .3rem}
+.shelf ul{list-style:none;margin:0;padding:0}
+.shelf li{display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .6rem;padding:.3rem 0;border-bottom:1px solid var(--line)}
+.shelf li:last-child{border-bottom:0}
+.shelf li .t{flex:1 1 14rem;min-width:0;font-size:.9rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.shelf li .w{font-size:.8rem;color:var(--ink-2);white-space:nowrap}
+.shelf li .when{flex:none;width:6.5rem;font-size:.84rem;font-weight:600}
+.shelf li .side{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:.25rem}
+.shelf li .rowb{display:flex;gap:.375rem;flex-wrap:wrap;justify-content:flex-end}
+.shelf li .rowb .btn{padding:.125rem .5rem;font-size:.8rem}
+.shelf li .confirm{text-align:right}
+.shelf .group{font-size:.8rem;color:var(--ink-2);margin-top:.4rem;font-weight:600}
+.alert-btn{border:0;font-family:inherit;cursor:pointer}
 .notice{margin-top:.5rem;font-size:.875rem;border-radius:.56rem;padding:.375rem .7rem;font-weight:500}
 .notice.ok{background:var(--done-bg);color:var(--done)}
 .notice.info{background:var(--here-bg);color:var(--here)}
@@ -2404,6 +2477,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .opt .l{flex:1;min-width:0}
 .tag{font-size:.75rem;font-weight:600;color:var(--here);background:var(--here-bg);border-radius:999px;padding:.03rem .5rem;white-space:nowrap}
 .tag.urgent{color:var(--you);background:var(--you-bg)}
+.tag.first{color:var(--you);background:var(--you-bg)}
 .opt.picked .tag{background:var(--surface)}
 .confirm,.talk{border:1px solid var(--edge);border-radius:.7rem;padding:.6rem .75rem;background:var(--surface)}
 .confirm p{font-size:.9rem}
@@ -2457,6 +2531,7 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .jobline .t{flex:1 1 auto;min-width:0}
 .jobline .w{margin-left:auto;font-size:.8rem;color:var(--ink-2);white-space:nowrap}
 .jobline .w.you{color:var(--you)}.jobline .w.done{color:var(--done)}.jobline .w.work{color:var(--work)}
+.jobline.sel{border-radius:.5rem;box-shadow:0 0 0 3px var(--here-bg);background:var(--here-bg);padding:.15rem .4rem}
 .line{font-size:.84rem;color:var(--ink-2);margin-top:.375rem;display:flex;gap:.45rem;flex-wrap:wrap}
 .line b{font-weight:600;color:var(--ink)}
 .line .r{margin-left:auto}
@@ -2889,6 +2964,7 @@ VIEW_JS = r"""
       case 'keep': return { action: 'keep', item: call.id, asking: call.asking };
       case 'answer': return { action: 'answer', item: call.id, asking: call.asking, option: d.option };
       case 'steer': return { action: 'steer', factory: d.factory, who: d.who };
+      case 'revive': case 'drop': return { action: d.act, item: call.id, asking: call.asking };
       case 'read': return d.id ? { action: 'read', item: d.id } : { action: 'read', factory: d.factory, job: d.job };
       case 'talk':
         return d.kind === 'talk' ? { action: 'talk', factory: d.factory, text: d.text }
@@ -3101,6 +3177,7 @@ let M=null,mver='',mirrorError='';
 let tab=decodeURIComponent(location.hash.slice(1))||'home';
 let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selJob=null,hl=null,tabShown=null;
 const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
+const oldSent={};  /* older questions this page asked about that the record does not show yet */
 const full=new Set();    /* the clipped titles opened in full */
 
 function project(id){return M.projects.find(p=>p.id===id)||null;}
@@ -3143,13 +3220,14 @@ function callCard(n,ownTab){
   const open=openCall===n.id;
   const mine=sent[n.id];
   const answered=n.answered||(mine&&mine.asking===n.asking?mine:null);
-  const urgent=M.band.call&&M.band.call.id===n.id;
+  /* The most pressing call is the first card, marked on the overview. */
+  const first=!ownTab&&M.first_up===n.id;
   const card=el('div','call'+(open?' open':'')+(n.question?'':' fin')+(hl&&hl.kind==='call'&&hl.id===n.id?' hl':''));
   card.dataset.call=n.id;
   const row=btn('call-row','','open',{id:n.id});row.setAttribute('aria-expanded',String(open));
   row.appendChild(el('span','dot '+(n.question?'you':'done')));
   const title=el('span','call-title');title.appendChild(linked(n.ask,false));row.appendChild(title);
-  if(urgent)row.appendChild(el('span','tag urgent','Most urgent'));
+  if(first)row.appendChild(el('span','tag first','First up'));
   const meta=el('span','call-meta');
   const checking=n.checking||asked[n.id]===n.asking;
   V.callMeta(n,ownTab,checking).forEach(words=>meta.appendChild(el('span','',words)));
@@ -3224,7 +3302,7 @@ function jobCard(job,p,watch){
   card.appendChild(foot);return card;
 }
 function jobLine(job,p){
-  const line=el('div','jobline');line.dataset.job=job.id;
+  const line=el('div','jobline'+(selJob===job.id?' sel':''));line.dataset.job=job.id;
   add(line,el('span','dot '+job.mark),clip('t',V.plainText(job.title),'job:'+job.id),el('span','w '+job.mark,job.words));
   if(job.read)line.appendChild(btn('btn small plain','Read the report','read',{factory:p.id,job:job.id}));
   return line;
@@ -3247,9 +3325,59 @@ function section(title,count,small){
   if(small)h.appendChild(el('small','',small));
   sec.appendChild(h);return sec;
 }
+function olderItem(id){
+  const all=M.shelves.older.items.concat(...M.projects.map(p=>p.page.shelves.older.items));
+  return all.find(o=>o.id===id)||null;
+}
+/* NEEDS YOU's two shelves: the older questions still open, each with Bring back and No longer
+   needed (two clicks, as an answer is), and the calls put off to a date with the day each comes back. */
+function shelves(sh,ownTab){
+  const parts=[];
+  if(sh.older.items.length){
+    const box=el('div','shelf');box.dataset.shelf='older';
+    box.appendChild(el('h4','',sh.older.heading));
+    if(sh.older.note)box.appendChild(el('p','note-line',sh.older.note));
+    const ul=el('ul');
+    sh.older.items.forEach(o=>{
+      const li=el('li');li.dataset.older=o.id;
+      const asked=o.asked||(oldSent[o.id]&&oldSent[o.id].asking===o.asking?oldSent[o.id].words:'');
+      const side=el('div','side');
+      add(side,el('span','w',[ownTab?'':o.project_name,asked?asked+', waiting for Starship':o.since].filter(Boolean).join(', ')));
+      add(li,el('span','t',o.title),side);
+      const pending=confirming&&confirming.older&&confirming.item===o.id?confirming:null;
+      if(pending){
+        const box2=el('div','confirm');
+        box2.appendChild(el('p','',pending.older==='revive'?'Ask Starship to bring this back into Needs you?':'Tell Starship this is no longer needed?'));
+        box2.appendChild(el('p','unsent','Not sent yet.'));
+        const rowb=el('div','rowb');const go=btn('btn primary','Send to Starship','send',null,'Enter');go.disabled=acting;
+        add(rowb,go,btn('btn','Cancel','cancel',null,'Escape'));box2.appendChild(rowb);side.appendChild(box2);
+      }else if(!asked){
+        const rowb=el('div','rowb');
+        const back=btn('btn small','Bring back','oldask',{id:o.id,what:'revive'});back.disabled=acting;
+        const gone=btn('btn small','No longer needed','oldask',{id:o.id,what:'drop'});gone.disabled=acting;
+        add(rowb,back,gone);side.appendChild(rowb);
+      }
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);parts.push(box);
+  }
+  if(sh.coming.heading){
+    const box=el('div','shelf');box.dataset.shelf='coming';
+    box.appendChild(el('h4','',sh.coming.heading));
+    if(sh.coming.rest)box.appendChild(el('p','note-line',sh.coming.rest));
+    if(sh.coming.items.length){const ul=el('ul');
+      sh.coming.items.forEach(c=>{const li=el('li');
+        add(li,el('span','when',c.when),el('span','t',c.title),ownTab?null:el('span','w',c.project_name));ul.appendChild(li);});
+      box.appendChild(ul);}
+    if(sh.coming.after)box.appendChild(el('p','note-line',sh.coming.after));
+    parts.push(box);
+  }
+  return parts;
+}
 function feedSection(feed,named){
   const comma=feed.title.indexOf(', ');
   const sec=section(comma<0?feed.title:feed.title.slice(0,comma),null,comma<0?'':feed.title.slice(comma+2));
+  sec.dataset.sec='feed';
   sec.appendChild(feed.events.length?feedList(feed,named):el('p','empty','Nothing new.'));
   return sec;
 }
@@ -3277,7 +3405,11 @@ function drawBand(){
     add(d,el('i'),el('b','',String(l.count)),el('span','w',l.words),el('span','s',l.short||l.words));lamps.appendChild(d);});
   const parts=[lamps];
   if(band.note)parts.push(el('span','band-note',band.note));
-  if(band.alert){const a=el('span','alert');add(a,el('i'),el('span','',band.alert));parts.push(a);}
+  if(band.alert){
+    /* "N stopped" opens the job that stopped, which says so and who is on it. */
+    const a=band.stopped?btn('alert alert-btn','','stopped',{project:band.stopped.project,job:band.stopped.job}):el('span','alert');
+    if(band.stopped)a.title='Open the job that stopped';
+    add(a,el('i'),el('span','',band.alert));parts.push(a);}
   if(band.night){const n=el('span','aside night'+(band.night_done?' good':''));n.title=band.night;add(n,icon('moon'),el('span','',band.night));parts.push(n);}
   if(band.battery){const b=el('span','aside'+(band.battery_mark?' '+band.battery_mark:''));
     add(b,icon('battery'),el('span','',band.battery));parts.push(b);}
@@ -3291,11 +3423,11 @@ function drawStatus(){
 }
 function drawTop(){
   const top=$('ptop');top.replaceChildren();
-  const sum=el('p','sum');
-  M.summary.forEach((s,i)=>{if(i)sum.appendChild(document.createTextNode(', '));
-    sum.appendChild(el(s.mark?'b':'span',s.mark?'c-'+s.mark:'',s.words));});
-  top.appendChild(sum);
-  if(M.queue.length)top.appendChild(el('p','queue',M.queue.join(', ')));
+  /* Three plain sentences, each a way to its part of the page. */
+  const says=el('div','says');
+  M.sentences.forEach(s=>says.appendChild(btn('say'+(s.mark?' c-'+s.mark:''),s.words,'goto',{to:s.to})));
+  if(!M.sentences.length)says.appendChild(el('p','sum','reading the crew'));
+  top.appendChild(says);
   if(mirrorError)top.appendChild(el('p','notice bad',mirrorError));
   if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');top.appendChild(n);}
 }
@@ -3303,12 +3435,13 @@ function drawHome(){
   $('clock').textContent=M.clock;
   drawTop();
   const body=$('pbody');
-  const needs=section('Needs you',M.needs.length);
+  const needs=section('Needs you',M.needs.length,M.needs.length>1?'most pressing first':'');needs.dataset.sec='needs';
   const call=M.band.call;
   if(call&&!call.listed){const u=el('p','urgent-line');u.appendChild(el('b','','Most urgent: '));u.appendChild(linked(call.title,true));needs.appendChild(u);}
   if(M.needs.length)M.needs.forEach(n=>needs.appendChild(callCard(n,false)));
   else needs.appendChild(el('p','empty','Nothing needs you right now.'));
-  const now=section('Right now');
+  shelves(M.shelves,false).forEach(part=>needs.appendChild(part));
+  const now=section('Right now');now.dataset.sec='now';
   M.projects.forEach(p=>{
     const box=el('div','proj'+(hl&&hl.kind==='project'&&hl.id===p.id?' hl':''));box.dataset.proj=p.id;
     const head=el('div','proj-head');
@@ -3335,7 +3468,9 @@ function drawProject(p){
   if(notice){const n=el('p','notice '+notice.kind,notice.text);n.setAttribute('role','status');head.appendChild(n);}
   const parts=[];
   const mine=M.needs.filter(n=>n.project===p.id);
-  if(mine.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n,true)));parts.push(s);}
+  const shelved=shelves(p.page.shelves,true);
+  if(mine.length||shelved.length){const s=section('Needs you',mine.length);mine.forEach(n=>s.appendChild(callCard(n,true)));
+    shelved.forEach(part=>s.appendChild(part));parts.push(s);}
   const work=section('Work',null,p.page.queue.join(', '));
   p.page.jobs.forEach(job=>work.appendChild(job.busy?jobCard(job,p,false):jobLine(job,p)));
   p.page.folded.forEach(group=>{
@@ -3379,7 +3514,7 @@ function draw(){
   if(!M)return;
   if(tab!=='home'&&!project(tab))tab='home';
   if(!chose&&(!openCall||!need(openCall)))openCall=M.needs.length?M.needs[0].id:null;
-  if(confirming&&!need(confirming.item))confirming=null;
+  if(confirming&&!(confirming.older?olderItem(confirming.item):need(confirming.item)))confirming=null;
   if(talk&&talk.item&&!need(talk.item))talk=null;
   if(hl&&!(hl.kind==='call'?need(hl.id):project(hl.id)))hl=null;
   const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
@@ -3466,6 +3601,12 @@ async function perform(d){
     case 'open':chose=true;openCall=openCall===d.id?null:d.id;confirming=null;if(talk&&talk.item)talk=null;
       hl={kind:'call',id:d.id};draw();return;
     case 'pick':openCall=d.id;chose=true;confirming={item:d.id,option:d.option};draw();return;
+    case 'oldask':confirming={item:d.id,older:d.what};draw();return;
+    case 'goto':{if(tab!=='home')perform({act:'tab',id:'home'});setSide('projects');
+      const sec=document.querySelector('#pbody [data-sec="'+CSS.escape(d.to)+'"]');if(sec)sec.scrollIntoView({block:'start'});return;}
+    case 'stopped':tab=d.project;selJob=d.job;hl=null;setSide('projects');
+      history.replaceState(null,'','#'+encodeURIComponent(tab));draw();
+      {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
     case 'keep':openCall=d.id;chose=true;confirming={item:d.id,keep:true};draw();return;
     case 'cancel':confirming=null;talk=null;say(true,'');draw();return;
     case 'talk':confirming=null;talk=d.kind==='talk'?{kind:'talk',factory:d.factory,text:''}:{kind:d.kind,item:d.id,text:''};
@@ -3474,7 +3615,12 @@ async function perform(d){
     case 'watch':tab=d.factory;selJob=d.job;hl=null;draw();
       {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
     case 'send':{
-      const c=confirming;const n=c&&need(c.item);if(!n)return;
+      const c=confirming;
+      if(c&&c.older){const o=olderItem(c.item);if(!o)return;
+        answer=await act(V.noteFor({act:c.older},o));
+        if(answer&&answer.ok){oldSent[o.id]={asking:o.asking,words:c.older==='revive'?'you asked to bring it back':'you said it is no longer needed'};confirming=null;}
+        break;}
+      const n=c&&need(c.item);if(!n)return;
       answer=await act(V.noteFor(c.keep?{act:'keep'}:{act:'answer',option:c.option},n));
       if(answer&&answer.ok){sent[n.id]={asking:n.asking,key:c.keep?null:c.option};confirming=null;}
       break;}

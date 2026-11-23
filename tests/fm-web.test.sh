@@ -583,6 +583,19 @@ write_screen() {  # <home>
  "count_words": [{"words": "1 busy", "colour": "amber"}, {"words": "1 decision for you", "colour": "red"},
                  {"words": "1 ready to merge", "colour": "green"}, {"words": "1 idle", "colour": "faint"}],
  "queue": ["4 queued", "2 in line", "2 wait on you, 1 of them deferred to a date"],
+ "sentences": [{"words": "2 things need you. 1 more is put off to a date.", "to": "needs", "colour": "red"},
+               {"words": "1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them.", "to": "now", "colour": "amber"},
+               {"words": "1 change went live since you looked at 06:00.", "to": "feed", "colour": "green"}],
+ "first_up": "garden-chart",
+ "shelves": {"older": {"heading": "1 older question is still open",
+                       "note": "It left Needs you after waiting with no date set, waiting since 1 Oct.",
+                       "items": [{"id": "garden-units", "asking": "2026-10-01", "factory": "garden-journal",
+                                  "factory_name": "Garden Journal", "title": "Metric or cups", "since": "since 1 Oct",
+                                  "asked": ""}]},
+             "coming": {"heading": "1 thing comes back this week", "rest": "", "after": "",
+                        "items": [{"id": "garden-seeds", "factory": "garden-journal", "factory_name": "Garden Journal",
+                                   "title": "Charge for seeds", "when": "Mon 16 Nov"}]}},
+ "stopped": [{"id": "garden-labels", "factory": "garden-journal", "title": "Print seed labels"}],
  "needs": [
   {"id": "garden-chart", "asking": "1794632400", "factory": "garden-journal", "factory_name": "Garden Journal",
    "kind": "question", "ask": "Harvest chart", "title": "Harvest chart",
@@ -637,9 +650,9 @@ age=
 busy=1
 for_you=1
 to_merge=1
-call_kind=decision
-call_id=garden-chart
-call_title=Harvest chart
+call_kind=merge
+call_id=garden-share
+call_title=The queued orders page
 alert=1 failed, 1 stopped
 night=night shift from 23:30
 night_mark=
@@ -664,7 +677,17 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
   assert_equals "$(m '[.band.lamps[] | "\(.count) \(.words) (\(.mark))"] | join(", ")')" \
     "1 busy (work), 1 decision for you (you), 1 ready for your OK (done)" "the three lamps"
   assert_equals "$(m '.band.call | "\(.id)|\(.title)|\(.question)|\(.listed)"')" "garden-chart|Harvest chart|true|true" \
-    "the most urgent call is the strip's"
+    "the most urgent call is not the first card"
+  assert_equals "$(m .first_up)" "garden-chart" "the card marked first up"
+  assert_equals "$(m '.band.stopped | "\(.project) \(.job)"')" "garden-journal garden-labels" \
+    "the alert's stopped does not open the job that stopped"
+  assert_equals "$(m '[.sentences[] | "\(.to) [\(.mark)] \(.words)"] | join(" / ")')" \
+    "needs [you] 2 things need you. 1 more is put off to a date. / now [work] 1 job is running. 1 has stopped and 1 hit a problem, and Starship is on them. / feed [done] 1 change went live since you looked at 06:00." \
+    "the three sentences, each with the part it leads to"
+  assert_equals "$(m '.shelves.older | "\(.heading)|\(.items[0].id) \(.items[0].asking) \(.items[0].project_name) \(.items[0].since)"')" \
+    "1 older question is still open|garden-units 2026-10-01 Garden Journal since 1 Oct" "the older questions shelf"
+  assert_equals "$(m '.shelves.coming | "\(.heading)|\(.items[0].when) \(.items[0].title)"')" \
+    "1 thing comes back this week|Mon 16 Nov Charge for seeds" "the coming back shelf"
   assert_equals "$(m '.band | "\(.alert)|\(.night)|\(.battery)|\(.battery_mark)"')" \
     "1 hit a problem, 1 stopped|night shift from 23:30|battery 9%, plug in now|critical" "the strip's alert, night shift and battery"
   assert_equals "$(m '[.summary[] | .words] | join(", ")')" "1 busy, 1 decision for you, 1 ready for your OK, 1 idle" \
@@ -949,6 +972,13 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else() {
   post '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' >/dev/null
   assert_equals "$(sed -n '4p' "$home/act.asks" | jq -c .)" \
     '{"action":"steer","factory":"garden-journal","who":"you","in_tab":true}' "a project tab's button says it was on a tab"
+  # An older question's Bring back and No longer needed buttons send what
+  # bin/fm-factory.py act takes for them (revive and drop, docs/factory-pane.md).
+  post '{"action":"revive","item":"recipe-units","asking":"2026-10-01"}' >/dev/null
+  post '{"action":"drop","item":"recipe-units","asking":"2026-10-01"}' >/dev/null
+  assert_equals "$(sed -n '5,6p' "$home/act.asks" | jq -c .)" \
+    '{"action":"revive","item":"recipe-units","asking":"2026-10-01"}
+{"action":"drop","item":"recipe-units","asking":"2026-10-01"}' "an older question's two buttons do not reach the factory script"
   printf '{"ok": false, "said": "\\u2717 NOT SENT: the inbox is locked. Nothing reached Starship."}' > "$home/act.answer"
   assert_equals "$(post '{"action":"keep","item":"garden-share"}' | jq -c .)" \
     '{"ok":false,"said":"Not sent: the inbox is locked. Nothing reached Starship."}' "a note that did not go says so"

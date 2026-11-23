@@ -38,13 +38,13 @@ A surface uses a different word only for a thing that is genuinely different; th
 
 | Word | Figure | Meaning | Where |
 | --- | --- | --- | --- |
-| `busy` | working plus validating | Tasks with an agent running on their recorded endpoint that no other figure claims, plus tasks the validation pipeline is carrying. | The row; the strip's amber lamp; the Factory count line, and a job reading `busy` with its step (`building`, `planning` or `checking`). |
+| `busy` | working plus validating | Tasks with an agent running on their recorded endpoint that no other figure claims, plus tasks the validation pipeline is carrying. | The row; the strip's amber lamp; the Factory sentences, and a job reading `busy` with its step (`building`, `planning` or `checking`). |
 | `waiting` | paused | Tasks in a declared bounded external wait. | The row; a Factory job. |
-| `decisions for you` | decisions | Decisions held for the captain that wait on him now; `decision for you` when there is one. | The row; the strip's red lamp; the Factory count line, its NEEDS YOU questions, and a job held for one. |
-| `ready to merge` | ready minus decisions | PRs and ready branches waiting for the merge word, unless the task carries an open captain hold, plus the PRs a second mate has ready for it. | The row; the strip's green lamp; the Factory count line, its NEEDS YOU finished work, a job, and a job's last step. |
+| `decisions for you` | decisions | Decisions held for the captain that wait on him now; `decision for you` when there is one. | The row; the strip's red lamp; the Factory sentences, its NEEDS YOU questions, and a job held for one. |
+| `ready to merge` | ready minus decisions | PRs and ready branches waiting for the merge word, unless the task carries an open captain hold, plus the PRs a second mate has ready for it. | The row; the strip's green lamp; the Factory sentences, its NEEDS YOU finished work, a job, and a job's last step. |
 | `needs a look` | attention minus failed | Tasks that need Firstmate to act: a blocker, or a question a worker or the checks put to Firstmate. | The row; a Factory job. |
-| `failed` | failed | Tasks whose current state is failed: a worker's failure or a failed validation run. | The row; the strip's red alert; a Factory job. |
-| `stopped` | lost | Records still here whose worker is not, and that did not fail: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a worker waiting on a question is not done, so its lost worker is. | The row; the strip's red alert; a Factory job. |
+| `failed` | failed | Tasks whose current state is failed: a worker's failure or a failed validation run. | The row; the strip's red alert; the Factory sentences; a Factory job. |
+| `stopped` | lost | Records still here whose worker is not, and that did not fail: the endpoint is proven dead or absent, or the recorded worktree is gone. Done work is never counted here, because a worker that exits once its work is done is not a lost worker; a worker waiting on a question is not done, so its lost worker is. | The row; the strip's red alert, which opens the stopped job on the web page; the Factory sentences; a Factory job reading `stopped, Starship is on it`. |
 
 `decisions for you` and `ready to merge` together are the owner's calls, the one count the tap page also shows; `fm_owner_calls` owns it, and the Factory pane's NEEDS YOU lists exactly the calls behind them.
 A failed task counts once, as `failed`, though it is also a blocker for Firstmate and may have lost its worker.

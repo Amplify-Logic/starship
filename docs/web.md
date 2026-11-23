@@ -12,10 +12,10 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | In the terminal | On the page |
 | --- | --- |
 | The tabs across the top | One slim header: the Starship mark, the same tabs (Control Centre, then one per factory, called a project here), then the band |
-| The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked Most urgent |
+| The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked First up, and a `stopped` in the alert opens the stopped job on its project's tab |
 | The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
-| The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the counts, Needs you, Right now, Since you last looked |
+| The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Right now, Since you last looked |
 | A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, in one column |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
@@ -64,6 +64,7 @@ A web address in a title or the feed reads as a short label, such as `the pull r
 - Who steers has its switch on the project's own tab only.
   A project's row in Right now says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
 - A project's conversation reads newest first.
+- The older questions shelf lists its questions open, each with its Bring back and No longer needed buttons, instead of one line that `enter` opens.
 - On a screen worked by touch, the key hints on the buttons and the line of keys at the bottom are not shown.
 
 Words that are already plain are the terminal's own.
@@ -92,8 +93,9 @@ Each button is one of the Factory pane's writing keys and sends the note that ke
 | This is already settled | `x` |
 | Read the report | `r` |
 | Who steers | `s` |
+| Bring back, No longer needed, then Send to Starship | `b`, `n`, then enter |
 
-An answer or a keep takes two clicks, the choice and then Send to Starship, so a stray click sends nothing, and the page says whether the note was sent.
+An answer, a keep, or an older question's Bring back or No longer needed takes two clicks, the choice and then Send to Starship, so a stray click sends nothing, and the page says whether the note was sent.
 A button on a project's tab records no look, as a key in a factory's own tab does not.
 A click and a key press on the same question are one answer, because both carry the same request id.
 A card the terminal has settled or asked again since the page drew it sends nothing.
