@@ -1254,21 +1254,34 @@ def _project_model(factory: Dict[str, Any]) -> Dict[str, Any]:
         "id": factory.get("id"),
         "name": factory.get("name") or "",
         "about": ". ".join(str(words) for words in factory.get("about") or []),
-        "idle": factory.get("state") == "idle",
         "you_steer": factory.get("steered_by") == "you",
-        "queue": [plain_phrase(part) for part in str(factory.get("queue") or "").split(" · ") if part],
+        # The factory told as Now, New and Next, as the pane tells it (fm-factory.py View.told).
+        "quiet": bool(factory.get("quiet")),
+        "quiet_words": factory.get("quiet_words") or "",
+        "badge": factory.get("badge") or "",
+        "now": factory.get("now") or "",
         "jobs": [_job_model(job) for job in factory.get("jobs") or []],
+        "new": [
+            {
+                "id": item.get("id"),
+                "label": (lambda word: word[:1].upper() + word[1:])(plain_word(item.get("word")))
+                if item.get("word") in PLAIN_WORDS
+                else item.get("label") or "",
+                "text": item.get("text") or "",
+                "when": item.get("when") or "",
+                "pr": item.get("pr") or "",
+                "read": bool(item.get("read")),
+                "mark": MARKS.get(item.get("colour") or "", ""),
+            }
+            for item in factory.get("new") or []
+            if isinstance(item, dict)
+        ],
+        "more": factory.get("more") or 0,
         "routine": [
             {"kind": line.get("kind") or "", "words": list(line.get("words") or []), "now": line.get("now") or ""}
             for line in factory.get("routine") or []
         ],
-        "next": {
-            "title": nxt.get("title") or "",
-            "once_you_answer": bool(nxt.get("once_you_answer")),
-            "then": nxt.get("then") or 0,
-        }
-        if isinstance(nxt, dict)
-        else None,
+        "next": {"title": nxt.get("title") or "", "words": nxt.get("words") or ""} if isinstance(nxt, dict) else None,
         "page": {
             "needs": list(page.get("needs") or []),
             "queue": [plain_phrase(part) for part in page.get("queue") or []],
@@ -1362,7 +1375,7 @@ def mirror_model(screen: Dict[str, Any], fields: Dict[str, str]) -> Dict[str, An
         "shelves": _shelves_model(screen.get("shelves") or {}),
         "needs": needs,
         "projects": [_project_model(factory) for factory in screen.get("factories") or []],
-        "feed": _feed_model(screen.get("feed") or {}),
+        "factories_heading": screen.get("factories_heading") or "",
         "steps": [plain_word(step) for step in screen.get("steps") or []],
     }
 
@@ -2505,7 +2518,22 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .proj-head{display:flex;align-items:center;gap:.25rem .625rem;flex-wrap:wrap}
 .proj-name{border:0;background:none;padding:0;font-weight:600;font-size:.94rem;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:.25rem}
 .proj-name:hover{text-decoration-color:var(--here);color:var(--here)}
-.proj-q{font-size:.84rem;color:var(--ink-2)}
+.badge{font-size:.75rem;font-weight:600;border-radius:999px;padding:.03rem .5rem;background:var(--you-bg);color:var(--you)}
+.told{display:grid;grid-template-columns:3rem minmax(0,1fr);gap:.375rem .56rem;margin-top:.45rem}
+.told dt{font-size:.78rem;font-weight:600;color:var(--ink-2);padding-top:.12rem}
+.told dd{margin:0;min-width:0;font-size:.875rem}
+.told dd>p+p,.told dd>p+.job,.told dd>p+.jobline{margin-top:.3rem}
+.told dd>.job:first-child,.told dd>.jobline:first-child,.told dd>.line:first-child{margin-top:0}
+.told .jobline .w{white-space:normal;text-align:right}
+@media (max-width:40rem){.told{grid-template-columns:minmax(0,1fr);gap:.2rem}.told dt{padding-top:.3rem}}
+.news time{color:var(--ink-2);font-size:.8rem;font-variant-numeric:tabular-nums;margin-right:.45rem}
+.verb{font-weight:600;margin-right:.3rem;color:var(--ink-2)}
+.verb.done{color:var(--done)}.verb.work{color:var(--work)}.verb.you{color:var(--you)}.verb.here{color:var(--here)}
+.news .btn{margin-left:.45rem}
+.quiet-facs{border-top:1px solid var(--line);padding:.56rem .25rem 0;margin-top:.25rem}
+.quiet-facs h4{font-size:.84rem;font-weight:600;color:var(--ink-2)}
+.quiet-facs li{display:flex;flex-wrap:wrap;gap:.1rem .625rem;align-items:baseline;margin-top:.3rem;font-size:.875rem}
+.quiet-facs .w{color:var(--ink-2)}
 .steer{margin-left:auto;display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--ink-2)}
 .steer-note{margin-left:auto;font-size:.8rem;color:var(--here);font-weight:600}
 .seg{display:flex;border:1px solid var(--line);border-radius:.45rem;overflow:hidden;background:var(--surface)}
@@ -3441,23 +3469,42 @@ function drawHome(){
   if(M.needs.length)M.needs.forEach(n=>needs.appendChild(callCard(n,false)));
   else needs.appendChild(el('p','empty','Nothing needs you right now.'));
   shelves(M.shelves,false).forEach(part=>needs.appendChild(part));
-  const now=section('Right now');now.dataset.sec='now';
-  M.projects.forEach(p=>{
-    const box=el('div','proj'+(hl&&hl.kind==='project'&&hl.id===p.id?' hl':''));box.dataset.proj=p.id;
+  /* Each factory told as Now, New and Next; a quiet one is one line under Quiet for now. */
+  const facs=section('Your factories',null,M.factories_heading);facs.dataset.sec='factories';
+  M.projects.filter(p=>!p.quiet).forEach(p=>{
+    const box=el('article','proj'+(hl&&hl.kind==='project'&&hl.id===p.id?' hl':''));box.dataset.proj=p.id;
     const head=el('div','proj-head');
     /* Who steers is switched on the project's own tab; here only a project the owner steers says so. */
-    add(head,btn('proj-name',p.name,'tab',{id:p.id}),el('span','proj-q',p.queue.join(', ')),p.you_steer?el('span','steer-note','You steer'):null);
+    add(head,btn('proj-name',p.name,'tab',{id:p.id}),p.badge?el('span','badge',p.badge):null,
+      p.you_steer?el('span','steer-note','You steer'):null);
     box.appendChild(head);
-    p.jobs.forEach(job=>box.appendChild(job.busy?jobCard(job,p,true):jobLine(job,p)));
+    const dl=el('dl','told');
+    const part=(name,dd)=>{dl.appendChild(el('dt','',name));dl.appendChild(dd);};
+    const now=el('dd');
+    if(p.now)now.appendChild(el('p','',p.now));
+    p.jobs.forEach(job=>now.appendChild(job.busy?jobCard(job,p,true):jobLine(job,p)));
     p.routine.forEach(r=>{const line=el('p','line');
-      add(line,el('b','',r.kind),el('span','',r.words.join(', ')),r.now?el('span','r',r.now):null);box.appendChild(line);});
-    if(p.next){const line=el('p','line');
-      add(line,el('span','',p.next.once_you_answer?'Next, once you answer:':'Next:'),el('b','',V.plainText(p.next.title)),
-        p.next.then?el('span','','then '+p.next.then+' more'):null);box.appendChild(line);}
-    now.appendChild(box);
+      add(line,el('b','',r.kind),el('span','',r.words.join(', ')),r.now?el('span','r',r.now):null);now.appendChild(line);});
+    part('Now',now);
+    if(p.new.length){const dd=el('dd');
+      p.new.forEach(n=>{const line=el('p','news');
+        add(line,el('time','',n.when),el('span','verb '+n.mark,n.label+':'));
+        if(n.pr){const a=el('a','lk',n.text);a.href=n.pr;a.target='_blank';a.rel='noopener noreferrer';a.title='See what changed';line.appendChild(a);}
+        else line.appendChild(linked(n.text,true));
+        if(n.read)line.appendChild(btn('btn small plain','Read it','read',{factory:p.id,job:n.id}));
+        dd.appendChild(line);});
+      if(p.more)dd.appendChild(el('p','line','and '+p.more+' more, on its own page'));
+      part('New',dd);}
+    if(p.next){const dd=el('dd');const line=el('p');
+      add(line,el('b','',V.plainText(p.next.title)),document.createTextNode(p.next.words));dd.appendChild(line);part('Next',dd);}
+    box.appendChild(dl);facs.appendChild(box);
   });
-  if(!M.projects.length)now.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
-  body.replaceChildren(needs,now,feedSection(M.feed,true));
+  const quiet=M.projects.filter(p=>p.quiet);
+  if(quiet.length){const q=el('div','quiet-facs');q.appendChild(el('h4','','Quiet for now'));const ul=el('ul');
+    quiet.forEach(p=>{const li=el('li');li.dataset.proj=p.id;add(li,btn('proj-name',p.name,'tab',{id:p.id}),el('span','w',p.quiet_words));ul.appendChild(li);});
+    q.appendChild(ul);facs.appendChild(q);}
+  if(!M.projects.length)facs.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
+  body.replaceChildren(needs,facs);
 }
 function drawProject(p){
   const head=$('ppHead');

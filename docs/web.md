@@ -15,7 +15,7 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked First up, and a `stopped` in the alert opens the stopped job on its project's tab |
 | The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
-| The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Right now, Since you last looked |
+| The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Your factories |
 | A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, in one column |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
@@ -51,7 +51,7 @@ The page is another window onto the one primary session, not a second first mate
 
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
 The page chooses no call and counts nothing itself, so it cannot disagree with the terminal; a worker whose checks are running counts as busy in the lamps and the counts, as it does on the worker's own row ([factory-pane.md](factory-pane.md)).
-It reads them again about every three seconds while visible. Opening the page is not a look for Since you last looked; pressing one of its buttons or keys on Factories is, as a key press in the pane is, and one on a project tab is not, as a key in a factory's own tab is not.
+It reads them again about every three seconds while visible. Opening the page is not a look for what each factory tells as new; pressing one of its buttons or keys on Factories is, as a key press in the pane is, and one on a project tab is not, as a key in a factory's own tab is not.
 A worker shows the step it is on and the one line it says about what it is doing, not a copy of its terminal.
 A long title shows on one or two lines; click it to read the rest, and a call's title shows whole once its card is open.
 A web address in a title or the feed reads as a short label, such as `the pull request`, that opens the link.
@@ -59,10 +59,11 @@ A web address in a title or the feed reads as a short label, such as `the pull r
 #### What the page lays out its own way
 
 - A project's tab has no list of workers beside its page: its Work list already names each worker with the step it is on, so a second list would only repeat it.
-  Watch this worker, on a busy job in Right now, opens that project's tab and marks the job in its Work list.
+  Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Work list.
 - A call on its own project's tab does not repeat the project's name beside its title.
 - Who steers has its switch on the project's own tab only.
-  A project's row in Right now says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
+  A project's head in Your factories says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
+- A project in Your factories sets Now, New and Next side by side with their words on the left, and on a narrow screen the words sit above what they lead; in New a change that went live links to the change and a report has a Read it button.
 - A project's conversation reads newest first.
 - The older questions shelf lists its questions open, each with its Bring back and No longer needed buttons, instead of one line that `enter` opens.
 - On a screen worked by touch, the key hints on the buttons and the line of keys at the bottom are not shown.
@@ -78,7 +79,7 @@ Only these change, and only where the pane or the strip wrote them; a job's titl
 | deferred | put off |
 | failed, in the alert | hit a problem |
 | factory | project |
-| NEEDS YOU, RIGHT NOW, SINCE YOU LAST LOOKED | Needs you, Right now, Since you last looked |
+| NEEDS YOU, YOUR FACTORIES, QUIET FOR NOW | Needs you, Your factories, Quiet for now |
 
 ### The buttons
 
@@ -91,7 +92,7 @@ Each button is one of the Factory pane's writing keys and sends the note that ke
 | Ask for changes | `c` |
 | Talk it through, Talk to this crew | `t`, typed |
 | This is already settled | `x` |
-| Read the report | `r` |
+| Read the report, Read it | `r` |
 | Who steers | `s` |
 | Bring back, No longer needed, then Send to Starship | `b`, `n`, then enter |
 

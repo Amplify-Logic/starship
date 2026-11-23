@@ -605,18 +605,27 @@ test_the_plain_screen_is_the_record_as_text() {
   assert_contains "$out" "       x  Already settled?" "a question offers already settled"
   assert_contains "$out" "       ✓ planning ••••• ▸ building •••••   checking ·····   ready to merge" "four steps"
   assert_contains "$out" "       running the search tests: 41 of 58 passed" "doing this minute"
-  has_line "$out" " ● Sharper cup photos waiting on Starship" "a blocked job"
+  has_line "$out" " YOUR FACTORIES new in the last 12 hours" "the factories part says since when New tells"
+  has_line "$out" " Sample Shop 1 needs you" "a factory's head says how many things there need you, and nothing of who steers"
+  has_line "$out" " now ● Search that forgives typos 47 min" "Now leads with what runs"
+  has_line "$out" " ● Sharper cup photos stopped: it is stuck, Starship is on it" "a blocked job"
   has_line "$out" " ● Print shipping labels waiting · tries again 09:30" "a waiting job"
-  has_line "$out" " next Gift wrap at checkout · then 2 more" "next in line"
-  has_line "$out" " Recipe Box idle since 06:00 · nothing queued" "an idle factory is one row, and one Starship steers says nothing of it"
-  has_line "$out" " 06:00 Recipe Box finished Calmer start screen is finished." "feed row"
-  has_line "$out" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "a PR ready row"
-  local feed
-  feed=$(printf '%s\n' "$out" | sed -n '/SINCE YOU LAST LOOKED/,$p')
-  assert_not_contains "$feed" "tries again" "a worker's pause reached the feed"
-  assert_not_contains "$feed" "Search recipes" "a worker's own question reached the feed"
-  assert_not_contains "$feed" "Gift cards" "a review finding Starship decides reached the feed"
-  assert_not_contains "$feed" "Sharper cup photos" "a blocker reached the feed"
+  has_line "$out" " next Gift wrap at checkout, then 2 more lined up" "next in line"
+  has_line "$out" " Recipe Box" "a factory with nothing that needs you has no badge"
+  has_line "$out" " ● Search recipes stopped: it asked Starship a question, Starship is on it" \
+    "a job stopped on its question shows in Now though nothing runs"
+  has_line "$out" " new 07:20 Failed: Garden reminders. Starship is on it." "New leads with its word and its time"
+  has_line "$out" " 06:11 PR ready: Share a garden page as a picture" "a PR ready row"
+  has_line "$out" " new today Went live: Calmer start screen" "a change that went live"
+  assert_not_contains "$out" "Finished: Calmer start screen" "work that went live is told twice"
+  assert_not_contains "$out" "is in." "a news row still ends in a tail"
+  local news
+  news=$(printf '%s\n' "$out" | grep -E '^ +(new +)?([0-9]{2}:[0-9]{2}|today) ')
+  assert_not_contains "$news" "tries again" "a worker's pause reached New"
+  assert_not_contains "$news" "Search recipes" "a worker's own question reached New"
+  assert_not_contains "$news" "Gift cards" "a review finding Starship decides reached New"
+  assert_not_contains "$news" "Sharper cup photos" "a blocker reached New"
+  assert_not_contains "$news" "needs your call" "a call of the owner's, which NEEDS YOU lists, reached New"
   assert_contains "$out" " ↑↓ move · 1/2/3 answer · x settled? · enter open · t talk (typed) · s who steers · q quit" "keys"
   assert_not_contains "$out" "first report" "a pane with work shows no first-run hint"
   out=$(python3 "$FACTORY" --plain --width 92 --factory sample-shop) || fail "--plain --factory failed"
@@ -685,11 +694,11 @@ test_the_whole_queue_is_counted_in_sight() {
     "6 0 2 1 3 1" "the queue's counts"
   assert_equals "$(q '[.factories[] | "\(.id)=\(.queue.total)/\(.queue.in_line)"] | join(" ")')" \
     "sample-shop=5/2 garden-journal=1/0 recipe-box=0/0" "each factory keeps its own count"
-  # The overview opens with three sentences rather than rows of counts; each
-  # factory says its own queue.
-  out=$(python3 "$FACTORY" --plain --width 92 --height 30) || fail "--plain failed"
+  # The overview opens with three sentences rather than rows of counts, and a
+  # factory is told by what runs, what is new and what is next, not by counters.
+  out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
   assert_not_contains "$out" "6 queued" "the overview still opens with the whole queue's counts"
-  has_line "$out" " Sample Shop 5 queued · 2 in line" "a factory at work does not say its own queue"
+  assert_not_contains "$out" "5 queued" "a factory on the overview still leads with its queue's counters"
   # In a narrow pane a factory page's queue line wraps between counts, never inside one.
   out=$(python3 "$FACTORY" --plain --width 66 --factory sample-shop) || fail "--plain failed"
   assert_equals "$(printf '%s\n' "$out" | sed -n '/WORK, IN ORDER/,$p' | sed -n 3,4p)" \
@@ -1056,27 +1065,64 @@ test_closed_work_reads_closed_and_only_delivered_work_reads_finished() {
       closed("shop-scout"; "Why the cart is slow"; {kind: "scout", completion: {verb: "reported", date: "2026-11-14"},
         report_path: "data/shop-scout/report.md"}),
       closed("shop-call"; "Free shipping over fifty"; {kind: "captain", hold_kind: "captain",
-        hold_reason: "Free shipping needs a floor."})]' "$FM_FACTORY_SNAPSHOT") || fail "could not close the work"
+        hold_reason: "Free shipping needs a floor.",
+        body_lines: ["Resolution recorded by fm-captain-hold.", "Decision digest: 0", "Resolution mode: answered", "",
+          "Captain decision:", "Yes, from fifty.", "", "Free shipping needs a floor."]})]' "$FM_FACTORY_SNAPSHOT") \
+    || fail "could not close the work"
   printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  # A change takes its real time from its PR's merge, a report from when it was written.
+  mkdir -p "$HOME_FIX/data/shop-scout"
+  printf '# Why the cart is slow\n' > "$HOME_FIX/data/shop-scout/report.md"
+  touch -t 202611140712 "$HOME_FIX/data/shop-scout/report.md"
+  cat > "$BINDIR/merged-at$CASE" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$FM_HOME/merged-reads"
+case "$1" in */pull/5) echo 2026-11-14T07:30:00Z ;; *) echo null ;; esac
+SH
+  chmod +x "$BINDIR/merged-at$CASE"
+  export FM_FACTORY_PR_MERGED="$BINDIR/merged-at$CASE"
   take_record
   assert_equals "$(q '[.feed[] | select(.job | test("^shop-(dropped|superseded|merged|local|scout|call)$")) | "\(.job)=\(.word)"] | sort | join(" ")')" \
     "shop-call=settled shop-dropped=closed shop-local=went live shop-merged=went live shop-scout=report ready shop-superseded=closed" \
     "the word each closed job reads"
-  out=$(python3 "$FACTORY" --plain --width 110) || fail "--plain failed"
-  has_line "$out" " today Sample Shop closed Stamp card at checkout was closed; no change or report on record." \
+  assert_equals "$(sort -u "$HOME_FIX/merged-reads" | tr '\n' ' ')" \
+    "https://example.invalid/r/pull/3 https://example.invalid/s/pull/5 " \
+    "only a change that went live through a PR has its merge time read"
+  assert_equals "$(q '[.feed[] | select(.job == "shop-merged" or .job == "shop-scout") | "\(.job)@\(.at)"] | join(" ")')" \
+    "shop-merged@$((NOW - 30 * 60)) shop-scout@$((NOW - 48 * 60))" "a change's and a report's real times"
+  assert_equals "$(q '.feed[] | select(.job == "shop-call") | .answer')" "Yes, from fifty." \
+    "a settled call keeps what the owner answered"
+  out=$(python3 "$FACTORY" --plain --width 110 --factory sample-shop) || fail "--plain failed"
+  has_line "$out" " today closed Stamp card at checkout was closed; no change or report on record." \
     "a job closed with nothing built does not read closed"
-  has_line "$out" " today Sample Shop closed Old checkout redesign was closed; no change or report on record." \
+  has_line "$out" " today closed Old checkout redesign was closed; no change or report on record." \
     "a job closed with its change unmerged does not read closed"
-  has_line "$out" " today Sample Shop settled Free shipping over fifty" "an answered call does not read settled"
-  has_line "$out" " today Sample Shop went live Faster cart" "a merged change does not read went live"
-  has_line "$out" " today Sample Shop went live Tidy the price list" "a local landing does not read went live"
-  has_line "$out" " today Sample Shop report ready Why the cart is slow" "a report does not read report ready"
+  has_line "$out" " today settled Free shipping over fifty. You answered: Yes, from fifty." \
+    "an answered call does not read settled, with what the owner answered"
+  has_line "$out" " 07:30 went live Faster cart" "a merged change does not read went live at its merge"
+  has_line "$out" " today went live Tidy the price list" "a local landing does not read went live"
+  has_line "$out" " 07:12 report ready Why the cart is slow" "a report does not read report ready when it was written"
   assert_not_contains "$(printf '%s\n' "$out" | grep -E 'Stamp card at checkout|Old checkout|Free shipping')" "went live" \
     "work that was only closed reads as live"
-  assert_not_contains "$(printf '%s\n' "$out" | sed -n '/SINCE YOU LAST LOOKED/,$p')" " is in." "a feed row still ends in a tail"
-  assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.feed.events[] | select(.text | test("Faster cart|Why the cart|Free shipping")) | "\(.word): \(.text) [\(.colour)]"] | sort | join("; ")')" \
-    "report ready: Why the cart is slow [green]; settled: Free shipping over fifty [mist]; went live: Faster cart [green]" \
-    "a second screen is not handed the same words"
+  # On the overview each factory tells what is new, newest first, led by what
+  # happened, with its time and the Read line of a report; the rest is on its page.
+  out=$(python3 "$FACTORY" --plain --width 110) || fail "--plain failed"
+  has_line "$out" " new 07:30 Went live: Faster cart" "New does not lead with the change that went live last"
+  has_line "$out" " 07:12 Report ready: Why the cart is slow" "a report ready row"
+  assert_equals "$(printf '%s\n' "$out" | grep -A1 'Report ready: Why the cart is slow' | sed -n 2p | tr -s ' ')" \
+    " r Read the report" "a report in New has no Read line"
+  has_line "$out" " and 2 more, on its own page" "New does not say how much more its factory's page tells"
+  assert_not_contains "$out" " is in." "a news row still ends in a tail"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "sample-shop") | [.new[:2][] | "\(.when) \(.label): \(.text) [\(.colour)] \(.pr // "-") \(.read)"] + [.more | tostring] | join("; ")')" \
+    "07:30 Went live: Faster cart [green] https://example.invalid/s/pull/5 false; 07:12 Report ready: Why the cart is slow [green] - true; 2" \
+    "a second screen is not handed the same New"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s"\n' "$HOME_FIX/read.args" > "$BINDIR/reader$CASE"
+  chmod +x "$BINDIR/reader$CASE"
+  assert_equals "$(printf '{"action":"read","factory":"sample-shop","job":"shop-scout"}' | FM_FACTORY_READ="$BINDIR/reader$CASE" python3 "$FACTORY" act)" \
+    '{"ok": true, "said": "Opening Why the cart is slow to read."}' "a second screen cannot read a report its New tells"
+  sleep 0.5
+  assert_equals "$(cat "$HOME_FIX/read.args" 2>/dev/null)" "shop-scout" "the report a second screen reads"
+  unset FM_FACTORY_PR_MERGED
   pass "factory feed: closed work reads closed; a merged change or a landing went live, a report is ready, an answered call is settled"
 }
 
@@ -1132,10 +1178,18 @@ PY
   assert_equals "$(q "[$shop | select(.id | test(\"shop-(why|images|coupons|banner|cart)\$\")) | \"\(.id)=\(.state)/\(.doing)\"] | sort | join(\" \")")" \
     "shop-banner=busy/null shop-cart=busy/null shop-coupons=needs a look/null shop-images=needs a look/null shop-why=with Starship/null" \
     "the record does not keep each state word, or names a step no worker named"
+  assert_equals "$(q '[.factories[].jobs[] | select(.look != null) | "\(.id)=\(.look)"] | sort | join(" ")')" \
+    "recipe-search=question shop-coupons=checks shop-images=stuck" \
+    "the record does not keep what each job that needs a look waits on Starship for"
   out=$(python3 "$FACTORY" --plain --width 100 --factory sample-shop) || fail "--plain --factory failed"
-  has_line "$out" " ● Sharper cup photos waiting on Starship" "a blocked job does not say it waits on Starship"
-  has_line "$out" " ● Gift cards at checkout waiting on Starship" "a question the checks put to Starship reads as the owner's"
-  has_line "$out" " · Why the cart is slow finished, its report is with Starship" "a finished report does not say it is finished"
+  has_line "$out" " ● Sharper cup photos stopped: it is stuck, Starship is on it" \
+    "a blocked job does not say it stopped and Starship is on it"
+  has_line "$out" " ● Gift cards at checkout stopped: its checks raised a question, Starship is on it" \
+    "a question the checks put to Starship reads as the owner's"
+  has_line "$out" " · Why the cart is slow finished, Starship is reading the report" \
+    "a finished report does not say Starship is reading it"
+  has_line "$(python3 "$FACTORY" --plain --width 100)" " ● Search recipes stopped: it asked Starship a question, Starship is on it" \
+    "a worker's own question to Starship does not say so"
   assert_equals "$(printf '%s\n' "$out" | grep -A2 -F 'Free shipping banner' | tail -n 1 | tr -s ' ')" " just started" \
     "a job two minutes old with no step named does not read just started"
   assert_equals "$(printf '%s\n' "$out" | grep -A2 -F 'Faster cart' | tail -n 1 | tr -s ' ')" " at work" \
@@ -1144,7 +1198,7 @@ PY
   assert_not_contains "$out" "no step reported" "a row still reads as if a step were missing"
   assert_equals "$(python3 "$FACTORY" --screen | jq -r '[.factories[] | select(.id == "sample-shop") | .page.jobs[]
       | select(.id | test("shop-(why|images|banner|cart)$")) | "\(.id)=\(.state): \(.words)"] | sort | join("; ")')" \
-    "shop-banner=busy: just started; shop-cart=busy: at work; shop-images=needs a look: waiting on Starship; shop-why=with Starship: finished, its report is with Starship" \
+    "shop-banner=busy: just started; shop-cart=busy: at work; shop-images=needs a look: stopped: it is stuck, Starship is on it; shop-why=with Starship: finished, Starship is reading the report" \
     "a second screen is not handed the same words beside each state"
   pass "factory pane: a job's row says whose turn it is, that finished work is finished, and that a new job just started"
 }
@@ -1417,9 +1471,9 @@ test_a_new_home_with_no_work_opens_empty() {
   pass "factory pane: a brand-new home with no work opens with a first-run hint and only working keys"
 }
 
-# A home that has done work, all of it landed, is idle but not new: RIGHT NOW
-# must not say there is no work yet, whether the landing is still in SINCE YOU
-# LAST LOOKED (today) or has dropped out of its 48-hour look-back (four days ago).
+# A home that has done work, all of it landed, is idle but not new: the overview
+# must not say there is no work yet, whether the landing is still in its
+# factory's New (today) or has dropped out of its 48-hour look-back (four days ago).
 test_an_idle_home_with_history_shows_no_first_run_hint() {
   local landed screen
   for landed in 2026-11-14 2026-11-10; do
@@ -1440,7 +1494,8 @@ PY
     assert_contains "$screen" "NOTHING NEEDS YOU" "an idle home has nothing waiting ($landed)"
     assert_not_contains "$screen" "first report" "an idle home with work landed $landed shows no first-run hint"
   done
-  assert_contains "$screen" "nothing new" "work landed four days ago is out of the feed"
+  assert_contains "$screen" "QUIET FOR NOW" "work landed four days ago still tells its factory as new"
+  has_line "$screen" " Shop Api Nothing is running, nothing lined up." "a quiet factory is not one line of words"
   pass "factory pane: an idle home with finished work shows no first-run hint"
 }
 
@@ -1570,12 +1625,13 @@ test_a_small_pane_scrolls_to_everything() {
   local dir="$TMP_ROOT/case$CASE" first expected
   export FM_FACTORY_TEST_SIZE=40x70
   # Before any key is pressed, so both read the same last look. The clock
-  # stands still and no look ever ends, so the feed's heading is LAST 12 HOURS.
+  # stands still and no look ever ends, so New starts 12 hours back. The last
+  # factory's New is the overview's last line.
   expected=$(python3 "$FACTORY" --plain --width 70 --height 40)
   drive_keys "SNAP:$dir/first"
   first=$(screen_of "$dir/first" 40 70)
   assert_equals "$first" "$expected" "the live pane does not draw what --plain --height prints"
-  assert_not_contains "$first" "LAST 12 HOURS" "the fixture is too small to need scrolling"
+  assert_not_contains "$first" "Went live: Calmer start screen" "the fixture is too small to need scrolling"
   # Highlighting the title with no space to break at opens its card, which
   # breaks that title across lines rather than clipping it.
   drive_keys DOWN "SNAP:$dir/opened"
@@ -1583,19 +1639,19 @@ test_a_small_pane_scrolls_to_everything() {
     | tr -d '\n')" "Rename-the-whole-catalogue-to-the-new-house-style-and-redirect-every-old-link" \
     "an opened card clipped a title with no space in it"
   drive_keys PGDN PGDN PGDN PGDN PGDN PGDN "SNAP:$dir/paged" PGUP PGUP PGUP PGUP PGUP PGUP "SNAP:$dir/back"
-  assert_contains "$(screen_of "$dir/paged" 40 70)" "LAST 12 HOURS" "page down never reached the feed"
+  assert_contains "$(screen_of "$dir/paged" 40 70)" "Went live: Calmer start screen" "page down never reached the end"
   assert_contains "$(screen_of "$dir/paged" 40 70)" "more lines above" "the screen does not say there is more above"
   assert_contains "$(screen_of "$dir/back" 40 70)" " NEEDS YOU" "page up never came back to the top"
   local wheel=() downs=()
   for _ in $(seq 1 20); do wheel+=(WHEELDOWN); done
   drive_keys "${wheel[@]}" CLICK "SNAP:$dir/wheeled"
-  assert_contains "$(screen_of "$dir/wheeled" 40 70)" "LAST 12 HOURS" "the mouse wheel never reached the feed"
+  assert_contains "$(screen_of "$dir/wheeled" 40 70)" "Went live: Calmer start screen" "the mouse wheel never reached the end"
   # The highlight moving past the bottom scrolls with it, and the arrows keep
   # scrolling once the last row is highlighted.
   for _ in $(seq 1 40); do downs+=(DOWN); done
   drive_keys "${downs[@]:0:10}" "SNAP:$dir/follow" "${downs[@]}" "SNAP:$dir/walked"
   assert_contains "$(screen_of "$dir/follow" 40 70)" " ▸ " "the highlight scrolled out of sight"
-  assert_contains "$(screen_of "$dir/walked" 40 70)" "LAST 12 HOURS" "the arrows never reached the feed"
+  assert_contains "$(screen_of "$dir/walked" 40 70)" "Went live: Calmer start screen" "the arrows never reached the end"
   unset FM_FACTORY_TEST_SIZE
   pass "factory pane: a small pane scrolls with page keys, the mouse wheel and the highlight"
 }
@@ -1739,7 +1795,7 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
   plain=$(python3 "$FACTORY" --plain --width 100) || fail "--plain failed"
   assert_equals "$(s .schema)" "fm-factory-screen.v1" "schema"
   assert_equals "$(s '[.sentences[] | "\(.to): \(.words)"] | join(" | ")')" \
-    "needs: 3 things need you. 1 older question is still open, and 1 more is put off to a date. | now: 2 jobs are running. 1 hit a problem, and Starship is on it. | feed: 1 change went live in the last 12 hours." \
+    "needs: 3 things need you. 1 older question is still open, and 1 more is put off to a date. | factories: 2 jobs are running. 1 hit a problem, and Starship is on it. | factories: 1 change went live in the last 12 hours." \
     "the three sentences, each with the part it speaks for"
   assert_contains "$(printf '%s\n' "$plain" | sed -n 1,5p | sed 's/Sat 08:00//' | tr '\n' ' ' | tr -s ' ')" \
     "$(s '[.sentences[].words] | join(" ")')" "the sentences are the plain screen's"
@@ -1762,18 +1818,21 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
     "a recommendation that is no option"
   assert_equals "$(s '.needs[2] | "\(.ask)|\(.pr)"')" \
     "Share a garden page as a picture is ready to merge|https://example.invalid/g/pull/12" "finished work names its change"
-  assert_equals "$(s '[.factories[] | "\(.name): \(.queue), \(.steered_by) steers"] | join("; ")')" \
-    "Sample Shop: 5 queued · 2 in line, Starship steers; Garden Journal: 1 queued · none in line, Starship steers; Recipe Box: idle since 06:00 · nothing queued, Starship steers" \
-    "each factory's row"
+  assert_equals "$(s '[.factories[] | "\(.name): \(.badge)|\(.now)|\(.quiet), \(.steered_by) steers"] | join("; ")')" \
+    "Sample Shop: 1 needs you||false, Starship steers; Garden Journal: 2 need you|Nothing is running.|false, Starship steers; Recipe Box: |Nothing is running.|false, Starship steers" \
+    "each factory's head and Now"
   assert_equals "$(s '.factories[0].jobs | map("\(.title)=\(.words)/\(.elapsed)/\(.step)") | join("; ")')" \
-    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=waiting on Starship//1; Gift cards at checkout=waiting on Starship//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
+    "Search that forgives typos=running the search tests: 41 of 58 passed/47 min/1; Pay with a saved card=waiting for the online checks/1 h 52 min/2; Sharper cup photos=stopped: it is stuck, Starship is on it//1; Gift cards at checkout=stopped: its checks raised a question, Starship is on it//1; Print shipping labels=waiting · tries again 09:30//1; Old banner swap=stopped//1" \
     "the overview's jobs: what a busy one is doing, how long, on which step; else its state"
   assert_equals "$(s '.steps | join(", ")')" "planning, building, checking, ready to merge" "the four steps"
-  assert_equals "$(s '.factories[0].next | "\(.title) then \(.then)"')" "Gift wrap at checkout then 2" "next in line"
-  assert_equals "$(s '.feed.title')" "LAST 12 HOURS" "the feed's heading"
-  assert_equals "$(s '.feed.events[-1] | "\(.when) \(.actor) \(.word) \(.text)"')" \
-    "07:20 Garden Journal failed Garden reminders failed; Starship is on it." "the feed's rows, oldest first, with their times"
-  has_line "$plain" " 06:11 Garden Journal PR ready Share a garden page as a picture has its PR ready." "that row on the plain screen"
+  assert_equals "$(s '.factories[0].next | "\(.title) then \(.then)\(.words)"')" \
+    "Gift wrap at checkout then 2, then 2 more lined up" "next in line"
+  has_line "$plain" " next $(s '.factories[0].next | "\(.title)\(.words)"')" "Next is the plain screen's"
+  assert_equals "$(s '.factories_heading')" "new in the last 12 hours" "since when New tells"
+  assert_equals "$(s '.factories[1].new | map("\(.when) \(.label): \(.text)") | join(" / ")')" \
+    "07:20 Failed: Garden reminders. Starship is on it. / 06:11 PR ready: Share a garden page as a picture" \
+    "a factory's New, newest first, with their times"
+  has_line "$plain" " 06:11 PR ready: Share a garden page as a picture" "that row on the plain screen"
   # A factory's page: its whole queue, the jobs it shows and folds, its rules.
   local page='.factories[0].page'
   plain=$(python3 "$FACTORY" --plain --width 100 --factory sample-shop) || fail "--plain --factory failed"
@@ -2908,7 +2967,7 @@ test_talking_never_changes_who_steers() {
     "Starship is told"
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "you" "the record shows who steers"
-  has_line "$(python3 "$FACTORY" --plain --width 92 --height 40)" " Sample Shop 5 queued · 2 in line you steer" \
+  has_line "$(python3 "$FACTORY" --plain --width 92 --height 40)" " Sample Shop 1 needs you · you steer" \
     "a factory the owner steers says so on its row"
   assert_equals "$(q '[.feed[] | select(.actor == "you") | .word][0]')" "took the helm" \
     "the change shows in the feed"
@@ -3657,8 +3716,8 @@ test_since_you_last_looked_follows_the_owners_last_look() {
   assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 12 * 3600)) 12 hours" \
     "with no look recorded the feed covers the last 12 hours"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " LAST 12 HOURS" "with no look recorded the feed says it is the last 12 hours"
-  assert_not_contains "$out" "SINCE YOU LAST LOOKED" "the feed claimed a look nobody recorded"
+  has_line "$out" " YOUR FACTORIES new in the last 12 hours" "with no look recorded New says it is the last 12 hours"
+  assert_not_contains "$out" "since you looked" "New claimed a look nobody recorded"
   # The owner presses a key at 06:30 and the pane keeps running.
   FM_FACTORY_NOW=$((NOW - 5400)) drive_keys DOWN "SH:cp '$HOME_FIX/state/factory/last-look' '$mark'"
   assert_equals "$(head -n 1 "$mark" 2>/dev/null)" "$((NOW - 5400))" "a key press records a look while the pane runs"
@@ -3666,9 +3725,9 @@ test_since_you_last_looked_follows_the_owners_last_look() {
   assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 5400)) last look" \
     "an hour and a half later the feed starts at the last look"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " SINCE YOU LAST LOOKED, 06:30" "the feed names when the owner last looked"
-  assert_not_contains "$out" "has its PR ready" "an outcome from before the last look is still listed"
-  has_line "$out" " 07:20 Garden Journal failed Garden reminders failed; Starship is on it." \
+  has_line "$out" " YOUR FACTORIES new since you looked at 06:30" "New names when the owner last looked"
+  assert_not_contains "$out" "PR ready: Share a garden page" "an outcome from before the last look is still listed"
+  has_line "$out" " new 07:20 Failed: Garden reminders. Starship is on it." \
     "an outcome after the last look is listed"
   # Coming back starts a new look; while it lasts the feed keeps its start.
   drive_keys DOWN
@@ -3682,8 +3741,8 @@ test_since_you_last_looked_follows_the_owners_last_look() {
   assert_equals "$(q '"\(.since_epoch) \(.since_from)"')" "$((NOW - 48 * 3600)) 48 hours" \
     "a look older than two days is capped at 48 hours"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " LAST 48 HOURS" "a capped feed says it is the last 48 hours"
-  pass "factory pane: SINCE YOU LAST LOOKED starts at the owner's last look, and says when it does not"
+  has_line "$out" " YOUR FACTORIES new in the last 48 hours" "a capped New says it is the last 48 hours"
+  pass "factory pane: New starts at the owner's last look, and says when it does not"
 }
 
 test_focusing_the_pane_for_a_while_is_a_look() {
@@ -3738,8 +3797,8 @@ test_focus_alone_keeps_a_look_going_for_15_minutes() {
     "after a day of focus the feed starts where focus stopped counting"
   stamp=$(python3 -c 'import sys, time; print(time.strftime("%H:%M", time.gmtime(int(sys.argv[1]))))' "$latest")
   out=$(FM_FACTORY_NOW=$((NOW + 8 * 3600)) python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  has_line "$out" " SINCE YOU LAST LOOKED, $stamp" "the heading moves on to where focus stopped counting"
-  assert_not_contains "$out" "07:20 Garden Journal failed" "an outcome from before the focus is still listed"
+  has_line "$out" " YOUR FACTORIES new since you looked at $stamp" "the heading moves on to where focus stopped counting"
+  assert_not_contains "$out" "Failed: Garden reminders" "an outcome from before the focus is still listed"
   pass "factory pane: focus alone keeps a look going for 15 minutes, then the heading moves on"
 }
 
@@ -3808,11 +3867,11 @@ test_read_shows_only_where_there_is_something_to_read() {
   assert_equals "$(q '.factories[].jobs[] | select(.id == "shop-search") | .read | join(",")')" "shop-search" \
     "a job with only a page of its own has something to read"
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_equals "$(printf '%s\n' "$out" | grep -c '^       r  Read the report$')" "2" \
-    "the search job and the finished work's job each show one Read line under the folded cards"
+  assert_equals "$(printf '%s\n' "$out" | grep -c '^             r  Read the report$')" "2" \
+    "the search job and the finished work's job each show one Read line in their factory's Now"
   assert_not_contains "$out" "r read" "the keys offered r on a question with nothing to read"
   out=$(python3 "$FACTORY" --plain --width 92 --item shop-provider) || fail "--plain --item failed"
-  assert_equals "$(printf '%s\n' "$out" | grep -c '^       r  Read the report$')" "3" \
+  assert_equals "$(printf '%s\n' "$out" | grep -c '^       r  Read the report$')" "1" \
     "the opened provider card did not show its Read line"
   assert_contains "$out" "r read" "the keys did not offer r on a question with something to read"
   pass "factory pane: Read shows only on a card or job with a report or page under the home's data/"
@@ -3838,7 +3897,7 @@ SH
   : > "$log"
   python3 "$FACTORY" --plain --width 100 --height 50 > "$screen" || fail "--plain failed"
   # The Read line under the search job, which only a click can reach.
-  line=$(awk '/Search that forgives typos/ { job = 1 } job && /^       r  Read the report$/ { print NR; exit }' "$screen")
+  line=$(awk '/Search that forgives typos/ { job = 1 } job && /^             r  Read the report$/ { print NR; exit }' "$screen")
   [ -n "$line" ] || fail "no Read line in sight to click"$'\n'"$(cat "$screen")"
   drive_keys $'\x1b[<0;12;'"$line"$'M\x1b[<0;12;'"$line"'m'
   assert_equals "$(cat "$log")" "shop-search" "a click on a job's Read line did not read that job"
@@ -3870,11 +3929,19 @@ SH
   take_record
   assert_equals "$(q '.factories[] | select(.id == "recipe-box") | .jobs[0] | "\(.state)|\(.read | join(","))"')" \
     "needs a look|recipe-search" "the idle factory's finished work has a report to read"
+  # A job in line is not drawn on the overview, so its report is not what r reads there.
+  mkdir -p "$HOME_FIX/data/shop-gift"
+  printf '# Gift wrap\n' > "$HOME_FIX/data/shop-gift/report.md"
+  take_record
   # The stops run: three calls, the older questions shelf, then Sample Shop, Garden Journal and Recipe Box.
-  drive_keys DOWN DOWN DOWN DOWN DOWN DOWN r
-  [ ! -s "$log" ] || fail "r on an idle factory read a job it draws no Read line for: $(cat "$log")"
+  drive_keys DOWN DOWN DOWN DOWN r
+  assert_equals "$(cat "$log")" "shop-search" "r on a factory read a job it draws no Read line for"
+  : > "$log"
   drive_keys DOWN DOWN DOWN DOWN DOWN r
   assert_equals "$(cat "$log")" "garden-share" "r on a factory did not read the job whose Read line it draws"
+  : > "$log"
+  drive_keys DOWN DOWN DOWN DOWN DOWN DOWN r
+  assert_equals "$(cat "$log")" "recipe-search" "r on a factory with nothing running did not read the stopped job its Now draws"
   : > "$log"
   drive_keys DOWN DOWN DOWN DOWN DOWN DOWN $'\r' r
   assert_equals "$(cat "$log")" "recipe-search" "r on a factory's own page did not read the job the page draws"
@@ -3963,8 +4030,8 @@ test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed() {
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
   assert_not_contains "$out" "Reminder pass 0600" "a finished pass is in the feed"
   has_line "$out" " ● Reminder pass 0715 failed" "a failed pass shows as usual"
-  has_line "$out" " 07:20 Garden Journal failed Reminder pass 0715 failed; Starship is on it." \
-    "a failed pass is in the feed"
+  has_line "$out" " 07:20 Failed: Reminder pass 0715. Starship is on it." \
+    "a failed pass is in its factory's New"
   pass "factory pane: routine runs fold into one line, and only a failed one reaches the feed"
 }
 
@@ -3984,7 +4051,8 @@ test_a_folded_pass_counts_as_idle_and_hides_no_other_card() {
     "the count line is not the overview's figures beside the folded pass"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" "Recipe Box   idle since 07:50" "the factory reads idle since its last pass, as the count line counts it"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "recipe-box") | .state')" "idle" \
+    "the factory reads idle since its last pass, as the count line counts it"
   has_line "$out" " ● Reminder pass 0715 failed" "the failed pass keeps its row while the next one runs folded"
   has_line "$out" " ↻ Reminder pass 4 runs today · last started 07:50 busy" "the routine line"
   assert_not_contains "$out" "Reminder pass 0750" "the running pass folds into the routine line"
@@ -4026,9 +4094,10 @@ test_without_a_routine_mark_every_run_shows_as_before() {
     "every pass reaches the feed"
   local out
   out=$(python3 "$FACTORY" --plain --width 92) || fail "--plain failed"
-  assert_contains "$out" "     ● Reminder pass 0750" "the running pass has its own card"
+  has_line "$out" " now ● Reminder pass 0750 10 min" "the running pass has its own card"
   assert_not_contains "$out" "↻" "a routine line without a mark"
-  has_line "$out" " 07:10 Garden Journal report ready Reminder pass 0700" "a finished pass is in the feed"
+  has_line "$(python3 "$FACTORY" --plain --width 92 --factory garden-journal)" " 07:10 report ready Reminder pass 0700" \
+    "a finished pass is in the feed"
   pass "factory pane: without a routine mark every run shows as before"
 }
 
