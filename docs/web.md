@@ -130,7 +130,7 @@ The Settings button opens one small panel:
 - **Text size**: five steps, Smaller to Largest, starting on Normal in the middle; the whole layout scales with it, except that below Normal the chat keeps Normal's width, so more words fit on a line.
 - **Style**: Calm, the default, in soft pastel tints with each section of a panel as its own card, or Lively, the same grouping with stronger colours; in Light both draw the header light too.
 - **Light or dark**: Auto follows the system setting; Light is a warm cream.
-- **Colours**: Default is the page's own colours; Sea, Green, Warm and Slate are ready-made schemes, picked with one click from their swatches, each with its own light and dark.
+- **Colours**: Default is the page's own colours; Sea, Green, Warm, Slate and Paper are ready-made schemes, picked with one click from their swatches, each with its own light and dark.
   Custom opens three colour pickers, Accent, Background and Text, that change the page as you pick; it starts from the colours on screen, and keeps its picks for light and for dark apart.
   Every other colour on the page, its panels, lines and status colours, follows from those three.
   Text and accent are always kept readable: a pick too faint against its background is moved to the nearest readable shade, a mid-grey background that no text reads well on is shown a shade lighter, and the panel says so.

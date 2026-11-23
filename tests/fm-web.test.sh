@@ -1242,7 +1242,7 @@ faint picks: nudged ink,accent, text #727272, accent #80761e
 faint picks now read at least: true
 wcag: black on white 21, #777777 on white 4.48, #767676 on white 4.54, AA 4.5
 mid-grey backgrounds: #707070 lifted reads, #727272 lifted reads, #747474 lifted reads, #7a7a7a reads
-schemes: Sea light reads, Sea dark reads, Green light reads, Green dark reads, Warm light reads, Warm dark reads, Slate light reads, Slate dark reads
+schemes: Sea light reads, Sea dark reads, Green light reads, Green dark reads, Warm light reads, Warm dark reads, Slate light reads, Slate dark reads, Paper light reads, Paper dark reads
 the style'"'"'s own colours on a dark custom background: work #a08c67 reads true, you #b67f75 reads true, done untouched true
 own colours: {"accent":"#47707f","bg":"#ece8e1","ink":"#2a2a28"}, scheme put back true' "the colours a browser keeps and what they put on the page"
   out=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/")

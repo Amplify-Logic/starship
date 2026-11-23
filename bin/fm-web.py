@@ -2720,7 +2720,9 @@ SETTINGS_JS = r"""
     warm: { name: 'Warm', light: { accent: '#a64e28', bg: '#f4e8de', ink: '#33241c' },
             dark: { accent: '#f0a47d', bg: '#1e1612', ink: '#f2e8e1' } },
     slate: { name: 'Slate', light: { accent: '#4a5ba8', bg: '#e6e8ee', ink: '#22252e' },
-             dark: { accent: '#a3b1f0', bg: '#14161c', ink: '#e6e8ef' } }
+             dark: { accent: '#a3b1f0', bg: '#14161c', ink: '#e6e8ef' } },
+    paper: { name: 'Paper', light: { accent: '#2f5f7a', bg: '#f4ecdc', ink: '#2b2620' },
+             dark: { accent: '#8fb8cf', bg: '#1f1c18', ink: '#ece3d1' } }
   };
   var COLOURS = ['default'].concat(Object.keys(SCHEMES), ['custom']);
   var PICKS = ['accent', 'bg', 'ink'];
