@@ -2889,7 +2889,10 @@ class View:
             talk["gone"] = True
         confirm = self.confirm
         if confirm is not None:
-            if confirm.get("older"):
+            if confirm.get("steer"):
+                fid = confirm["steer"]
+                gone = not self.has_factory(fid) or self.factory(fid)["steered_by"] == confirm["who"]
+            elif confirm.get("older"):
                 item = self.older_item(confirm["item"])
                 gone = item is None or item["asking"] != confirm["asked"]
             else:
@@ -3025,7 +3028,7 @@ class View:
         fac = self.factory(fid)
         if self.opened:
             page = self.page_parts(fac)
-            drawn = page["now"] + page["next"] + page["lately"]
+            drawn = page["now"] + page["lately"] + page["next"]
         else:
             drawn = self.overview_jobs(fac) + self.told(fac)["new"]
         job = next((j for j in drawn if j.get("read")), None)
@@ -3177,7 +3180,7 @@ class View:
             for line in rows:
                 line.band = band
             rows.append(row(width, [pad] + right))
-        confirm = self.confirm if self.confirm and self.confirm["item"] == need["id"] else None
+        confirm = self.confirm if self.confirm and self.confirm.get("item") == need["id"] else None
         chosen = (confirm or {}).get("option") or (self.answered_of(need) or {}).get("key")
         if question:
             if need.get("why"):
@@ -3682,6 +3685,8 @@ class View:
     def action_stop(self) -> Optional[Tuple[str, str]]:
         """The row an open confirmation or talk box is about, while the record still holds it."""
         if self.confirm is not None:
+            if self.confirm.get("steer"):
+                return ("factory", self.confirm["steer"])
             return ("old" if self.confirm.get("older") else "need", self.confirm["item"])
         if self.talking is not None and not self.talking.get("gone"):
             return self.talking.get("stop")
@@ -4796,7 +4801,10 @@ class Pane:
             return False
         if key == "enter":
             view.confirm = None
-            self.send(confirm["request_id"], confirm["body"], confirm["done"], confirm["mark"])
+            if confirm.get("steer"):
+                self.steer(confirm["steer"], confirm["who"])
+            else:
+                self.send(confirm["request_id"], confirm["body"], confirm["done"], confirm["mark"])
         elif key == "esc":
             view.confirm = None
             self.say("Not sent: %s was cancelled." % confirm["what"], "amber")
@@ -4940,7 +4948,6 @@ class Pane:
 
     def key(self, key: str) -> bool:
         view = self.view
-        now = now_epoch()
         # Scrolling only moves the view, so it never closes a box or a confirmation.
         if key in ("pgup", "pgdn"):
             view.scroll((1 if key == "pgdn" else -1) * max(view.page - 1, 1))
@@ -5061,19 +5068,30 @@ class Pane:
             if fid:
                 fac = view.factory(fid)
                 who = "Starship" if fac["steered_by"] == "you" else "you"
-                note = steer_note(fac, who, now)
-                ok, why = send_note(self.home, note["request_id"], note["body"])
-                if ok:
-                    record_steer(self.home, fid, who, now)
-                    fac["steered_by"] = who
-                    view.record["feed"].insert(0, {
-                        "at": now, "date": None, "actor": "you", "factory": fid, "job": None,
-                        "word": "took the helm" if who == "you" else "handed back", "text": note["done"]})
-                    self.say(note["done"], "cyan")
-                    refresh_in_background(self.home)
-                else:
-                    self.say("Who steers did not change: %s" % why, "red", 12)
+                view.confirm = {
+                    "steer": fid, "who": who, "what": "the change of who steers",
+                    "title": "Who steers · %s" % fac["name"],
+                    "prompt": ("You steer %s from now on, and Starship is told." if who == "you"
+                               else "Starship steers %s again, and is told.") % fac["name"]}
+                view.follow = True
         return True
+
+    def steer(self, fid: str, who: str) -> None:
+        """Change who steers factory <fid> to <who>: tell Starship, record it and show it in the feed."""
+        view, now = self.view, now_epoch()
+        fac = view.factory(fid)
+        note = steer_note(fac, who, now)
+        ok, why = send_note(self.home, note["request_id"], note["body"])
+        if not ok:
+            self.say("Who steers did not change: %s" % why, "red", 12)
+            return
+        record_steer(self.home, fid, who, now)
+        fac["steered_by"] = who
+        view.record["feed"].insert(0, {
+            "at": now, "date": None, "actor": "you", "factory": fid, "job": None,
+            "word": "took the helm" if who == "you" else "handed back", "text": note["done"]})
+        self.say(note["done"], "cyan")
+        refresh_in_background(self.home)
 
 
 KEYS = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left",

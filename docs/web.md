@@ -63,7 +63,7 @@ A web address in a title or the feed reads as a short label, such as `the pull r
 #### What the page lays out its own way
 
 - A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), with Needs you on the left and Happening now, Lately, Up next, Coming back, How this crew works and Conversation on the right on a wide screen, and all of them in that order in one scrolling column on a narrow one.
-  Up next names the first three in line and folds the rest behind `N more lined up` and the other counts, and Coming back names its first three and folds the rest behind `N more, the furthest on <date>`.
+  Up next names the first three in line and folds the rest behind `N more lined up` and the other counts, and Coming back lists every call put off to a date, each with its date.
 - A project's tab has no list of workers beside its page: its Happening now already names each worker with the step it is on, so a second list would only repeat it.
   Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Happening now.
 - A call on its own project's tab does not repeat the project's name beside its title.

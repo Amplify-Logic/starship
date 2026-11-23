@@ -2983,7 +2983,7 @@ test_the_highlight_and_open_boxes_follow_the_record() {
   write_registry
   write_world
   # Down past the three calls and the older questions shelf, onto the first factory.
-  drive_keys DOWN DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s
+  drive_keys DOWN DOWN DOWN DOWN "SH:$BINDIR/edit-world drop garden-share" s ENTER
   assert_equals "$(cut -f2- "$HOME_FIX/state/factory/steer.log")" "$(printf 'sample-shop\tyou')" \
     "s acts on the highlighted factory after a row above it left"
   reset_case
@@ -3010,7 +3010,13 @@ test_talking_never_changes_who_steers() {
   assert_contains "$(jq -r .body "$FM_FACTORY_TEST_NOTES")" "To the Sample Shop crew: Price on the first line (x2), as in data/shop/prices.md" \
     "talk body"
   assert_absent "$HOME_FIX/state/factory/steer.log" "talking changed who steers"
-  drive_keys DOWN DOWN DOWN DOWN s
+  local screen="$TMP_ROOT/case$CASE/screen" notes
+  notes=$(wc -l < "$FM_FACTORY_TEST_NOTES")
+  drive_keys DOWN DOWN DOWN DOWN s "SNAP:$screen" ESC
+  assert_contains "$(cat "$screen")" "You steer Sample Shop from now on, and Starship is told." "s asks first, naming the change"
+  assert_absent "$HOME_FIX/state/factory/steer.log" "esc on the confirmation changed who steers"
+  assert_equals "$(wc -l < "$FM_FACTORY_TEST_NOTES")" "$notes" "esc on the confirmation sent a note"
+  drive_keys DOWN DOWN DOWN DOWN s ENTER
   assert_contains "$(cat "$HOME_FIX/state/factory/steer.log")" "$(printf '\tsample-shop\tyou')" "s takes the helm"
   assert_contains "$(tail -n 1 "$FM_FACTORY_TEST_NOTES" | jq -r .body)" "I steer Sample Shop myself from now on." \
     "Starship is told"
@@ -3022,10 +3028,10 @@ test_talking_never_changes_who_steers() {
     "the change shows in the feed"
   assert_equals "$(q '[.factories[0].talk[] | "\(.who): \(.said)"] | join(" | ")')" \
     "you: Price on the first line (x2), as in data/shop/prices.md" "the talk keeps its history, word for word"
-  drive_keys DOWN DOWN DOWN DOWN s
+  drive_keys DOWN DOWN DOWN DOWN s ENTER
   take_record
   assert_equals "$(q '.factories[0].steered_by')" "Starship" "s hands it back"
-  pass "factory pane: talking goes to Starship and never moves the helm; only s does, both ways"
+  pass "factory pane: talking goes to Starship and never moves the helm; only s does, both ways, once enter confirms it"
 }
 
 # wav_seconds <file>: how long a recording is, proving it is a real WAV file
@@ -3998,6 +4004,41 @@ SH
   pass "factory pane: r on a factory reads only a job the screen draws a Read line for"
 }
 
+# A factory's page draws HAPPENING NOW, then LATELY, then UP NEXT, so with
+# nothing to read under HAPPENING NOW, r reads the report LATELY draws first,
+# not a report for a job still in line further down.
+test_r_on_a_factory_page_reads_in_the_order_it_draws() {
+  reset_case
+  write_registry
+  write_world
+  mkdir -p "$HOME_FIX/data/shop-gift"
+  printf '# Gift wrap\n' > "$HOME_FIX/data/shop-gift/report.md"
+  take_record
+  assert_equals "$(q '[.factories[] | select(.id == "sample-shop") | .jobs[] | select(.read | length > 0) | "\(.id)|\(.state)"] | join(",")')" \
+    "shop-gift|next" "only the job in line has a report"
+  python3 - "$FACTORY" "$TMP_ROOT/case$CASE/record.json" <<'PY' || fail "r on a factory's page read out of drawn order"
+import importlib.util, json, os, sys, time
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+spec = importlib.util.spec_from_file_location("fm_factory", sys.argv[1])
+fm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fm)
+record = json.load(open(sys.argv[2]))
+shop = next(f for f in record["factories"] if f["id"] == "sample-shop")
+shop["needs"] = []
+record["needs_you"] = [n for n in record["needs_you"] if n["factory"] != "sample-shop"]
+record["feed"].insert(0, {"at": int(time.time()) - 60, "date": None, "actor": "Sample Shop", "factory": "sample-shop",
+                          "job": "shop-scout", "word": "report ready", "text": "Why the cart is slow",
+                          "read": ["/reports/shop-scout.md"]})
+view = fm.View(record, opened="sample-shop")
+page = view.page_parts(shop)
+assert not any(j.get("read") for j in page["now"]), page["now"]
+assert [n["title"] for n in page["lately"] if n["read"]] == ["Why the cart is slow"], page["lately"]
+assert [j["id"] for j in page["next"] if j.get("read")] == ["shop-gift"], page["next"]
+assert view.readable() == ("Why the cart is slow", ["/reports/shop-scout.md"]), view.readable()
+PY
+  pass "factory pane: r on a factory's page reads the first report in the order the page draws"
+}
+
 # add_routine_runs [project]: a day of a recurring reminder pass in Garden
 # Journal, or the project named, each pass its own job: two finished with a
 # report, one failed, one running now.
@@ -4336,6 +4377,7 @@ fm_test_run \
   test_a_question_held_since_the_last_refresh_is_read_once \
   test_a_whole_refresh_reads_the_options_again_only_when_the_calls_moved \
   test_talking_never_changes_who_steers \
+  test_r_on_a_factory_page_reads_in_the_order_it_draws \
   test_enter_opens_the_factory_tab_with_its_live_workers \
   test_a_live_copy_shows_text_at_the_top_of_a_taller_pane \
   test_a_live_copy_follows_the_terminal_theme \

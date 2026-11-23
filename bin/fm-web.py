@@ -3741,9 +3741,9 @@ function newsLine(n,p){
   return line;
 }
 /* A list that names its first few and folds the rest behind one line. */
-function folded(words,items,key,cls){
+function folded(words,items,key){
   const d=el('details','quiet');d.dataset.fold=key;d.appendChild(el('summary','',words));
-  const ul=el('ul',cls||'list');items.forEach(li=>ul.appendChild(li));d.appendChild(ul);return d;
+  const ul=el('ul','list');items.forEach(li=>ul.appendChild(li));d.appendChild(ul);return d;
 }
 function drawHome(){
   $('clock').textContent=M.clock;
@@ -3835,9 +3835,7 @@ function drawProject(p){
   if(p.page.coming.length){
     const s=section('Coming back',null,p.page.coming.length+' put off to a date');s.dataset.sec='coming';
     const item=c=>{const li=el('li');add(li,el('span','when',c.when),el('span','t',c.title));return li;};
-    const ul=el('ul','dated');p.page.coming.slice(0,3).forEach(c=>ul.appendChild(item(c)));s.appendChild(ul);
-    const rest=p.page.coming.slice(3);
-    if(rest.length)s.appendChild(folded(rest.length+' more, the furthest on '+rest[rest.length-1].when,rest.map(item),'coming','dated'));
+    const ul=el('ul','dated');p.page.coming.forEach(c=>ul.appendChild(item(c)));s.appendChild(ul);
     right.push(s);
   }
   const works=section('How this crew works');works.dataset.sec='rules';

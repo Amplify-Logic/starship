@@ -180,7 +180,7 @@ Its page is on the left, under the three sentences so other factories' questions
 There is no line of queue counters, and a call with a card under this page's NEEDS YOU, or on its older questions shelf, is shown there only, never listed again under HAPPENING NOW or UP NEXT nor counted in a fold.
 `View.page_parts` owns that composition, and the screen's `page` carries it, so the web page tells the same facts.
 That folded count line can be highlighted like any other row: `enter` on it lists every job it stands for under it, each with its title and queue word, grouped by count, and `esc` hides the list again; while it is open, the keys line names `esc` only for hiding it.
-`r` reads the first thing with something to read under HAPPENING NOW, UP NEXT or LATELY, and `o` opens the first change in LATELY that went live.
+`r` reads the first thing with something to read under HAPPENING NOW, LATELY or UP NEXT, and `o` opens the first change in LATELY that went live.
 Its live workers are stacked on the right, at most four, each a read-only copy of that worker's own pane that refreshes every two seconds.
 Only a worker at work gets a copy: one that is `busy`, `with Starship`, `needs a look`, `failed`, or `decision for you`.
 A parked, held, queued, or finished job gets none, and a copy closes its own pane only once its job really ends: when the job is gone from the record or `finished`, landed, `ready to merge`, `stopped`, `no worker`, back in line (`next`, `later`), parked (`waiting`), or held (`on hold`, `on hold until <date>`, `waits on other work`); it stays open through `no reading`.
@@ -202,7 +202,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `r` | Read the highlighted call's report, or on a factory the first shown job's; a click on a `Read the report` line reads that one. |
 | `o` | On a factory on the overview, open the PR of the first change in its New that went live, in the browser (`FM_FACTORY_OPEN` stands in for the opener); a click on a `See what changed` line opens that one. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through: by voice where the desk voice is set up, typed otherwise. |
-| `s` | Switch who steers the highlighted factory, both ways. |
+| `s` | Switch who steers the highlighted factory, both ways, after `enter` confirms it. |
 | `b` `n` | On a listed older question, ask Starship to bring it back into NEEDS YOU, or say it is no longer needed, after `enter` confirms it. |
 | `esc` | Back, hide an opened folded count line or older questions shelf, or cancel a confirmation or the talk box. |
 | `q` | Quit. |
@@ -257,7 +257,7 @@ Starship re-reads the conversation and records it in that turn: it closes the ca
 The card reads `checking` while that request is pending and either it or the pane's settled note for the call is from since the call was last held; a press that finds a request from before the call was last held names its note after that time, so it always wakes Starship.
 
 Talking never changes who steers; only `s` does.
-`s` records the change in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed.
+`s` opens a confirmation naming the change; `enter` records it in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed, and `esc` changes nothing.
 Who steers is the owner's stated choice of whether he is working with that crew himself or Starship is; it grants Starship no new authority and takes none away.
 
 ## One record behind the screen
