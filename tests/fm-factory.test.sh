@@ -1894,6 +1894,10 @@ test_the_screen_as_data_says_what_the_plain_screen_shows() {
   assert_equals "$(s "$page.workers | map(.title) | join(\", \")")" \
     "Search that forgives typos, Pay with a saved card, Sharper cup photos, Gift cards at checkout" \
     "the jobs whose workers the factory tab shows"
+  # Watch this worker on the web page reads only a job whose worker has a live copy, as `follow` keeps one.
+  assert_equals "$(s '[.factories[0].jobs[] | "\(.title)=\(.live)"] | join("; ")')" \
+    "Search that forgives typos=true; Pay with a saved card=true; Sharper cup photos=true; Gift cards at checkout=true; Print shipping labels=false; Old banner swap=false" \
+    "each job says whether its worker has a live copy to watch"
   assert_equals "$(s "$page.rules | join(\" \")")" "English only. Anything that touches payments waits for your yes." "rules"
   assert_equals "$(s "$page.learned[0] | \"\(.when) \(.what)\"")" \
     "12 Nov Search results read better with the price on the first line." "a lesson"

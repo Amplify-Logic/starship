@@ -76,6 +76,13 @@ sends; a button on a project tab says `in_tab`, so it records no look, as a
 key in a factory's tab does not. The page decides and merges nothing. This process never takes the
 session lock, never drains wakes, and never writes backlog or fleet state.
 
+Watch this worker opens a read-only copy of one worker's screen: GET
+/api/worker?job=<id> reads it through `bin/fm-peek.sh`, the read the pane's
+live copy uses (Peeks, at most once a second per job), only for a job
+the screen marks `live` (live_jobs), and strips every terminal escape and
+control character (screen_lines); the page sets the lines as text, never as
+HTML. There is no path that types into a worker.
+
 The page's settings (text size, style, light or dark, colours, reduced
 motion, key hints, panel sizes) live in the browser's own storage; SETTINGS_JS owns them
 and is served as /settings.js. VIEW_JS, served as /view.js, owns the page's
@@ -142,6 +149,18 @@ ACT_TIMEOUT_SECONDS = 120
 ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "revive", "drop")
 ACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,199}$")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{7,80}$")
+# Watch this worker: a read-only copy of one worker's screen, read by
+# bin/fm-peek.sh as the pane's live copy reads it (fm-factory.py follow).
+WORKER_LINES = 80
+WORKER_LINE_MAX = 400
+WORKER_TTL_SECONDS = 1.0
+WORKER_TIMEOUT_SECONDS = 10
+# Every terminal escape a capture could carry: CSI (colours, cursor moves),
+# OSC (titles, links) and the string controls, then the two-byte escapes.
+TERMINAL_ESCAPE_RE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\|$)|[PX^_][^\x1b]*(?:\x1b\\|$)|[ -/]*[0-~])"
+    r"|\x9b[0-?]*[ -/]*[@-~]|\x9d[^\x07\x1b\x9c]*(?:\x07|\x9c|$)")
+TERMINAL_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 IMAGE_MAGIC = (
     (b"\x89PNG\r\n\x1a\n", "png"),
     (b"\xff\xd8\xff", "jpg"),
@@ -1597,6 +1616,8 @@ class FleetCache:
         self.refresh = threading.Lock()
         self.payload: Optional[Dict[str, Any]] = None
         self.fetched_at = 0.0
+        # The jobs whose worker may be watched, by id: {"title", "project"}.
+        self.live: Dict[str, Dict[str, str]] = {}
 
     def drop(self) -> None:
         with self.lock:
@@ -1607,7 +1628,8 @@ class FleetCache:
             with self.lock:
                 if self.payload is not None and time.monotonic() - self.fetched_at < MIRROR_TTL_SECONDS:
                     return self.payload
-            model = mirror_model(read_screen(self.home, self.root), read_fields(self.home, self.root))
+            screen = read_screen(self.home, self.root)
+            model = mirror_model(screen, read_fields(self.home, self.root))
             model["status"] = read_status_row(self.home, self.root)
             # The clock moves every minute; it is left out of the version so a
             # page redraws only when something it shows changed.
@@ -1617,8 +1639,85 @@ class FleetCache:
             payload = {"version": digest, "model": model}
             with self.lock:
                 self.payload = payload
+                self.live = live_jobs(screen)
                 self.fetched_at = time.monotonic()
             return payload
+
+    def watchable(self, job: str) -> Optional[Dict[str, str]]:
+        """The job's title and project when its worker may be watched now, else None."""
+        self.get()
+        with self.lock:
+            return self.live.get(job)
+
+
+def live_jobs(screen: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """The jobs the pane keeps a live copy of a worker for (the screen's `live`,
+    fm-factory.py MIRROR_KEEP), by id, wherever the screen lists them."""
+    found: Dict[str, Dict[str, str]] = {}
+    for factory in screen.get("factories") or []:
+        if not isinstance(factory, dict):
+            continue
+        page = factory.get("page") or {}
+        for job in (factory.get("jobs") or []) + (page.get("now") or []) + (page.get("workers") or []):
+            if isinstance(job, dict) and job.get("live") is True and isinstance(job.get("id"), str):
+                found.setdefault(job["id"], {"title": job.get("title") or "", "project": factory.get("id") or ""})
+    return found
+
+
+def screen_lines(raw: str) -> List[str]:
+    """A captured screen as plain lines: every terminal escape and control
+    character removed, tabs expanded, long lines cut, and the blank rows
+    below the text dropped, as the pane's live copy drops them."""
+    text = TERMINAL_ESCAPE_RE.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
+    lines = [TERMINAL_CONTROL_RE.sub("", line.expandtabs(8))[:WORKER_LINE_MAX] for line in text.split("\n")]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines[-WORKER_LINES:]
+
+
+def read_worker(home: Path, root: Path, job: str) -> Optional[List[str]]:
+    """One worker's screen through bin/fm-peek.sh, the read the pane's live
+    copy uses; None when it cannot be read. It reads, never types."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-peek.sh"), job, str(WORKER_LINES)],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=WORKER_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return screen_lines(proc.stdout.decode("utf-8", "replace"))
+
+
+class Peeks:
+    """One read of each watched worker's screen for every open page, at most
+    every WORKER_TTL_SECONDS."""
+
+    def __init__(self, home: Path, root: Path) -> None:
+        self.home = home
+        self.root = root
+        self.lock = threading.Lock()
+        self.reads: Dict[str, Tuple[float, Optional[List[str]]]] = {}
+        self.job_locks: Dict[str, threading.Lock] = {}
+
+    def get(self, job: str) -> Optional[List[str]]:
+        with self.lock:
+            gate = self.job_locks.setdefault(job, threading.Lock())
+        with gate:
+            with self.lock:
+                seen = self.reads.get(job)
+                if seen is not None and time.monotonic() - seen[0] < WORKER_TTL_SECONDS:
+                    return seen[1]
+            lines = read_worker(self.home, self.root, job)
+            with self.lock:
+                now = time.monotonic()
+                self.reads = {k: v for k, v in self.reads.items() if now - v[0] < 60}
+                self.reads[job] = (now, lines)
+            return lines
 
 
 def decode_act_body(body: bytes) -> Dict[str, Any]:
@@ -2026,6 +2125,7 @@ class WebState:
         self.csrf = derive(token, "csrf")
         self.transcript = TranscriptCache(home, link_files=True)
         self.mirror = FleetCache(home, root)
+        self.workers = Peeks(home, root)
         self.suggestion = suggestion_reader(home, root)
         self.send_lock = threading.Lock()
         self.act_lock = threading.Lock()
@@ -2212,8 +2312,28 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(200, {"version": since, "unchanged": True, "clock": payload["model"]["clock"]})
             else:
                 self._json(200, payload)
+        elif parsed.path == "/api/worker":
+            self._worker(query.get("job", [""])[0])
         else:
             self._text(404, "not found")
+
+    def _worker(self, job: str) -> None:
+        """Watch this worker: the worker's screen as plain lines, read-only.
+        Only a job the pane keeps a live copy for is read; any other says so."""
+        if not ACT_NAME_RE.match(job):
+            self._json(400, {"error": "that is not a job this page knows"})
+            return
+        try:
+            known = STATE.mirror.watchable(job)
+        except Exception as exc:  # the page says why instead of breaking
+            self._json(503, {"error": str(exc) or "the projects could not be read"})
+            return
+        if known is None:
+            self._json(200, {"job": job, "live": False})
+            return
+        lines = STATE.workers.get(job)
+        self._json(200, {"job": job, "live": True, "title": known["title"], "project": known["project"],
+                         "readable": lines is not None, "lines": lines or []})
 
     def _file(self, name: str) -> None:
         """One file a reply may link (home_file), read-only, in its own type."""
@@ -2418,6 +2538,15 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 /* A project's tab: its Needs you beside the rest on a wide screen (.pp-cols). */
 #project.main{display:block}
 #project .pane{height:100%;max-width:84rem;margin:0 auto}
+/* Watch this worker: its screen as plain text, read only. */
+#worker.main{display:block}
+#worker .pane{height:100%;max-width:84rem;margin:0 auto}
+.wk-body{flex:1;min-height:0;display:flex;flex-direction:column;padding:.625rem .875rem .875rem;gap:.5rem}
+.wk-note{font-size:.875rem;color:var(--ink-2)}
+.wk-note.bad{color:var(--you)}
+.wk-screen{flex:1;min-height:12rem;margin:0;overflow:auto;background:var(--code);color:var(--ink);border:1px solid var(--line);border-radius:.625rem;padding:.625rem .75rem;font:.8rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;tab-size:8}
+.wk-screen.ended{opacity:.6}
+.wk-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem .9rem;flex-wrap:wrap}
 .divider{position:relative;cursor:col-resize;border-radius:.375rem;touch-action:none;outline-offset:-2px}
 .divider::after{content:"";position:absolute;top:50%;left:50%;width:.25rem;height:2.75rem;transform:translate(-50%,-50%);border-radius:999px;background:var(--line);transition:background .15s}
 .divider:hover::after,.divider:focus-visible::after,.divider.drag::after{background:var(--here)}
@@ -2789,7 +2918,8 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .side-switch button{flex:1;border:0;background:none;padding:.45rem;font-size:.9rem;color:var(--ink-2)}
 .side-switch button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
 .main[data-side="chat"] #panelPane,.main[data-side="projects"] #chatPane{display:none}
-#project .pane{height:auto}
+#project .pane,#worker .pane{height:auto}
+.wk-screen{max-height:70dvh;font-size:.72rem}
 .pp-cols{grid-template-columns:minmax(0,1fr)}
 .dated li{grid-template-columns:5.6rem minmax(0,1fr)}
 .gear span{display:none}
@@ -3220,6 +3350,7 @@ VIEW_JS = r"""
   /* The one line of keys at the bottom, for what is open now. */
   function keyStrip(ctx) {
     if (ctx && ctx.confirming) return [['enter', 'send to Starship'], ['esc', 'cancel']];
+    if (ctx && ctx.watching) return [['esc', 'back to the project'], ['?', 'all keys']];
     return [['↑↓', 'move'], ['1/2/3', 'answer'], ['enter', 'open'], ['x', 'settled?'],
             ['k', 'keep'], ['t', 'talk'], ['r', 'read'], ['s', 'who steers'], ['?', 'all keys']];
   }
@@ -3227,9 +3358,16 @@ VIEW_JS = r"""
   /* What a key asks for, as the button it stands for would: the same act and
      the same names, or null for a key that does nothing here. ctx holds the
      highlighted call or project, whether a confirmation is open, the tab, the
-     tab's own project, and projectOf to find a call's project. */
+     tab's own project, projectOf to find a call's project, and whether a
+     worker's screen is being watched, which only reads: there esc goes back
+     and no key is sent on to anything. */
   function keyAction(key, ctx) {
     ctx = ctx || {};
+    if (ctx.watching) {
+      if (key === 'Escape') return { act: 'back' };
+      if (key === '?') return { act: 'keys' };
+      return null;
+    }
     if (ctx.confirming) {
       if (key === 'Enter') return { act: 'send' };
       if (key === 'Escape') return { act: 'cancel' };
@@ -3518,6 +3656,8 @@ document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.
 let M=null,mver='',mirrorError='';
 let tab=decodeURIComponent(location.hash.slice(1))||'home';
 let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selJob=null,hl=null,tabShown=null;
+/* Watch this worker: the job whose screen is open ({factory,job}), its last reading, and the read loop's turn. */
+let watching=null,wread=null,wturn=0;
 const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
 const oldSent={};  /* older questions this page asked about that the record does not show yet */
 const full=new Set();    /* the clipped titles opened in full */
@@ -3881,7 +4021,58 @@ function drawProject(p){
 function drawKeys(){
   const strip=$('keystrip');strip.replaceChildren();
   strip.classList.toggle('confirming',!!confirming);
-  V.keyStrip({confirming:!!confirming}).forEach(k=>{const s=el('span');add(s,el('kbd','',k[0]),document.createTextNode(k[1]));strip.appendChild(s);});
+  V.keyStrip({confirming:!!confirming,watching:!!watching}).forEach(k=>{const s=el('span');add(s,el('kbd','',k[0]),document.createTextNode(k[1]));strip.appendChild(s);});
+}
+/* Watch this worker: a read-only copy of its screen, read again every two seconds. */
+function drawWorker(){
+  const p=project(watching.factory);
+  const job=p?p.jobs.concat(p.page.now).find(j=>j.id===watching.job):null;
+  const title=(wread&&wread.title)||(job&&job.title)||watching.job;
+  const head=el('div','wk-head');
+  const top=el('div','pp-title');
+  add(top,el('h2','',V.plainText(title)),el('p','about','A live copy of this worker\'s screen, read only'+(p?', in '+p.name:'')+'.'));
+  add(head,top,btn('btn','Back to '+(p?p.name:'the project'),'back',null,'Escape'));
+  $('wkHead').replaceChildren(head);
+  const note=$('wkNote'),pre=$('wkScreen');
+  let words='Reading the screen\u2026',bad=false;
+  if(wread&&!wread.live){words='This worker is not at work now, so its screen no longer changes. Talking to it stays with Talk to this crew.';}
+  else if(wread&&wread.error){words=wread.error;bad=true;}
+  else if(wread&&!wread.readable){words='This worker\'s screen cannot be read right now. The page tries again every two seconds.';bad=true;}
+  else if(wread){words='Updates every two seconds. You can read here; nothing you do here reaches the worker.';}
+  note.textContent=words;note.classList.toggle('bad',bad);
+  pre.classList.toggle('ended',!!(wread&&!wread.live));
+  const text=wread&&wread.lines?wread.lines.join('\n'):'';
+  if(wread&&wread.lines&&pre.textContent!==text){
+    /* Follow the end of the screen unless the owner scrolled up to read. */
+    const atEnd=pre.scrollHeight-pre.scrollTop-pre.clientHeight<24;
+    pre.textContent=text;
+    if(atEnd)pre.scrollTop=pre.scrollHeight;
+  }
+}
+async function readWorker(turn){
+  if(!watching||turn!==wturn)return;
+  const job=watching.job;
+  let got=null;
+  try{
+    const r=await fetch('/api/worker?job='+encodeURIComponent(job),{credentials:'same-origin'});
+    const data=await r.json();
+    got=r.ok?data:{live:true,error:data.error||'The screen could not be read.',lines:wread&&wread.lines};
+  }catch(e){got={live:true,error:'The page lost its connection.',lines:wread&&wread.lines};}
+  if(!watching||turn!==wturn||watching.job!==job)return;
+  /* A finished worker keeps its last screen, faded. */
+  if(!got.live&&wread&&wread.lines)got.lines=wread.lines;
+  wread=got;draw();
+  if(got.live)setTimeout(()=>readWorker(turn),document.hidden?10000:2000);
+}
+function watch(factory,job){
+  watching={factory:factory,job:job};wread=null;wturn++;tab=factory;selJob=job;hl=null;confirming=null;talk=null;
+  history.replaceState(null,'','#'+encodeURIComponent(tab));
+  $('wkScreen').textContent='';draw();readWorker(wturn);
+}
+function unwatch(){
+  const w=watching;watching=null;wread=null;wturn++;if(!w)return;
+  tab=w.factory;selJob=w.job;draw();
+  const card=document.querySelector('#ppBody [data-job="'+CSS.escape(w.job)+'"]');if(card)card.scrollIntoView({block:'center'});
 }
 function draw(){
   if(!M)return;
@@ -3892,9 +4083,11 @@ function draw(){
   if(hl&&!(hl.kind==='call'?need(hl.id):project(hl.id)))hl=null;
   const active=document.activeElement&&document.activeElement.id==='talkText'?document.activeElement:null;
   const caret=active?[active.selectionStart,active.selectionEnd]:null;
+  if(watching&&tab!==watching.factory)watching=null;
   drawTabs();drawBand();drawStatus();
-  $('home').hidden=tab!=='home';$('project').hidden=tab==='home';$('sideSwitch').hidden=tab!=='home';
-  if(tab==='home')drawHome();else drawProject(project(tab));
+  $('home').hidden=tab!=='home';$('project').hidden=tab==='home'||!!watching;$('worker').hidden=!watching;
+  $('sideSwitch').hidden=tab!=='home';
+  if(watching)drawWorker();else if(tab==='home')drawHome();else drawProject(project(tab));
   drawKeys();
   document.querySelectorAll('.clip').forEach(e=>e.classList.toggle('over',e.classList.contains('full')||e.scrollHeight>e.clientHeight+1));
   if(caret){const area=$('talkText');if(area){area.focus();area.setSelectionRange(caret[0],caret[1]);}}
@@ -3954,7 +4147,7 @@ function move(step){
 function keyContext(){
   const lit=hl||(openCall&&need(openCall)&&(tab==='home'||need(openCall).project===tab)?{kind:'call',id:openCall}:null);
   return {hl:lit?{kind:lit.kind,call:lit.kind==='call'?need(lit.id):null,project:lit.kind==='project'?project(lit.id):null}:null,
-    confirming:!!confirming,tab:tab,project:tab!=='home'?project(tab):null,projectOf:id=>project(id)};
+    confirming:!!confirming,tab:tab,project:tab!=='home'?project(tab):null,projectOf:id=>project(id),watching:!!watching};
 }
 function openKeys(open){$('keysSheet').hidden=!open;$('keysBtn').setAttribute('aria-expanded',String(open));
   if(open)$('keysClose').focus();}
@@ -3962,10 +4155,13 @@ function openKeys(open){$('keysSheet').hidden=!open;$('keysBtn').setAttribute('a
 /* One way in for a click and a key: both name an act and its names. */
 async function perform(d){
   let answer=null;
+  /* Going anywhere else from the band closes the worker's screen. */
+  if(watching&&['call','goto','stopped'].includes(d.act)){watching=null;wread=null;wturn++;}
   switch(d.act){
-    case 'tab':tab=d.id;selJob=null;hl=null;if(talk&&talk.kind==='talk')talk=null;
+    case 'tab':if(watching){watching=null;wread=null;wturn++;}
+      tab=d.id;selJob=null;hl=null;if(talk&&talk.kind==='talk')talk=null;
       history.replaceState(null,'',tab==='home'?location.pathname:'#'+encodeURIComponent(tab));draw();return;
-    case 'back':if(tab!=='home')perform({act:'tab',id:'home'});return;
+    case 'back':if(watching){unwatch();return;}if(tab!=='home')perform({act:'tab',id:'home'});return;
     case 'move':move(Number(d.step));return;
     case 'keys':openKeys($('keysSheet').hidden);return;
     case 'hint':say(false,d.text);draw();return;
@@ -3985,8 +4181,7 @@ async function perform(d){
     case 'talk':confirming=null;talk=d.kind==='talk'?{kind:'talk',factory:d.factory,text:''}:{kind:d.kind,item:d.id,text:''};
       if(d.id){openCall=d.id;chose=true;}
       draw();{const area=$('talkText');if(area)area.focus();}return;
-    case 'watch':tab=d.factory;selJob=d.job;hl=null;draw();
-      {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
+    case 'watch':watch(d.factory,d.job);return;
     case 'send':{
       const c=confirming;
       if(c&&c.steer){answer=await act(V.noteFor({act:'steer',factory:c.steer.factory,who:c.steer.who},null));
@@ -4273,6 +4468,10 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 </main>
 <main class="main" id="project" hidden>
 <section class="pane" aria-label="Project"><div class="pp-head" id="ppHead"></div><div class="p-body" id="ppBody"></div></section>
+</main>
+<main class="main" id="worker" hidden>
+<section class="pane" aria-label="Worker's screen"><div class="pp-head" id="wkHead"></div>
+<div class="wk-body"><p class="wk-note" id="wkNote" role="status"></p><pre class="wk-screen" id="wkScreen" tabindex="0" aria-label="The worker's screen, read only"></pre></div></section>
 </main>
 <footer class="keystrip" id="keystrip" aria-label="Keys"></footer>
 </div>

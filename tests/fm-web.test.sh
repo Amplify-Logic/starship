@@ -64,7 +64,9 @@ transcript() {  # <home> [<session>]
 # when there is one, after reading); fm-factory.py prints the home's
 # screen.json for --screen (and fails when there is none) and, for act, records
 # the action it was handed in act.asks and answers with the home's act.answer;
-# fm-bridge-strip.sh prints the home's strip.fields, or fails without one.
+# fm-bridge-strip.sh prints the home's strip.fields, or fails without one;
+# fm-peek.sh records what it was asked in peek.asks and prints the home's
+# peek/<job>, or fails without one.
 make_root() {  # <home> <desk-voice-output-line>
   local home=$1 root=$1/root
   mkdir -p "$root/bin"
@@ -101,7 +103,12 @@ SH
 [ "$*" = "--replay --own" ] || { echo "stand-in fm-status-bar.sh: unexpected arguments: $*" >&2; exit 2; }
 cat "$FM_HOME/status.row" 2>/dev/null
 SH
-  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh"
+  cat > "$root/bin/fm-peek.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s FM_HOME=%s\n' "$*" "$FM_HOME" >> "$FM_HOME/peek.asks"
+cat "$FM_HOME/peek/$1" 2>/dev/null
+SH
+  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh" "$root/bin/fm-peek.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 if [ "\$*" = suggestion ]; then
@@ -893,6 +900,46 @@ PY
   pass "the mirror shows the terminal's status bar row word for word"
 }
 
+# Watch this worker opens a read-only live copy of that worker's screen. On
+# 2026-11-24 the button only opened the project's tab, so the owner could never
+# watch the worker at all. The screen is read by bin/fm-peek.sh, only for a job
+# the pane keeps a live copy for, as plain text with every terminal escape
+# removed; the page has no way to type into it.
+test_watch_this_worker_shows_its_live_screen_read_only() {
+  local home out port cookie
+  home=$(make_home watch)
+  write_screen "$home"
+  # The busy worker has a live copy; finished work does not.
+  jq '(.factories[0].jobs[0].live, .factories[0].page.now[0].live) = true | .factories[0].jobs[1].live = false' \
+    "$home/screen.json" > "$home/screen.next" && mv "$home/screen.next" "$home/screen.json"
+  mkdir -p "$home/peek"
+  printf '\033[1m╭─ Garden\033[0m\r\n│ \033[32m⏺\033[0m Sorting\tthe queue\n│ <b>not a tag</b> \033]0;a title\007\033]8;;https://example.invalid\033\\a link\033]8;;\033\\\033(B\007\n\n\n' \
+    > "$home/peek/garden-water"
+  printf 'finished\n' > "$home/peek/garden-share"
+  serve_home "$home"
+  port=$(cat "$home/web.test-port") cookie=$(cat "$home/web.test-cookie")
+  worker() { curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/worker?job=$1"; }
+  out=$(worker garden-water)
+  assert_equals "$(jq -c '{live, title, project, readable}' <<<"$out")" \
+    '{"live":true,"title":"Garden reminders","project":"garden-journal","readable":true}' "a busy worker can be watched"
+  assert_equals "$(jq -r '.lines | join("\n")' <<<"$out")" "$(printf '╭─ Garden\n│ ⏺ Sorting     the queue\n│ <b>not a tag</b> a link')" \
+    "its screen is plain text: escapes and controls gone, tabs expanded, the blank rows below dropped, markup left as words"
+  assert_equals "$(cat "$home/peek.asks")" "garden-water 80 FM_HOME=$home" "the screen is read through fm-peek.sh for that one job"
+  assert_equals "$(worker garden-share | jq -c .)" '{"job":"garden-share","live":false}' \
+    "a job with no live copy says so"
+  assert_equals "$(grep -c garden-share "$home/peek.asks")" "0" "a job with no live copy is never read"
+  rm "$home/peek/garden-water"
+  sleep 1.2   # one read serves every page for a second
+  assert_equals "$(worker garden-water | jq -c '{live, readable, lines}')" '{"live":true,"readable":false,"lines":[]}' \
+    "a screen that cannot be read says so"
+  assert_equals "$(status_of --cookie "$cookie" "http://127.0.0.1:$port/api/worker?job=../x")" "400" "only a job name is read"
+  assert_equals "$(status_of "http://127.0.0.1:$port/api/worker?job=garden-water")" "403" "the screen needs the sign-in"
+  assert_equals "$(status_of --cookie "$cookie" -X POST -H "X-FM-CSRF: $(csrf_of "$port" "$cookie")" -d '{}' \
+    "http://127.0.0.1:$port/api/worker?job=garden-water")" "404" \
+    "nothing can be sent to the worker's screen"
+  pass "Watch this worker shows that worker's live screen as plain text, read only"
+}
+
 # Claude's suggested next prompt reaches the page while the first mate is
 # ready, read through bin/fm-desk-voice.sh suggestion; while it works there is
 # none and the screen is not read.
@@ -1450,6 +1497,7 @@ out.push('on finished work: ' + keys(on({ kind: 'call', call: done }), ['k', 'c'
 out.push('on a project: ' + keys(on({ kind: 'project', project: garden }), ['Enter', 't', 'r', 's']));
 out.push('while confirming: ' + keys(on(null, { confirming: true }), ['Enter', 'Escape', 'x', 'Tab', 'Shift', 'ArrowDown', 'End', ' ']));
 out.push('anywhere: ' + keys(on(null), ['ArrowDown', 'ArrowUp', '?', 'Escape', 'q']));
+out.push('watching a worker: ' + keys(on({ kind: 'call', call: ask }, { watching: true }), ['Escape', '?', '1', 'k', 't', 's', 'Enter', 'ArrowDown']));
 out.push('notes: ' + JSON.stringify([
   V.noteFor({ act: 'answer', option: '2' }, ask), V.noteFor({ act: 'keep' }, done), V.noteFor({ act: 'settled' }, ask),
   V.noteFor({ act: 'steer', factory: 'garden', who: 'you' }), V.noteFor({ act: 'read', id: 'garden-chart' }),
@@ -1457,7 +1505,8 @@ out.push('notes: ' + JSON.stringify([
   V.noteFor({ act: 'talk', kind: 'talk', factory: 'garden', text: 'hello' })]));
 out.push('look: ' + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'home')) + ' '
   + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'garden')));
-out.push('strip: ' + V.keyStrip({}).map(k => k.join(' ')).join(', ') + ' | ' + V.keyStrip({ confirming: true }).map(k => k.join(' ')).join(', '));
+out.push('strip: ' + V.keyStrip({}).map(k => k.join(' ')).join(', ') + ' | ' + V.keyStrip({ confirming: true }).map(k => k.join(' ')).join(', ')
+  + ' | ' + V.keyStrip({ watching: true }).map(k => k.join(' ')).join(', '));
 const card = { project_name: 'Garden Journal', waited: 'waiting 3 h' };
 const mates = { project_name: 'Garden Journal', waited: 'ready 53 min', mate: 'near' };
 out.push('beside a call: ' + [V.callMeta(card, false, false), V.callMeta(card, true, false), V.callMeta(card, true, true),
@@ -1476,9 +1525,10 @@ on finished work: k={"act":"keep","id":"garden-share"} c={"act":"talk","kind":"c
 on a project: Enter={"act":"tab","id":"garden"} t={"act":"talk","kind":"talk","factory":"garden"} r={"act":"read","factory":"garden","job":"g1"} s={"act":"steer","factory":"garden","who":"you"}
 while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","text":"Press enter to send it to Starship, or esc to cancel."} Tab=null Shift=null ArrowDown=null End=null  =null
 anywhere: ArrowDown={"act":"move","step":1} ArrowUp={"act":"move","step":-1} ?={"act":"keys"} Escape={"act":"back"} q=null
+watching a worker: Escape={"act":"back"} ?={"act":"keys"} 1=null k=null t=null s=null Enter=null ArrowDown=null
 notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"},{"action":"keep","item":"garden-share","asking":"1794636660"},{"action":"settled","item":"garden-chart","asking":"1794632400"},{"action":"steer","factory":"garden","who":"you"},{"action":"read","item":"garden-chart"},{"action":"discuss","item":"garden-chart","asking":"1794632400","text":"why?"},{"action":"talk","factory":"garden","text":"hello"}]
 look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}
-strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel
+strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel | esc back to the project, ? all keys
 beside a call: Garden Journal · waiting 3 h | waiting 3 h | checking | Garden Journal, from near · ready 53 min | from near · ready 53 min | -
 tabs: 0 252 88 0 250' \
     "how the page folds the chat, labels links, what each key sends, what sits beside a call and where the tabs scroll to"
@@ -1584,6 +1634,7 @@ test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words
 test_the_mirror_shows_the_terminal_status_row
+test_watch_this_worker_shows_its_live_screen_read_only
 test_the_suggested_prompt_reaches_the_page_only_while_ready
 test_the_server_restarts_itself_when_its_code_changes
 test_a_suggestion_read_from_before_a_turn_is_dropped
