@@ -605,6 +605,10 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
   return 1
 }
 
+# The line closing a record's decision, so a reader can tell it from the
+# task's earlier body kept under the record once blank lines are dropped.
+DECISION_END='End of decision.'
+
 # The record's label is what keeps an evidence-backed reconciliation from
 # reading as the captain's own words. Reconciliation modes carry evidence;
 # answer modes carry what the captain said.
@@ -612,8 +616,8 @@ resolution_block() {  # <mode>
   local label='Captain decision:' outcome=''
   case "$1" in reconciled|forge-closed|forge-released) label='Reconciliation evidence:' ;; esac
   [ -z "$DECISION_SUMMARY" ] || [ "$label" != 'Captain decision:' ] || outcome="Outcome: $DECISION_SUMMARY"$'\n'
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n%s\n%s\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$outcome" "$label" "$DECISION_TEXT"
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n%s\n%s\n%s\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$outcome" "$label" "$DECISION_TEXT" "$DECISION_END"
 }
 
 # Durable state of one captain call: an active captain hold (annotations

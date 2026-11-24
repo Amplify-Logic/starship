@@ -1202,7 +1202,11 @@ test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds() {
       call("shop-kept"; "Keep the old receipts?";
         ["Resolution recorded by fm-captain-hold.", "Decision digest: 3", "Resolution mode: answered",
          "Captain decision:", "Keep them for a year.",
-         "Captain hold origin: tg-123", "Original task notes here."])]' "$FM_FACTORY_SNAPSHOT") \
+         "Captain hold origin: tg-123", "Original task notes here."]),
+      call("shop-till"; "Replace the old till?";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 4", "Resolution mode: answered",
+         "Captain decision:", "Replace it in March.", "Reason: the card reader fails weekly.", "End of decision.",
+         "Captain hold origin: tg-456", "Old till notes."])]' "$FM_FACTORY_SNAPSHOT") \
     || fail "could not settle the calls"
   printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
   take_record
@@ -1214,6 +1218,9 @@ test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds() {
   assert_equals "$(q '.feed[] | select(.job == "shop-kept") | "\(.text)|\(.answer)|\(.detail.answer)"')" \
     "Keep the old receipts? Keep them for a year.|Keep them for a year.|Keep them for a year." \
     "the task body kept under a resolution record reads as part of the owner's answer"
+  assert_equals "$(q '.feed[] | select(.job == "shop-till") | "\(.text)|\(.detail.answer)"')" \
+    "Replace the old till? Replace it in March.|Replace it in March. Reason: the card reader fails weekly." \
+    "an answer of more than one line does not unfold whole, or unfolds the task body kept under it"
   assert_equals "$(q '.feed[] | select(.job == "shop-wrap") | .detail | "\(.question)|\(.answer)"')" \
     "Gift wrap for every order (wrap A recommended, B plain, C none)|Owner 14 Nov 07:10: \"yes, but only for orders over twenty. Ask again after the holiday rush\". Noted for the spring list (see the note)." \
     "the whole question and answer are not kept to unfold"

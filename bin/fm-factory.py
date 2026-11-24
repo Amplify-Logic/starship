@@ -1584,14 +1584,18 @@ def routine_lines(factory: Dict[str, Any],
 RESOLUTION_RE = re.compile(r"^Resolution recorded by fm-(captain|decision)-hold\.$")
 
 
+DECISION_END = "End of decision."   # the line bin/fm-captain-hold.sh closes a record's decision with
+
+
 def answer_record(lines: Any) -> Dict[str, str]:
     """What the owner answered on a closed call, from its resolution record (bin/fm-captain-hold.sh answer).
 
     Records are prepended, so the newest is the first, up to the next one; only
     its words under `Captain decision:` are the owner's, and a captured answer
     names the option as it was shown, which reads better than its key. `words`
-    is the decision's first line, since the task's earlier body follows the
-    record with nothing between them once read, `outcome` the one-sentence
+    is the decision up to the `End of decision.` line closing it, or its first
+    line in a record written before that line, since the task's earlier body
+    follows the record with nothing between them once read, `outcome` the one-sentence
     `Outcome:` line written with it (`answer --summary`), or nothing when none
     was. A closure on evidence is no answer of the owner's, so it has neither.
     """
@@ -1606,13 +1610,15 @@ def answer_record(lines: Any) -> Dict[str, str]:
     at = record.index("Captain decision:")
     outcome = next((line.split(":", 1)[1] for line in record[:at] if line.startswith("Outcome:")), "")
     block = [line for line in record[at + 1:] if line]
+    closed = DECISION_END in block
+    block = block[:block.index(DECISION_END)] if closed else block
     shown = next((line.split(":", 1)[1] for line in block if line.startswith("Answer as shown to the captain:")), None)
     if shown is not None:
         words = shown.rsplit(" -> ", 1)[0]
     elif any(line.startswith("Captain answered this") for line in block):
         words = next((line.split(":", 1)[1] for line in block if line.startswith("Answer:")), "")
     else:
-        words = block[0] if block else ""
+        words = " ".join(block if closed else block[:1])
     return {"words": card_words(words.strip()), "outcome": tidy(card_words(outcome.strip()), 240)}
 
 
