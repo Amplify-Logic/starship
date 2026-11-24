@@ -55,8 +55,8 @@ test_an_offer_is_shown_and_a_do_it_tap_sends_one_line_naming_it() {
   assert_equals "offer: $id" "$out" "the offer prints its id"
   assert_equals open "$(state_of "$fx")" "a new offer waits for a tap"
   assert_equals "Turn on Do Not Disturb until 6pm" "$(offer "$fx" status | jq -r .text)" "the line is shown"
-  assert_equals 600 "$(stat -f '%Lp' "$fx/home/state/desk-voice/offer.json" 2>/dev/null \
-    || stat -c '%a' "$fx/home/state/desk-voice/offer.json")" "the record is the owner's alone"
+  assert_equals 600 "$(stat -c '%a' "$fx/home/state/desk-voice/offer.json" 2>/dev/null \
+    || stat -f '%Lp' "$fx/home/state/desk-voice/offer.json")" "the record is the owner's alone"
 
   out=$(offer "$fx" answer "do" "$id") || fail "the Do it tap failed"
   assert_equals "sent: herdr 1-1" "$out" "the tap prints the send's outcome"

@@ -1207,8 +1207,7 @@ test_a_reply_keeps_its_caption_and_full_text_for_the_eye() {
     "--caption prints the caption kept with the reply"
   assert_equals "$(cat "$home/full")" "$(speak "$home" --full "$number")" \
     "--full prints the whole reply kept with it"
-  [ "$(stat -f '%Lp' "$TMP_ROOT/captions/state/speak-history/$number/caption" 2>/dev/null \
-      || stat -c '%a' "$TMP_ROOT/captions/state/speak-history/$number/caption")" = 600 ] \
+  [ "$(mode_of "$TMP_ROOT/captions/state/speak-history/$number/caption")" = 600 ] \
     || fail "fm-speak: the caption must be readable only by its owner"
 
   speak "$home" "A plain line." >/dev/null 2>&1 || fail "fm-speak: a plain line failed"
