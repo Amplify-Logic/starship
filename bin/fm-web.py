@@ -2416,7 +2416,8 @@ class WebHandler(BaseHTTPRequestHandler):
             except OSError as exc:
                 payload = {"state": "offline", "items": [], "note": f"cannot read the conversation: {exc}", "version": "error"}
             payload["suggestion"] = STATE.suggestion(payload.get("state") == "idle")
-            payload["prompt"] = STATE.prompt(payload.get("state") in ("busy", "idle"), str(payload.get("version")))
+            payload["prompt"] = STATE.prompt(payload.get("state") in ("busy", "idle") or lock_pid_alive(STATE.home) is True,
+                                             str(payload.get("version")))
             payload["build"] = BUILD
             since = query.get("since", [""])[0]
             if since and since == payload.get("version"):
@@ -3763,7 +3764,7 @@ function setState(state,started){
 }
 /* The header says the first mate waits for a person while the terminal does. */
 function drawAsking(){
-  const ask=chatState!=='offline'&&V.promptWords(asking);
+  const ask=V.promptWords(asking);
   stateEl.classList.toggle('asks',!!ask);
   if(ask)stateEl.querySelector('.label').textContent='Waiting for you';
 }
