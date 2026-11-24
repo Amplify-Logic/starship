@@ -1198,7 +1198,11 @@ test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds() {
       call("shop-named"; "Keep the shop name for the new country site?";
         ["Resolution recorded by fm-captain-hold.", "Decision digest: 2", "Resolution mode: answered",
          "Outcome: The new country site keeps the shop name.", "",
-         "Captain decision:", "Owner 14 Nov 07:20: \"keep it, people know it\"."])]' "$FM_FACTORY_SNAPSHOT") \
+         "Captain decision:", "Owner 14 Nov 07:20: \"keep it, people know it\"."]),
+      call("shop-kept"; "Keep the old receipts?";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 3", "Resolution mode: answered",
+         "Captain decision:", "Keep them for a year.",
+         "Captain hold origin: tg-123", "Original task notes here."])]' "$FM_FACTORY_SNAPSHOT") \
     || fail "could not settle the calls"
   printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
   take_record
@@ -1207,6 +1211,9 @@ test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds() {
     "a settled call without an outcome does not read as its short question and the answer's first sentence"
   assert_equals "$(q '.feed[] | select(.job == "shop-named") | .text')" "The new country site keeps the shop name." \
     "a settled call does not read as the outcome recorded with its answer"
+  assert_equals "$(q '.feed[] | select(.job == "shop-kept") | "\(.text)|\(.answer)|\(.detail.answer)"')" \
+    "Keep the old receipts? Keep them for a year.|Keep them for a year.|Keep them for a year." \
+    "the task body kept under a resolution record reads as part of the owner's answer"
   assert_equals "$(q '.feed[] | select(.job == "shop-wrap") | .detail | "\(.question)|\(.answer)"')" \
     "Gift wrap for every order (wrap A recommended, B plain, C none)|Owner 14 Nov 07:10: \"yes, but only for orders over twenty. Ask again after the holiday rush\". Noted for the spring list (see the note)." \
     "the whole question and answer are not kept to unfold"

@@ -1590,9 +1590,10 @@ def answer_record(lines: Any) -> Dict[str, str]:
     Records are prepended, so the newest is the first, up to the next one; only
     its words under `Captain decision:` are the owner's, and a captured answer
     names the option as it was shown, which reads better than its key. `words`
-    is that answer in full, `outcome` the one-sentence `Outcome:` line written
-    with it (`answer --summary`), or nothing when none was. A closure on
-    evidence is no answer of the owner's, so it has neither.
+    is the decision's first line, since the task's earlier body follows the
+    record with nothing between them once read, `outcome` the one-sentence
+    `Outcome:` line written with it (`answer --summary`), or nothing when none
+    was. A closure on evidence is no answer of the owner's, so it has neither.
     """
     lines = [str(line).strip() for line in lines or [] if isinstance(line, str)]
     starts = [i for i, line in enumerate(lines) if RESOLUTION_RE.match(line)]
@@ -1611,7 +1612,7 @@ def answer_record(lines: Any) -> Dict[str, str]:
     elif any(line.startswith("Captain answered this") for line in block):
         words = next((line.split(":", 1)[1] for line in block if line.startswith("Answer:")), "")
     else:
-        words = " ".join(block)
+        words = block[0] if block else ""
     return {"words": card_words(words.strip()), "outcome": tidy(card_words(outcome.strip()), 240)}
 
 
