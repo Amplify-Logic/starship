@@ -16,7 +16,7 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Your factories |
-| A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, with Needs you beside the rest on a wide screen and one column on a narrow one |
+| A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, with Needs you beside the rest on a wide screen and one column on a narrow one; a worker's screen opens from Watch this worker |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
 On Control Centre the line between Firstmate and Factories can be dragged to make either one as big as you like, as in the terminal; a double-click puts it back, and with the line focused the arrow keys move it.
@@ -57,7 +57,7 @@ The page is another window onto the one primary session, not a second first mate
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
 The page chooses no call and counts nothing itself, so it cannot disagree with the terminal; a worker whose checks are running counts as busy in the lamps and the counts, as it does on the worker's own row ([factory-pane.md](factory-pane.md)).
 It reads them again about every three seconds while visible. Opening the page is not a look for what each factory tells as new; pressing one of its buttons or keys on Factories is, as a key press in the pane is, and one on a project tab is not, as a key in a factory's own tab is not.
-A worker shows the step it is on and the one line it says about what it is doing, not a copy of its terminal.
+A worker shows the step it is on and the one line it says about what it is doing; [Watch this worker](#watch-this-worker) opens a copy of its screen.
 A long title shows on one or two lines; click it to read the rest, and a call's title shows whole once its card is open.
 A web address in a title or the feed reads as a short label, such as `the pull request`, that opens the link.
 
@@ -96,7 +96,7 @@ On a wide screen Needs you sits on the left and the rest on the right; on a narr
 
 - A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), split into two columns on a wide screen as [its own page](#how-factories-works) describes; Up next folds the rest behind `N more lined up` and the other counts.
 - A project's tab has no list of workers beside its page: its Happening now already names each worker with the step it is on, so a second list would only repeat it.
-  Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Happening now.
+  Watch this worker, on a busy job in Your factories, opens that worker's screen ([Watch this worker](#watch-this-worker)).
 - A call on its own project's tab does not repeat the project's name beside its title.
 - Who steers is a quiet line under Talk to this crew on the project's own tab only, such as `Starship steers this factory. Change`; Change, or the `s` key there, asks first and changes it only on Change who steers, as an answer takes two clicks.
   A project's head in Your factories says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
@@ -117,6 +117,15 @@ Only these change, and only where the pane or the strip wrote them; a job's titl
 | failed, in the alert | hit a problem |
 | factory | project |
 | NEEDS YOU, YOUR FACTORIES, QUIET FOR NOW | Needs you, Your factories, Quiet for now |
+
+### Watch this worker
+
+Watch this worker opens a live copy of that worker's screen, the same screen the factory tab in the terminal shows beside the factory's page.
+It fills the project's tab, under the worker's title, and reads the screen again every two seconds while the page is visible.
+The copy follows the end of the screen, unless you scroll up to read, and scrolls inside its own box on a narrow screen.
+It is read only: the screen is plain text, without the terminal's colours, and no key, click or typing reaches the worker; talking to the worker stays with Talk to this crew.
+When the job stops being at work, the copy keeps its last screen, faded, and says so; a screen that cannot be read for a moment says so and is tried again.
+Back to the project, or `esc`, returns to the project's tab with the job marked in its Happening now.
 
 ### The buttons
 
@@ -224,6 +233,12 @@ A message typed while the first mate works is recorded in the transcript's own q
 `bin/fm-web.sh conversation` prints the same reading once as versioned JSON, with no server, for another page that shows a home's conversation; [direct-line.md](direct-line.md) lists the other reads such a page uses.
 The page polls about every one and a half seconds while visible.
 
+## How it reads a worker's screen
+
+Watch this worker reads the screen through `bin/fm-peek.sh`, the read the terminal's live copy of a worker uses, at most once a second for every open page.
+It reads only a job that `bin/fm-factory.py --screen` marks `live`, the jobs the terminal keeps a live copy of a worker for; any other job is not read and the page says the worker is not at work.
+Every terminal escape and control character is taken out on the server, and the page puts the text in as text, never as HTML.
+
 ## How sending works
 
 Every message goes through `bin/fm-desk-voice.sh send --source web`, the desk floater's own path.
@@ -251,6 +266,7 @@ Typing into the chat turns line breaks into spaces, as it does for the floater; 
 - Pages carry a strict Content-Security-Policy with per-response nonces, and all transcript text is escaped before Markdown is applied; only http and https links become links.
 - The request log, `state/web/web.log`, records paths only, never the token or a code, and leaves out the page's successful polls.
 - A button reaches the same guards as a send, then only `bin/fm-factory.py act`, with only the fields the pane's keys take; the server writes no note itself.
+- A worker's screen is served only with the cookie, only for a job name the screen marks `live`, and only by a GET that reads through `bin/fm-peek.sh`; nothing on the page can type into a worker.
 - The server never takes the session lock, never drains wakes, and never writes backlog or fleet state.
   Its only writes are its own `state/web/` files, one-time codes included, and the pasted images; a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
 
@@ -263,7 +279,7 @@ To revoke access, stop the server, delete `state/web/token`, and start it again;
 - Local only.
   There is no remote access and no account system; the bridge view is the phone surface.
 - No voice inside the page; the desk floater floats over it and keeps that role, and the talk boxes take typed words.
-- A worker's own terminal is not shown; the terminal's factory tab keeps that.
+- A worker's screen shows as plain text, without its colours, and only to read.
 - The page shows recent conversation, not the full history of a long session.
 - A permission prompt or question dialog in the terminal is not shown as a control; a message sent meanwhile goes to the mailbox.
 - The suggested next message shows only for a first mate running in tmux or Herdr, whose screen reads keep the grey styling that tells a suggestion from typed words.

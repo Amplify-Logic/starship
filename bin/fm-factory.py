@@ -3952,7 +3952,9 @@ def screen(view: View) -> Dict[str, Any]:
         return {"id": job["id"], "title": job["title"], "state": job["state"], "words": words, "elapsed": elapsed,
                 "colour": colour, "quiet": quiet,
                 "step": STEPS.index(job["step"]) if job.get("step") in STEPS else 1,
-                "queue": job_queue_words(job) if job.get("queue") else "", "read": bool(job.get("read"))}
+                "queue": job_queue_words(job) if job.get("queue") else "", "read": bool(job.get("read")),
+                # Whether a live copy of its worker can be watched (MIRROR_KEEP), as `follow` keeps one.
+                "live": bool(job.get("started")) and job["state"] in MIRROR_KEEP}
 
     def shelves_of(fid: Optional[str]) -> Dict[str, Any]:
         words = shelves(record, view.now(), fid)
