@@ -61,6 +61,38 @@ A worker shows the step it is on and the one line it says about what it is doing
 A long title shows on one or two lines; click it to read the rest, and a call's title shows whole once its card is open.
 A web address in a title or the feed reads as a short label, such as `the pull request`, that opens the link.
 
+### How Factories works
+
+Factories, on the right of Control Centre, is "each project's work, start to finish": everything every worker does, told in plain words, so you can see where things stand without reading a terminal.
+It shows the same facts as the terminal's Factory pane, which [factory-pane.md](factory-pane.md#the-overview) describes in full; this is how to read it on the page.
+
+- **The three sentences** at the top say what stands: how many things need you, how many jobs are running and whether one hit a problem, and what went live or came back as a report since you last looked.
+  Each sentence is a link to the part it speaks for.
+- **Needs you** lists every call waiting on you, across all projects, most pressing first; the first card is marked First up.
+  A question shows its answers and Starship's suggestion; finished work ready for your OK shows its In short, See it, You need to and Risk lines beside Keep it.
+  Under the cards, two shelves hold the calls that wait on you but are not listed: older questions that waited two weeks with no date, each with Bring back and No longer needed, and the calls coming back on a date.
+- **Your factories** tells each project in one block, as three rows:
+  - **Now** is what is running or stopped there: each busy job with its title, how long it has run, the four steps (planning, building, checking, ready for your OK) and what its worker is doing this minute, or `Nothing is running.`
+  - **New** is what came out since you last looked, newest first, each with its time: went live, report ready, settled with what you answered, ready for your OK, finished, hit a problem or closed. A change that went live links to the change, and a report has a Read it button.
+  - **Next** is the first job in line and how many more are lined up after it, or that it starts once you answer.
+
+  A project with nothing for you, nothing running and nothing new folds into one line under Quiet for now.
+- **New starts where you last looked**: pressing a button or key on Factories counts as a look, while just opening the page does not, so New keeps what you have not seen yet.
+
+Pick a project's tab in the header, or highlight the project in Your factories and press `enter`, to open **its own page**, which reads top to bottom:
+
+- its name, who steers it, what it is for, and one sentence of how it stands;
+- **Needs you**, only this project's calls, with its own older questions shelf;
+- **Happening now**, its Now, with each worker and the step it is on;
+- **Lately**, its New, the eight newest outcomes;
+- **Up next**, the first three in line with the rest folded into counts;
+- **Coming back**, every call put off to a date, each with its date;
+- **How this crew works**, the rules this project's crew follows and what it learned lately;
+- **Conversation**, what you and Starship said about it, newest first, with Talk to this crew to add to it.
+
+On a wide screen Needs you sits on the left and the rest on the right; on a narrow one it is all one column in that order.
+`esc` goes back to Control Centre.
+
 #### What the page lays out its own way
 
 - A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), with Needs you on the left and Happening now, Lately, Up next, Coming back, How this crew works and Conversation on the right on a wide screen, and all of them in that order in one scrolling column on a narrow one.

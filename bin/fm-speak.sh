@@ -10,6 +10,7 @@
 #   fm-speak.sh --replay <number>
 #   fm-speak.sh --mute | --unmute | --muted
 #   fm-speak.sh --enabled
+#   fm-speak.sh --check
 #   fm-speak.sh --volume [<percent>]
 #   fm-speak.sh --help
 #
@@ -157,6 +158,20 @@
 #             reader of config/speak: the reply-speak Stop hook stands down,
 #             and the session-start digest prints the spoken-lead reply rules
 #             (docs/desk-voice-replies.md), only when it prints `enabled`.
+#   --check   says whether a spoken line would actually be heard here, and
+#             if not, exactly which piece is missing, without speaking
+#             anything. It reads config/speak, resolves the shaper the way a
+#             spoken line does, runs the shaper's `--dry-run` on a plain check
+#             sentence under the same register bound, and looks for a speaker
+#             (`say`, or a Deepgram key) and, when `voice` is set, that voice.
+#             Every piece that is missing gets its own `missing:` line on
+#             stdout: spoken replies not turned on, no shaper line, a shaper
+#             path that is not there or not executable, a dry run that fails
+#             (with the shaper's own last error line, such as a Python too old
+#             for it), refuses or prints nothing, no speaker, or a voice this
+#             machine does not have. With nothing missing it prints one
+#             `ready:` line. Exit 0 when ready, 1 when anything is missing.
+#             It never takes the playback lock and never reaches a speaker.
 #   --volume [<percent>]
 #             prints, or with a whole number from 0 to 200 sets, the spoken
 #             voice's level as a percentage of the Mac's own output volume: 100
@@ -1000,6 +1015,63 @@ apply_desk_register() {
   export GLASSES_ANNOUNCE_CONFIG="$DESK_REGISTER"
 }
 
+# Resolve SHAPER: FM_SPEAK_SHAPER, else config/speak `shaper`, a relative path
+# being relative to the home. False when neither names one.
+resolve_shaper() {
+  [ -z "$SHAPER" ] || return 0
+  case "$CFG_SHAPER" in
+    '') return 1 ;;
+    /*) SHAPER=$CFG_SHAPER ;;
+    *) SHAPER="$FM_HOME/$CFG_SHAPER" ;;
+  esac
+}
+
+# --check (see the header): name every piece that would keep a spoken line
+# from being heard, without speaking. Returns 0 when nothing is missing.
+check_voice() {
+  local found=0 outfile errfile status last
+  missing() { printf 'missing: %s\n' "$*"; found=1; }
+  load_config
+  [ "$CFG_ENABLED" = true ] \
+    || missing "spoken replies are not turned on: add 'enabled = true' to config/speak"
+  if ! resolve_shaper; then
+    missing "no shaper line: add 'shaper = <path>' to config/speak, naming the spoken-voice shaper"
+  elif [ ! -e "$SHAPER" ]; then
+    missing "the shaper named in config/speak is not there: $SHAPER"
+  elif [ ! -f "$SHAPER" ] || [ ! -x "$SHAPER" ]; then
+    missing "the shaper is not executable: $SHAPER (chmod +x it)"
+  else
+    apply_desk_register
+    outfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-out.XXXXXX") || die "cannot create a temporary file"
+    errfile=$(mktemp "${TMPDIR:-/tmp}/fm-speak-err.XXXXXX") || {
+      rm -f "$outfile"
+      die "cannot create a temporary file"
+    }
+    status=0
+    run_bounded "$SHAPER_TIMEOUT" "$outfile" "$errfile" "$SHAPER" --dry-run "Starship voice check." || status=$?
+    last=$(awk 'NF { line = $0 } END { print substr(line, 1, 200) }' "$errfile")
+    if [ "$RUN_BOUNDED_TIMED_OUT" = true ]; then
+      missing "the shaper's dry run did not answer within ${SHAPER_TIMEOUT}s (FM_SPEAK_SHAPER_TIMEOUT): $SHAPER"
+    elif [ "$status" -eq 2 ]; then
+      missing "the shaper refused a plain check sentence (exit 2)${last:+: $last}"
+    elif [ "$status" -ne 0 ]; then
+      missing "the shaper's dry run failed (exit $status)${last:+: $last}"
+    elif ! grep -q '[^[:space:]]' "$outfile"; then
+      missing "the shaper's dry run printed nothing to speak: $SHAPER"
+    fi
+    rm -f "$outfile" "$errfile"
+  fi
+  if [ -n "$CFG_VOICE" ] && [ -x "$SAY_BIN" ]; then
+    start_voice_list
+    configured_voice_is_available \
+      || missing "say has no voice named '$CFG_VOICE' (the voice line in config/speak)"
+  elif [ ! -x "$SAY_BIN" ] && [ -z "$(fm_deepgram_api_key)" ]; then
+    missing "no speaker: no say at $SAY_BIN and no DEEPGRAM_API_KEY in the environment or .env"
+  fi
+  [ "$found" = 0 ] || return 1
+  printf 'ready: spoken replies are on and the shaper runs\n'
+}
+
 # --- main -------------------------------------------------------------------
 
 # Speak a kept reply again, as it was shaped. Honours opt-in and mute exactly
@@ -1047,9 +1119,9 @@ main() {
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
-      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--enabled|--volume)
+      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--enabled|--check|--volume)
         [ -z "$control" ] || {
-          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --enabled, --volume"
+          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --enabled, --check, --volume"
           exit 1
         }
         control=${1#--}
@@ -1088,6 +1160,11 @@ main() {
         load_config
         if [ "$CFG_ENABLED" = true ]; then printf 'enabled\n'; else printf 'disabled\n'; fi
         ;;
+      check)
+        require_positive_int FM_SPEAK_SHAPER_TIMEOUT "$SHAPER_TIMEOUT"
+        check_voice
+        exit
+        ;;
       volume)
         if [ "$VOLUME_SET" = true ]; then
           set_volume "$VOLUME_ARG"
@@ -1124,13 +1201,8 @@ main() {
     muted=true
   fi
 
-  if [ -z "$SHAPER" ]; then
-    case "$CFG_SHAPER" in
-      '') die "no spoken register owner: add 'shaper = <path>' to config/speak (or set FM_SPEAK_SHAPER)" ;;
-      /*) SHAPER=$CFG_SHAPER ;;
-      *) SHAPER="$FM_HOME/$CFG_SHAPER" ;;
-    esac
-  fi
+  resolve_shaper \
+    || die "no spoken register owner: add 'shaper = <path>' to config/speak (or set FM_SPEAK_SHAPER)"
   [ -x "$SHAPER" ] \
     || die "the spoken register owner is not executable: $SHAPER (check 'shaper' in config/speak or FM_SPEAK_SHAPER)"
   if [ "$dry_run" != true ] && [ "$muted" != true ]; then
