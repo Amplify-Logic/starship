@@ -112,15 +112,15 @@ final class FloaterLayoutTests: XCTestCase {
         mover.bubble = bubbleWindow
         mover.window = floater
 
-        mover.fit(card)
+        mover.fit(card, statusShown: false)
         mover.fitBubble(bubble)
         XCTAssertEqual(floater.frame, parkedFrame, "the reply moved the floater")
         XCTAssertTrue(bubbleWindow.isVisible)
         XCTAssertTrue(visible.contains(bubbleWindow.frame), "\(bubbleWindow.frame) is not wholly on \(visible)")
 
-        mover.fit(CGSize(width: 128, height: 67))
+        mover.fit(CGSize(width: 128, height: 67), statusShown: true)
         XCTAssertEqual(floater.frame.origin, parkedFrame.origin, "the status line moved the floater")
-        mover.fit(card)
+        mover.fit(card, statusShown: false)
         XCTAssertEqual(floater.frame, parkedFrame)
         XCTAssertTrue(visible.contains(bubbleWindow.frame))
 
@@ -134,7 +134,9 @@ final class FloaterLayoutTests: XCTestCase {
     /// The real card in a real window, parked in each quarter of the screen:
     /// Talk keeps its centre on screen, and Show beside it, while the status line comes
     /// for recording, says Sent, and goes again at rest, so a second click to
-    /// stop lands where the first one did.
+    /// stop lands where the first one did. Dropped across the screen's middle
+    /// while the status line shows, Talk stays where it was let go, and the
+    /// card takes its new corner once the status line has gone.
     @MainActor
     func testTalkAndShowStayPutAsTheStatusLineComesAndGoes() throws {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
@@ -150,7 +152,7 @@ final class FloaterLayoutTests: XCTestCase {
         let model = FloaterModel(repoRoot: "/nonexistent", fmHome: "/nonexistent")
         model.keysTrusted = true
         model.screenTrusted = true
-        for (place, origin) in corners {
+        for (index, (place, origin)) in corners.enumerated() {
             model.mode = .idle
             model.status = FloaterModel.restingStatus
             let mover = WindowMover()
@@ -205,6 +207,26 @@ final class FloaterLayoutTests: XCTestCase {
                 XCTAssertEqual(now.x, resting.x, accuracy: 0.5, "\(place), \(status): Talk moved sideways")
                 XCTAssertEqual(now.y, resting.y, accuracy: 0.5, "\(place), \(status): Talk moved up or down")
             }
+
+            let (across, there) = corners[(index + 2) % corners.count]
+            model.status = "1 shot stacked"
+            let before = try XCTUnwrap(talkCentre(), "\(place), stacked: Talk is on the card")
+            let start = window.frame.origin
+            window.setFrameOrigin(NSPoint(x: there.x, y: there.y))
+            mover.end()
+            let moved = NSPoint(x: before.x + window.frame.minX - start.x, y: before.y + window.frame.minY - start.y)
+            let dropped = try XCTUnwrap(talkCentre(), "\(place) to \(across): Talk is on the card")
+            XCTAssertEqual(dropped.x, moved.x, accuracy: 0.5, "\(place) to \(across): Talk jumped sideways on the drop")
+            XCTAssertEqual(dropped.y, moved.y, accuracy: 0.5, "\(place) to \(across): Talk jumped up or down on the drop")
+            for status in [FloaterModel.restingStatus, "Listening"] {
+                model.mode = status == "Listening" ? .recording : .idle
+                model.status = status
+                let now = try XCTUnwrap(talkCentre(), "\(across), \(status): Talk is on the card")
+                XCTAssertEqual(now.x, moved.x, accuracy: 0.5, "\(across), \(status): Talk moved sideways")
+                XCTAssertEqual(now.y, moved.y, accuracy: 0.5, "\(across), \(status): Talk moved up or down")
+            }
+            XCTAssertTrue(visible.contains(window.frame),
+                          "\(across): the status line grows the card toward the screen's middle")
             window.orderOut(nil)
         }
     }

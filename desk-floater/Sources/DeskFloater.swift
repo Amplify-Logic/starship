@@ -308,7 +308,7 @@ final class WindowMover: ObservableObject {
     private var startOrigin: NSPoint?
     private var startMouse: NSPoint?
     @Published private(set) var anchor: FloaterLayout.Anchor?
-    private var fitted: NSRect?
+    private var statusShown = false
     private var bubbleSize: CGSize = .zero
 
     func drag() {
@@ -323,7 +323,9 @@ final class WindowMover: ObservableObject {
         placeBubble()
     }
 
-    func fit(_ size: CGSize) {
+    /// Resizes the card from its anchored corner, then takes the corner for
+    /// the card as it now is, whether or not it shows its status line.
+    func fit(_ size: CGSize, statusShown: Bool) {
         guard let window, size.width > 0, size.height > 0 else { return }
         let frame = window.frame
         let rect = settle(frame).frame(size)
@@ -331,7 +333,8 @@ final class WindowMover: ObservableObject {
             window.setFrame(rect, display: true)
             window.invalidateShadow()
         }
-        fitted = window.frame
+        self.statusShown = statusShown
+        _ = settle(window.frame)
         placeBubble()
     }
 
@@ -349,16 +352,21 @@ final class WindowMover: ObservableObject {
         }
     }
 
-    /// The corner the card keeps still, taken afresh once the floater has been
-    /// put somewhere new, so the card lays its buttons out against it before
-    /// the status line next comes or goes.
+    /// The corner the card keeps still. At rest it is the one away from the
+    /// screen's middle; while the status line shows, the buttons keep the
+    /// side of the card they are on, so a floater dropped across the middle
+    /// takes its new corner only once the status line has gone.
     private func settle(_ frame: NSRect) -> FloaterLayout.Anchor {
-        if frame == fitted, let anchor {
-            return anchor
+        var next = FloaterLayout.anchor(for: frame, on: visibleFrame(for: frame) ?? frame)
+        if statusShown, let anchor {
+            next = FloaterLayout.Anchor(
+                point: NSPoint(x: anchor.growsLeft ? frame.maxX : frame.minX,
+                               y: anchor.growsDown ? frame.maxY : frame.minY),
+                growsLeft: anchor.growsLeft, growsDown: anchor.growsDown)
         }
-        let next = FloaterLayout.anchor(for: frame, on: visibleFrame(for: frame) ?? frame)
-        anchor = next
-        fitted = frame
+        if next != anchor {
+            anchor = next
+        }
         return next
     }
 
@@ -2295,7 +2303,7 @@ struct FloaterView: View {
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
                 } action: { size in
-                    mover.fit(size)
+                    mover.fit(size, statusShown: model.statusShown)
                 }
         case .bubble:
             let shown = model.bubbleShown
