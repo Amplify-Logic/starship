@@ -17,6 +17,7 @@
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh suggestion
 #   fm-desk-voice.sh prompt [--stdin]
+#   fm-desk-voice.sh front --front-app <pid> --front-tty <tty>
 #   fm-desk-voice.sh --help
 #
 # WHY: the floater is mouth/ears only. Transcripts meant for Firstmate must not
@@ -118,6 +119,12 @@
 # socket, and whose standard input is <tty>. An unresolved primary counts as
 # not in front. Once in front, every send check above still applies, so an
 # unreadable chat or a selection dialog still goes to the mailbox.
+#
+# front --front-app <pid> --front-tty <tty> asks the same question and types
+# nothing: it prints "in-front" when the frontmost tab <tty> of app <pid>
+# shows the primary's own chat, checked exactly as send checks it, and
+# "not-in-front" otherwise. The Mac floater keeps its reply bubble quiet while
+# the captain is looking at that chat (docs/desk-floater.md).
 #
 # send --front-focused is the same dictation path for the Windows floater
 # (docs/desk-floater-windows.md), which cannot name a terminal device: the
@@ -1677,6 +1684,37 @@ drain() {
   done
 }
 
+# Whether the frontmost tab <tty> of app <pid> shows the primary's own chat;
+# a read only, see front in the header.
+front() {
+  local app='' tty=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --front-app)
+        [ "$#" -ge 2 ] || refuse "--front-app needs a pid"
+        app=$2
+        shift 2
+        ;;
+      --front-tty)
+        [ "$#" -ge 2 ] || refuse "--front-tty needs a terminal device"
+        tty=$2
+        shift 2
+        ;;
+      *) refuse "unexpected argument: $1" ;;
+    esac
+  done
+  case "$app" in
+    ''|0*|*[!0-9]*) refuse "--front-app needs a pid: $app" ;;
+  esac
+  printf '%s' "$tty" | grep -Eqx '/dev/(tty[A-Za-z0-9]+|pts/[0-9]+)' \
+    || refuse "--front-tty needs a terminal device: $tty"
+  if front_shows_primary "$app" "$tty"; then
+    printf 'in-front\n'
+  else
+    printf 'not-in-front\n'
+  fi
+}
+
 main() {
   [ "$#" -gt 0 ] || { usage; exit 2; }
   case "$1" in
@@ -1693,6 +1731,7 @@ main() {
     drain) shift; drain "$@" ;;
     suggestion) shift; suggestion "$@" ;;
     prompt) shift; prompt "$@" ;;
+    front) shift; front "$@" ;;
     *) refuse "unknown command: $1" ;;
   esac
 }

@@ -271,11 +271,11 @@ Typing into the chat turns line breaks into spaces, as it does for the floater; 
 - Every POST also needs the page's CSRF header, a same-origin Origin when the browser sends one, and no cross-site fetch metadata.
   A custom header cannot be sent cross-origin without a preflight the server never answers.
 - Pages carry a strict Content-Security-Policy with per-response nonces, and all transcript text is escaped before Markdown is applied; only http and https links become links.
-- The request log, `state/web/web.log`, records paths only, never the token or a code, and leaves out the page's successful polls.
+- The request log, `state/web/web.log`, records paths only, never the token or a code, and leaves out the page's successful polls and its in-front beats.
 - A button reaches the same guards as a send, then only `bin/fm-factory.py act`, with only the fields the pane's keys take; the server writes no note itself.
 - A worker's screen is served only with the cookie, only for a job name the screen marks `live`, and only by a GET that reads through `bin/fm-peek.sh`; nothing on the page can type into a worker.
 - The server never takes the session lock, never drains wakes, and never writes backlog or fleet state.
-  Its only writes are its own `state/web/` files, one-time codes included, and the pasted images; a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
+  Its only writes are its own `state/web/` files, one-time codes included, the pasted images, and `state/desk-voice/web-front`, kept while a page is in front so the desk floater keeps its reply bubble quiet ([desk-floater.md](desk-floater.md#reply-bubble)); a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
 
 To revoke access, stop the server, delete `state/web/token`, and start it again; old cookies stop working.
 

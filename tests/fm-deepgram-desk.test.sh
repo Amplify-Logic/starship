@@ -2751,6 +2751,40 @@ test_desk_voice_dictation_front_check_on_tmux() {
   pass "fm-desk-voice send: on tmux, only the active pane shown on the front terminal is in front"
 }
 
+desk_front_ask() {  # <home> <tty> -> stdout of fm-desk-voice.sh front from the stand-in app
+  local home=$1 dir="$1/fixture"
+  (
+    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
+      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+      "$DESK" front --front-app "$(cat "$dir/app-pid")" --front-tty "$2"
+  )
+}
+
+# The floater keeps its reply bubble quiet while the chat is in front; front
+# answers exactly as dictation's send would, and never types or delivers.
+test_desk_voice_front_says_whether_the_chat_is_in_front() {
+  local home out case
+  home=$(desk_send_fixture front-ask) || { desk_send_skip front-ask; return 0; }
+  desk_front_fixture "$home" /dev/ttys042
+  out=$(desk_front_ask "$home" /dev/ttys042) || fail "front failed: $out"
+  assert_equals "in-front" "$out" "the chat in the front tab is in front"
+  out=$(desk_front_ask "$home" /dev/ttys007) || fail "front failed: $out"
+  assert_equals "not-in-front" "$out" "another tab is not"
+  : > "$home/fixture/unfocused"
+  out=$(desk_front_ask "$home" /dev/ttys042) || fail "front failed: $out"
+  assert_equals "not-in-front" "$out" "an unfocused pane is not"
+  rm -f "$home/fixture/unfocused" "$home/state/.lock"
+  out=$(desk_front_ask "$home" /dev/ttys042) || fail "front failed: $out"
+  assert_equals "not-in-front" "$out" "with no primary nothing is"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "front must never type"
+  [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "front must never press a key"
+  [ "$(inbox_count "$home")" = 0 ] || fail "front must never deliver"
+  out=$("$DESK" front --front-app 12 --front-tty /tmp/x 2>&1) && fail "a bad terminal device was accepted: $out"
+  desk_front_done "$home"
+  pass "fm-desk-voice front: says whether the Firstmate chat is in front, and types nothing"
+}
+
 # --- desk-voice send --front: the "Look here" line ---------------------------
 
 test_desk_voice_send_adds_the_front_line_after_the_words() {
@@ -3231,6 +3265,7 @@ test_desk_voice_dictation_elsewhere_is_left_to_paste
 test_desk_voice_dictation_keeps_the_send_checks
 test_desk_voice_dictation_front_check_on_tmux
 test_desk_voice_dictation_front_focused_on_tmux
+test_desk_voice_front_says_whether_the_chat_is_in_front
 test_desk_voice_send_adds_the_front_line_after_the_words
 test_desk_voice_send_keeps_the_front_line_in_the_mailbox
 test_desk_voice_send_leaves_out_the_front_line_for_the_first_mates_terminal

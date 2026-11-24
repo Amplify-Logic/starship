@@ -23,7 +23,7 @@ final class VoiceVolumeTests: XCTestCase {
                                        windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                        clickCount: 1, pressure: 1)!
         let menu = hosting.hitTest(point)?.menu(for: event)
-        XCTAssertEqual(menu?.items.map(\.title), ["Voice volume", "Mute voice"])
+        XCTAssertEqual(menu?.items.map(\.title), ["Voice volume", "Mute voice", "Turn reply bubble off"])
         let levels = menu?.items.first?.submenu?.items.map(\.title) ?? []
         XCTAssertTrue(levels.contains("100% (system volume)"), "the levels are offered: \(levels)")
         XCTAssertTrue(levels.contains("200%"))
@@ -188,5 +188,187 @@ final class VoiceVolumeTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         XCTFail("condition never became true")
+    }
+}
+
+/// The reply bubble stays quiet while the captain is already looking at
+/// Starship, and has a switch of its own. The home's scripts are stand-ins:
+/// fm-speak.sh lists the replies in history.txt, fm-desk-offer.sh reports an
+/// open offer once offer-open exists, and the Starship web page's marker is
+/// the file bin/fm-web.py keeps while one of its pages is in front.
+extension VoiceVolumeTests {
+    private struct Desk {
+        let root: URL
+        var path: String { root.path }
+        var history: URL { root.appendingPathComponent("history.txt") }
+        var calls: URL { root.appendingPathComponent("calls.log") }
+        var marker: URL { URL(fileURLWithPath: Bubble.webFrontPath(home: path)) }
+    }
+
+    private func makeDesk() throws -> Desk {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("quiet-\(UUID().uuidString)")
+        let home = Desk(root: root)
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let speak = """
+        #!/bin/sh
+        printf 'speak %s\\n' "$*" >> '\(home.calls.path)'
+        case "$1" in
+          --history) cat '\(home.history.path)' 2>/dev/null ;;
+          --caption) printf 'Reply %s for the eye.\\n' "$2" ;;
+          --full) printf 'Reply %s in full.\\n' "$2" ;;
+          --speaking) printf 'quiet\\n' ;;
+          --muted) printf 'unmuted\\n' ;;
+          --volume) printf '100\\n' ;;
+        esac
+        exit 0
+        """
+        let offer = """
+        #!/bin/sh
+        if [ -e '\(root.path)/offer-open' ]; then
+          printf '{"schema":"fm-desk-offer.v1","id":"ab12cd34","text":"Open the Sound settings","state":"open"}\\n'
+        else
+          printf '{"schema":"fm-desk-offer.v1","state":"none"}\\n'
+        fi
+        exit 0
+        """
+        for (name, body) in [("fm-speak.sh", speak), ("fm-desk-offer.sh", offer)] {
+            let url = bin.appendingPathComponent(name)
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        return home
+    }
+
+    /// A Starship page in front now, as bin/fm-web.py leaves it.
+    private func pageInFront(_ home: Desk) throws {
+        try FileManager.default.createDirectory(at: home.marker.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data().write(to: home.marker)
+    }
+
+    /// Reply <id> lands in the history, as bin/fm-speak.sh records it.
+    private func reply(_ home: Desk, _ id: Int) throws {
+        let line = "\(id)\t\(Int(Date().timeIntervalSince1970))\tSpoken line \(id)\n"
+        let old = (try? String(contentsOf: home.history, encoding: .utf8)) ?? ""
+        try (line + old).write(to: home.history, atomically: true, encoding: .utf8)
+        let dir = home.root.appendingPathComponent("state/speak-history")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data().write(to: dir.appendingPathComponent("\(id)"))
+    }
+
+    /// Starts following the replies, once the replies already kept are read,
+    /// so the next one counts as new.
+    @MainActor
+    private func follow(_ model: FloaterModel, _ home: Desk) async throws {
+        model.startCaption()
+        try await waitUntil { self.called(home, "speak --history\n") }
+        try await Task.sleep(nanoseconds: 300_000_000)
+    }
+
+    private func called(_ home: Desk, _ text: String) -> Bool {
+        ((try? String(contentsOf: home.calls, encoding: .utf8)) ?? "").contains(text)
+    }
+
+    /// The reported annoyance: a reply popped up beside the floater while the
+    /// captain was reading it on the Starship web page.
+    @MainActor
+    func testAReplyArrivingWhileAStarshipPageIsInFrontNeverShows() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        try await follow(model, home)
+        try pageInFront(home)
+        try reply(home, 1)
+        try await waitUntil { self.called(home, "speak --caption 1\n") }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(model.lookingAtStarship)
+        XCTAssertNil(model.caption, "a reply read on Starship is not written beside the floater")
+        XCTAssertFalse(model.bubbleShown)
+
+        try FileManager.default.removeItem(at: home.marker)
+        try reply(home, 2)
+        try await waitUntil { model.caption?.id == 2 }
+        XCTAssertTrue(model.bubbleShown, "off Starship a reply shows as before")
+        XCTAssertEqual(model.caption?.eye, "Reply 2 for the eye.")
+    }
+
+    /// Looking at Starship while a reply is up takes it away for good.
+    @MainActor
+    func testAReplyUpWhenTheCaptainTurnsToStarshipGoes() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        try await follow(model, home)
+        try reply(home, 1)
+        try await waitUntil { model.caption?.id == 1 }
+        try pageInFront(home)
+        model.checkScreen()
+        try await waitUntil { model.caption == nil }
+        try FileManager.default.removeItem(at: home.marker)
+        model.checkScreen()
+        try await waitUntil { !model.lookingAtStarship }
+        XCTAssertNil(model.caption, "a reply the captain turned away from does not come back")
+    }
+
+    /// A Do it offer is never lost: it waits behind a quiet bubble and shows
+    /// once the captain looks away from Starship.
+    @MainActor
+    func testAnOfferWaitsWhileOnStarshipAndShowsOnceTheCaptainLooksAway() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        try pageInFront(home)
+        try Data().write(to: home.root.appendingPathComponent("offer-open"))
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        model.readOffer()
+        try await waitUntil { model.offer?.state == .open }
+        XCTAssertTrue(model.lookingAtStarship)
+        XCTAssertFalse(model.bubbleShown, "the offer does not pop up on Starship")
+        XCTAssertNotNil(model.shownOffer, "but it is still waiting")
+
+        try FileManager.default.removeItem(at: home.marker)
+        model.checkScreen()
+        try await waitUntil { model.bubbleShown }
+        XCTAssertEqual(model.shownOffer?.id, "ab12cd34")
+    }
+
+    /// One click turns the whole bubble off or on, and a restarted floater
+    /// keeps it that way.
+    @MainActor
+    func testTheSwitchTurnsTheWholeBubbleOffAndIsKeptAcrossRestarts() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        try Data().write(to: home.root.appendingPathComponent("offer-open"))
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        XCTAssertTrue(model.bubbleOn, "a home that never touched the switch shows the bubble")
+        try await follow(model, home)
+        try await waitUntil { model.bubbleShown }
+
+        model.toggleBubble()
+        XCTAssertFalse(model.bubbleOn)
+        XCTAssertFalse(model.bubbleShown, "off means no bubble, even for an offer")
+        try reply(home, 1)
+        try await waitUntil { self.called(home, "speak --caption 1\n") }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(model.caption, "nor for a new reply")
+
+        let restarted = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        XCTAssertFalse(restarted.bubbleOn, "the switch is kept across a restart")
+        restarted.toggleBubble()
+        XCTAssertTrue(restarted.bubbleOn)
+        XCTAssertTrue(FloaterModel(repoRoot: home.path, fmHome: home.path).bubbleOn)
+        restarted.readOffer()
+        try await waitUntil { restarted.bubbleShown }
+    }
+
+    func testOnlyAFreshMarkerSaysAStarshipPageIsInFront() {
+        let now = Date()
+        XCTAssertTrue(Bubble.webInFront(modified: now.addingTimeInterval(-3), now: now))
+        XCTAssertFalse(Bubble.webInFront(modified: now.addingTimeInterval(-20), now: now),
+                       "a browser that went away while focused does not silence the bubble")
+        XCTAssertFalse(Bubble.webInFront(modified: nil, now: now))
+        XCTAssertTrue(Bubble.allowed(on: true, lookingAtStarship: false))
+        XCTAssertFalse(Bubble.allowed(on: true, lookingAtStarship: true))
+        XCTAssertFalse(Bubble.allowed(on: false, lookingAtStarship: false))
     }
 }

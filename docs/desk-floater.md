@@ -21,7 +21,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
-- Firstmate's newest reply in a bubble beside the floater, always wholly on screen, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something (see [Reply bubble](#reply-bubble)).
+- Firstmate's newest reply in a bubble beside the floater, always wholly on screen, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something; it stays quiet while you are already looking at Starship, and one click turns it off or on (see [Reply bubble](#reply-bubble)).
 - A Do it button on that bubble when Firstmate offers to take an easy-to-undo step on your screen (see [Do it](#do-it)).
 - A voice-volume level of its own and mute on a right-click of the floater, and both, with the recent replies to hear again, in the web page's Settings ([web.md](web.md#settings)).
 - A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
@@ -66,7 +66,8 @@ It stays wherever you put it, even pushed almost wholly off the screen into a co
 | Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
 | Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
 | Status line | One line beside the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
-| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else) and Mute or Unmute. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
+| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else), Mute or Unmute, and Turn reply bubble off or on. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
+| Bell badge on Talk | Shown only while the reply bubble is off (see [Reply bubble](#reply-bubble)); blue while an offer waits behind it. Click it to turn the bubble back on. |
 
 Everything else appears on the reply bubble while it means something, below.
 The recent replies are on the web page's Settings, each with Hear again ([web.md](web.md#settings)).
@@ -91,6 +92,19 @@ The bubble shows for about 15 seconds, and stays up for as long as a line is bei
 It shows the same way while the voice is muted.
 Replies kept before the floater started are never shown as new.
 The last 10 replies, with their audio and their words for the eye, are kept in this home's private `state/`, readable only by your own account on the Mac; older ones are removed as new ones arrive.
+
+The bubble stays quiet while you are already looking at Starship, where it would only repeat what is on screen:
+
+- the Starship web page is in front, on any of its tabs, in any browser ([web.md](web.md)): the page tells its server while it is the focused, visible tab, and the server keeps `state/desk-voice/web-front` while one does, which the floater counts only for 15 seconds after the page last said so;
+- or Terminal is in front showing the primary Firstmate's own chat, checked exactly the way [dictation](#dictating-into-the-firstmate-chat) checks it (`bin/fm-desk-voice.sh front`), only once you have already allowed Automation for Terminal; the floater never asks for it here.
+
+A reply that arrives while you are looking at Starship is never shown, not even after you look away, and a reply already up goes when you turn to Starship.
+A reply you opened in full and an offer waiting for your tap are not lost: they wait behind the quiet bubble and show again as soon as you look away.
+The voice is unchanged either way.
+
+The bubble has a switch of its own: **Turn reply bubble off** in the right-click menu, or the bell mark on the bubble itself, turns it off in one click.
+Off means no bubble anywhere, for replies and offers alike, until you turn it back on: a bell badge on Talk says it is off, turning blue while an offer waits, and clicking the badge, or **Turn reply bubble on** in the menu, turns it on again.
+The switch is per home and survives restarting the floater, kept as the file `state/desk-voice/bubble-off` while the bubble is off.
 
 The words for the eye come from the Stop hook that speaks Claude's reply (`bin/fm-claude-reply-speak.sh`, whose header owns the rule): the outcome is the first one or two sentences of the reply's opening paragraph, at most about 45 words, without any sentence that points at the screen, and the ask is the reply's last question.
 They are kept with the spoken line in the reply history, as its caption and its whole written reply, and read back with `bin/fm-speak.sh --caption` and `--full`; a reply with none, such as a line Firstmate spoke itself, shows its spoken line.

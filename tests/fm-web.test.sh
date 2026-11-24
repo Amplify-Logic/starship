@@ -1485,6 +1485,37 @@ test_the_voice_in_settings_is_the_homes_through_fm_speak() {
   pass "the voice in Settings is the home's, read and changed only through fm-speak.sh"
 }
 
+# A page the owner is looking at tells the desk floater so, through one file
+# in the home, so the floater keeps its reply bubble quiet.
+test_a_page_in_front_marks_the_home_for_the_floater() {
+  local home root port cookie csrf url marker bad
+  home=$(make_home front)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/front"
+  marker="$home/state/desk-voice/web-front"
+  assert_absent "$marker" "no page has said anything yet"
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"page":"pageone1","front":true}' "$url")" "no CSRF header"
+  assert_absent "$marker" "a refused word marks nothing"
+  assert_equals "true" "$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" \
+    --data '{"page":"pageone1","front":true}' "$url" | jq -r .front)" "a page in front is recorded"
+  [ -f "$marker" ] || fail "a page in front must leave the marker"
+  curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"page":"pagetwo2","front":false}' "$url" >/dev/null
+  [ -f "$marker" ] || fail "another page losing focus must not clear a page still in front"
+  assert_equals "false" "$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" \
+    --data '{"page":"pageone1","front":false}' "$url" | jq -r .front)" "the last page leaving says so"
+  assert_absent "$marker" "no page in front leaves no marker"
+  ! grep -qF 'POST /api/front HTTP/1.1" 200' "$home/state/web/web.log" || fail "the beats must stay out of the request log"
+  for bad in '{"page":"short","front":true}' '{"page":"pageone1","front":"yes"}' '{"page":"pageone1"}' \
+    '{"page":"page/one1","front":true}' '{"page":"pageone1","front":true,"x":1}' 'nope'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  assert_absent "$marker" "a refused word marks nothing"
+  pass "a page in front marks the home for the desk floater, and only while one is"
+}
+
 test_settings_are_kept_in_the_browser() {
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
   local home out
@@ -1822,6 +1853,7 @@ test_a_failed_restart_keeps_sends_and_buttons_working
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_voice_in_settings_is_the_homes_through_fm_speak
+test_a_page_in_front_marks_the_home_for_the_floater
 test_colours_are_kept_and_kept_readable
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_the_live_line_says_what_is_happening_in_plain_words

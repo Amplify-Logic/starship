@@ -98,6 +98,16 @@ each only through bin/fm-speak.sh (voice_state, voice_change). VIEW_JS, served a
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
 the act of the button it stands for.
+
+While a page is what the owner is looking at (its tab visible and its window
+focused), it says so with POST /api/front {"page": <its own random id>,
+"front": true}, again every FRONT_BEAT_SECONDS, and {"front": false} as it
+loses focus or closes. The server keeps state/desk-voice/web-front while any
+page has said so within FRONT_SECONDS, touched on every beat, and removes it
+when none has (Presence). The Mac desk floater reads it as "the owner is
+looking at Starship" and keeps its reply bubble quiet (docs/desk-floater.md);
+a file older than FRONT_SECONDS counts as gone, so a browser that quits
+while focused never silences the floater for long.
 """
 
 from __future__ import annotations
@@ -155,6 +165,11 @@ ANSI_RE = re.compile(r"\x1b\[([0-9;]*)m")
 ANSI_TONES = {"92": "green", "93": "yellow", "91": "red", "91;1": "alarm", "95": "magenta", "96": "cyan",
               "2": "dim", "1": "bold"}
 ACT_BODY_MAX = 32 * 1024
+# A page in front (Presence): how often it says so, and how long a word lasts.
+FRONT_BEAT_SECONDS = 5
+FRONT_SECONDS = 15
+FRONT_BODY_MAX = 256
+FRONT_PAGE_RE = re.compile(r"^[A-Za-z0-9]{8,64}$")
 ACT_TEXT_MAX = 4000
 ACT_TIMEOUT_SECONDS = 120
 ACT_ACTIONS = ("answer", "keep", "change", "discuss", "talk", "settled", "steer", "read", "revive", "drop")
@@ -2236,6 +2251,51 @@ def csp(nonce: str) -> str:
     )
 
 
+class Presence:
+    """The pages the owner is looking at now, by their own random id, and the
+    file that tells the desk floater so: state/desk-voice/web-front, present
+    and touched while any page said within FRONT_SECONDS that it is in front."""
+
+    def __init__(self, home: Path) -> None:
+        self.path = home / "state" / "desk-voice" / "web-front"
+        self.lock = threading.Lock()
+        self.pages: Dict[str, float] = {}
+
+    def mark(self, page: str, front: bool, now: Optional[float] = None) -> bool:
+        """Records one page's word and rewrites the file; True while any page is in front."""
+        now = time.time() if now is None else now
+        with self.lock:
+            if front:
+                self.pages[page] = now
+            else:
+                self.pages.pop(page, None)
+            self.pages = {p: at for p, at in self.pages.items() if now - at < FRONT_SECONDS}
+            shown = bool(self.pages)
+            try:
+                if shown:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    self.path.touch()
+                else:
+                    self.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return shown
+
+
+def decode_front_body(body: bytes) -> Tuple[str, bool]:
+    """{"page": <id>, "front": true|false} from a page, or ValueError."""
+    try:
+        ask = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("not JSON") from None
+    if not isinstance(ask, dict) or set(ask) != {"page", "front"}:
+        raise ValueError("needs page and front")
+    page, front = ask["page"], ask["front"]
+    if not isinstance(page, str) or not FRONT_PAGE_RE.match(page) or not isinstance(front, bool):
+        raise ValueError("needs a page id and true or false")
+    return page, front
+
+
 class WebState:
     def __init__(self, home: Path, root: Path, port: int, token: str) -> None:
         self.home = home
@@ -2252,6 +2312,7 @@ class WebState:
         self.prompt = prompt_reader(home, root)
         self.send_lock = threading.Lock()
         self.act_lock = threading.Lock()
+        self.front = Presence(home)
 
 
 STATE: Optional[WebState] = None
@@ -2263,7 +2324,9 @@ class WebHandler(BaseHTTPRequestHandler):
     sys_version = ""
 
     def log_request(self, code: Any = "-", size: Any = "-") -> None:
-        if self.command == "GET" and self.path.startswith("/api/") and isinstance(code, int) and 200 <= code < 300:
+        polled = (self.command == "GET" and self.path.startswith("/api/")) or \
+            (self.command == "POST" and self.path == "/api/front")
+        if polled and isinstance(code, int) and 200 <= code < 300:
             return
         super().log_request(code, size)
 
@@ -2497,13 +2560,22 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act", "/api/voice"):
+        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front"):
             self._text(404, "not found", close=True)
             return
-        if length < 0 or length > (SEND_BODY_MAX if path == "/api/send" else ACT_BODY_MAX):
+        limit = {"/api/send": SEND_BODY_MAX, "/api/front": FRONT_BODY_MAX}.get(path, ACT_BODY_MAX)
+        if length < 0 or length > limit:
             self._text(413, "too large", close=True)
             return
         body = self.rfile.read(length)
+        if path == "/api/front":
+            try:
+                page, front = decode_front_body(body)
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            self._json(200, {"front": STATE.front.mark(page, front)})
+            return
         if path == "/api/voice":
             with STATE.act_lock:
                 status, answer = voice_change(STATE.home, STATE.root, body)
@@ -4565,6 +4637,18 @@ function divider(node,main,name){
 }
 const homeDivider=divider($('divHome'),$('home'),'split');
 
+/* ---- in front: while this page is what the owner looks at, the desk floater keeps its reply bubble quiet ---- */
+{const PAGE=(()=>{try{return crypto.randomUUID().replace(/-/g,'');}catch(e){return (Math.random().toString(36).slice(2)+Date.now().toString(36)).replace(/[^a-z0-9]/g,'')+'page';}})();
+  let said=null;
+  const inFront=()=>document.visibilityState==='visible'&&document.hasFocus();
+  const say=(front,beat)=>{if(!beat&&front===said)return;said=front;
+    fetch('/api/front',{method:'POST',credentials:'same-origin',keepalive:true,
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({page:PAGE,front:front})}).catch(()=>{});};
+  const check=()=>say(inFront(),false);
+  window.addEventListener('focus',check);window.addEventListener('blur',check);
+  document.addEventListener('visibilitychange',check);window.addEventListener('pagehide',()=>say(false,false));
+  setInterval(()=>{if(inFront())say(true,true);},1000*(Number(document.body.dataset.frontBeat)||5));check();}
+
 document.querySelectorAll('.brand').forEach(b=>b.prepend(ship()));
 setSide('projects');poll();mirror();
 })();
@@ -4635,7 +4719,7 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
                    'title="What changed this week">This week</a>\n') if weekly else ""
     return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script>
 </head>
-<body data-csrf="{html.escape(csrf, quote=True)}" data-build="{html.escape(BUILD, quote=True)}">{ship_symbol()}
+<body data-csrf="{html.escape(csrf, quote=True)}" data-build="{html.escape(BUILD, quote=True)}" data-front-beat="{FRONT_BEAT_SECONDS}">{ship_symbol()}
 <div class="app">
 <header class="top" id="top">
 <div class="brand"><span>Starship</span></div>
