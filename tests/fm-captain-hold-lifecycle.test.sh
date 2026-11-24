@@ -934,7 +934,8 @@ test_an_answer_of_several_lines_reads_whole_on_the_factory_screens() {
     || fail "fleet snapshot failed"
   words=$(printf '%s' "$snap" | jq -c '.backlog.records[] | select(.id == "sample-till") | .body_lines' \
     | python3 -c '
-import importlib.util, json, sys
+import importlib.machinery, importlib.util, json, os, sys
+sys.path.insert(0, os.path.dirname(sys.argv[1]))   # the factory imports its sibling modules from bin/
 spec = importlib.util.spec_from_loader("factory", importlib.machinery.SourceFileLoader("factory", sys.argv[1]))
 factory = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(factory)
