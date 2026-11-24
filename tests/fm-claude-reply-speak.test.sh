@@ -176,6 +176,19 @@ Shall I merge it?"
 - the checks are green"
   assert_equals "three files changed" "$(caption_of "$dir")" \
     "a lead that only points at the screen gives way to the first words after it"
+  dir=$(make_primary_dir "$TMP_ROOT/eye-pointer-tight-list")
+  run_hook "$dir" "Captain, the details are below:
+- three files changed
+- the checks are green"
+  assert_equals "three files changed" "$(caption_of "$dir")" \
+    "a list right under the lead still gives the first item, not the pointer"
+  dir=$(make_primary_dir "$TMP_ROOT/eye-pointer-wrapped")
+  run_hook "$dir" "Captain, see below.
+
+The export finished and the file
+is in your downloads folder. It took two minutes."
+  assert_equals "The export finished and the file is in your downloads folder." "$(caption_of "$dir")" \
+    "a wrapped sentence after the lead is shown whole"
   pass "the bubble never carries a screen pointer"
 }
 

@@ -465,22 +465,24 @@ if [ -z "$CAPTION" ]; then
   CAPTION=$LEAD
   if printf '%s\n' "$LEAD" | grep -Eiq 'on screen|see below|(is|are) below'; then
     AFTER_LEAD=$(printf '%s\n' "$MSG" | awk '
-      /^[[:space:]]*(```|~~~)/ { fence = !fence; if (lead) gap = 1; next }
+      function flush() { if (out != "") { print out; out = ""; exit } }
+      /^[[:space:]]*(```|~~~)/ { flush(); fence = !fence; if (lead) gap = 1; next }
       fence { next }
-      /^[[:space:]]*$/ || /^[[:space:]]*[|#]/ || /^[[:space:]]*([-*_][[:space:]]*){3,}$/ { if (lead) gap = 1; next }
+      /^[[:space:]]*$/ || /^[[:space:]]*[|#]/ || /^[[:space:]]*([-*_][[:space:]]*){3,}$/ { flush(); if (lead) gap = 1; next }
       {
-        if (lead && !gap) next
-        lead = 1
-        if (!gap) next
         line = $0
         sub(/^[[:space:]]*>[[:space:]]*/, "", line)
+        if (line ~ /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/) { flush(); if (lead) gap = 1 }
+        if (!lead) { lead = 1; next }
+        if (!gap) next
         sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
         n = split(line, ws, " ")
-        out = ws[1]
-        for (i = 2; i <= n && ws[i - 1] !~ /[.!?]["\047)\]]*$/; i++) out = out " " ws[i]
-        print out
-        exit
+        for (i = 1; i <= n; i++) {
+          out = out (out == "" ? "" : " ") ws[i]
+          if (ws[i] ~ /[.!?]["\047)\]]*$/) flush()
+        }
       }
+      END { if (out != "") print out }
     ' | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/(\*\*|__|`)//g')
     CAPTION=${AFTER_LEAD:-$LEAD}
   fi
