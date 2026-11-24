@@ -77,7 +77,6 @@ It shows the same facts as the terminal's Factory pane, which [factory-pane.md](
   - **Next** is the first job in line and how many more are lined up after it, or that it starts once you answer.
 
   A project with nothing for you, nothing running and nothing new folds into one line under Quiet for now.
-- **New starts where you last looked**: pressing a button or key on Factories counts as a look, while just opening the page does not, so New keeps what you have not seen yet.
 
 Pick a project's tab in the header, or highlight the project in Your factories and press `enter`, to open **its own page**, which reads top to bottom:
 
@@ -95,14 +94,13 @@ On a wide screen Needs you sits on the left and the rest on the right; on a narr
 
 #### What the page lays out its own way
 
-- A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), with Needs you on the left and Happening now, Lately, Up next, Coming back, How this crew works and Conversation on the right on a wide screen, and all of them in that order in one scrolling column on a narrow one.
-  Up next names the first three in line and folds the rest behind `N more lined up` and the other counts, and Coming back lists every call put off to a date, each with its date.
+- A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), split into two columns on a wide screen as [its own page](#how-factories-works) describes; Up next folds the rest behind `N more lined up` and the other counts.
 - A project's tab has no list of workers beside its page: its Happening now already names each worker with the step it is on, so a second list would only repeat it.
   Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Happening now.
 - A call on its own project's tab does not repeat the project's name beside its title.
 - Who steers is a quiet line under Talk to this crew on the project's own tab only, such as `Starship steers this factory. Change`; Change, or the `s` key there, asks first and changes it only on Change who steers, as an answer takes two clicks.
   A project's head in Your factories says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
-- A project in Your factories sets Now, New and Next side by side with their words on the left, and on a narrow screen the words sit above what they lead; in New a change that went live links to the change and a report has a Read it button.
+- A project in Your factories sets Now, New and Next side by side with their words on the left, and on a narrow screen the words sit above what they lead.
 - A project's conversation reads newest first.
 - The older questions shelf lists its questions open, each with its Bring back and No longer needed buttons, instead of one line that `enter` opens.
 - On a screen worked by touch, the key hints on the buttons and the line of keys at the bottom are not shown.
