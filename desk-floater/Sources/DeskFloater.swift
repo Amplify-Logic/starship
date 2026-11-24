@@ -169,15 +169,29 @@ extension HomeLocation {
 }
 
 final class FloaterPanel: NSPanel {
+    /// The reply bubble's own panel, so a reply never moves or resizes the
+    /// floater: the bubble opens on the visible screen whatever corner or edge
+    /// the floater is parked in.
+    private let bubblePanel: NSPanel
+
     @MainActor
     init(model: FloaterModel) {
         let mover = WindowMover()
-        let view = FloaterView(model: model, mover: mover)
-        let hosting = NSHostingView(rootView: view)
-        // WindowMover sizes the window: left to itself the hosting view would
-        // grow it from the top-left corner and push the controls off-screen.
+        let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
+        // WindowMover sizes both windows: left to itself a hosting view would
+        // grow its window from the top-left corner.
         hosting.sizingOptions = []
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        let bubbleHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .bubble))
+        bubbleHosting.sizingOptions = []
+        bubbleHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
+        bubblePanel = Self.floating(NSPanel(
+            contentRect: bubbleHosting.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        ))
+        bubblePanel.contentView = bubbleHosting
         super.init(
             contentRect: hosting.frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -185,37 +199,109 @@ final class FloaterPanel: NSPanel {
             defer: false
         )
         self.contentView = hosting
-        self.isFloatingPanel = true
-        // Clicking a control must never take keyboard focus from the app the
-        // captain is typing in: dictation pastes into whatever has the cursor.
-        self.becomesKeyOnlyIfNeeded = true
-        self.level = .floating
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        self.backgroundColor = .clear
-        self.isOpaque = false
-        self.hasShadow = true
+        _ = Self.floating(self)
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
             self.setFrameOrigin(NSPoint(x: f.maxX - hosting.frame.width - 24, y: f.midY))
         }
         // Only once the panel is placed, so the first fit anchors to where the
         // captain sees it rather than to the origin it was created at.
+        mover.bubble = bubblePanel
         mover.window = self
+    }
+
+    /// Floats a panel above other windows on every Space without ever taking
+    /// keyboard focus from the app the captain is typing in: dictation pastes
+    /// into whatever has the cursor.
+    private static func floating(_ panel: NSPanel) -> NSPanel {
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        return panel
     }
 
     override var canBecomeKey: Bool { true }
 }
 
-/// Moves the floater with the pointer while its card is dragged, and resizes
-/// it when the reply bubble opens, grows or closes. The top-right corner stays
-/// put, so the buttons do not jump and the bubble drops down and to the left
-/// of them.
+/// Where the floater and its reply bubble go on screen. The floater stays where
+/// the captain parked it, even almost entirely off screen; the bubble always
+/// opens wholly on the visible screen, toward the screen's middle.
+enum FloaterLayout {
+    /// The corner a resizing floater keeps still: the one away from the
+    /// screen's middle, so the card grows and shrinks toward the middle and
+    /// the part of it left on screen stays there.
+    struct Anchor: Equatable {
+        var point: NSPoint
+        var growsLeft: Bool
+        var growsDown: Bool
+
+        func frame(_ size: CGSize) -> NSRect {
+            NSRect(x: growsLeft ? point.x - size.width : point.x,
+                   y: growsDown ? point.y - size.height : point.y,
+                   width: size.width, height: size.height)
+        }
+    }
+
+    static let bubbleGap: CGFloat = 6
+
+    /// The visible frame of the screen the floater is on: the one holding most
+    /// of it, else the one nearest it when it is parked wholly off them.
+    static func screen(for frame: NSRect, among screens: [NSRect]) -> NSRect? {
+        let best = screens.max { area($0.intersection(frame)) < area($1.intersection(frame)) }
+        if let best, area(best.intersection(frame)) > 0 {
+            return best
+        }
+        return screens.min { distance($0, frame) < distance($1, frame) }
+    }
+
+    static func anchor(for frame: NSRect, on visible: NSRect) -> Anchor {
+        let left = frame.midX > visible.midX
+        let down = frame.midY > visible.midY
+        return Anchor(point: NSPoint(x: left ? frame.maxX : frame.minX, y: down ? frame.maxY : frame.minY),
+                      growsLeft: left, growsDown: down)
+    }
+
+    /// The bubble beside the floater on the side toward the screen's middle:
+    /// below a floater in the top half and above one in the bottom half,
+    /// lined up with the floater's outer edge, then moved wholly onto the
+    /// visible screen. A bubble taller or wider than the screen keeps its top
+    /// and left edges on it.
+    static func bubbleFrame(_ size: CGSize, beside floater: NSRect, on visible: NSRect) -> NSRect {
+        var rect = NSRect(origin: .zero, size: size)
+        rect.origin.x = floater.midX > visible.midX ? floater.maxX - size.width : floater.minX
+        rect.origin.y = floater.midY > visible.midY
+            ? floater.minY - bubbleGap - size.height
+            : floater.maxY + bubbleGap
+        rect.origin.x = max(min(rect.origin.x, visible.maxX - size.width), visible.minX)
+        rect.origin.y = min(max(rect.origin.y, visible.minY), visible.maxY - size.height)
+        return rect
+    }
+
+    private static func area(_ rect: NSRect) -> CGFloat {
+        rect.isNull || rect.isEmpty ? 0 : rect.width * rect.height
+    }
+
+    private static func distance(_ screen: NSRect, _ frame: NSRect) -> CGFloat {
+        hypot(frame.midX - max(min(frame.midX, screen.maxX), screen.minX),
+              frame.midY - max(min(frame.midY, screen.maxY), screen.minY))
+    }
+}
+
+/// Moves the floater with the pointer while its card is dragged, resizes it as
+/// the status line comes and goes, and places the reply bubble beside it. The
+/// floater is never moved to fit the screen: it stays where it was put.
 final class WindowMover {
     weak var window: NSWindow?
+    weak var bubble: NSWindow?
     private var startOrigin: NSPoint?
     private var startMouse: NSPoint?
-    private var anchor: NSPoint?
+    private var anchor: FloaterLayout.Anchor?
     private var fitted: NSRect?
+    private var bubbleSize: CGSize = .zero
 
     func drag() {
         guard let window else { return }
@@ -226,28 +312,54 @@ final class WindowMover {
         }
         guard let origin = startOrigin, let start = startMouse else { return }
         window.setFrameOrigin(NSPoint(x: origin.x + mouse.x - start.x, y: origin.y + mouse.y - start.y))
+        placeBubble()
     }
 
     func fit(_ size: CGSize) {
         guard let window, size.width > 0, size.height > 0 else { return }
         let frame = window.frame
-        let corner = (frame == fitted ? anchor : nil) ?? NSPoint(x: frame.maxX, y: frame.maxY)
+        let corner = (frame == fitted ? anchor : nil)
+            ?? FloaterLayout.anchor(for: frame, on: visibleFrame(for: frame) ?? frame)
         anchor = corner
-        var rect = NSRect(x: corner.x - size.width, y: corner.y - size.height, width: size.width, height: size.height)
-        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
-            rect.origin.x = max(min(rect.origin.x, visible.maxX - rect.width), visible.minX)
-            rect.origin.y = max(min(rect.origin.y, visible.maxY - rect.height), visible.minY)
-        }
+        let rect = corner.frame(size)
         if rect != frame {
             window.setFrame(rect, display: true)
             window.invalidateShadow()
         }
         fitted = window.frame
+        placeBubble()
+    }
+
+    /// The bubble's size, or zero while there is no bubble to show.
+    func fitBubble(_ size: CGSize) {
+        bubbleSize = size
+        placeBubble()
     }
 
     func end() {
         startOrigin = nil
         startMouse = nil
+    }
+
+    private func placeBubble() {
+        guard let window, let bubble else { return }
+        guard bubbleSize.width > 0, bubbleSize.height > 0,
+              let visible = visibleFrame(for: window.frame) else {
+            bubble.orderOut(nil)
+            return
+        }
+        let rect = FloaterLayout.bubbleFrame(bubbleSize, beside: window.frame, on: visible)
+        if rect != bubble.frame {
+            bubble.setFrame(rect, display: true)
+            bubble.invalidateShadow()
+        }
+        if !bubble.isVisible {
+            bubble.orderFrontRegardless()
+        }
+    }
+
+    private func visibleFrame(for frame: NSRect) -> NSRect? {
+        FloaterLayout.screen(for: frame, among: NSScreen.screens.map(\.visibleFrame))
     }
 }
 
@@ -991,7 +1103,7 @@ final class FloaterModel: ObservableObject {
 
     @Published var mode: Mode = .idle
     @Published var purpose: Purpose = .firstmate
-    @Published var status: String = "Hold to talk"
+    @Published var status: String = FloaterModel.restingStatus
     @Published var muted = false
     /// The spoken voice's level as a percentage of the system volume.
     @Published var voiceVolume = VoiceVolume.standard
@@ -1088,7 +1200,17 @@ final class FloaterModel: ObservableObject {
     }
 
     static let savedRetrying = "Saved - retrying"
+    /// The status at rest with nothing to say, which the card does not show.
+    static let restingStatus = "Hold to talk"
     static let micSilent = "Mic silent - not sent"
+
+    /// Whether the card shows its status line: only while there is something
+    /// to say, so at rest the card hugs its two buttons.
+    static func statusShown(_ status: String, mode: Mode) -> Bool {
+        !(mode == .idle && status == restingStatus)
+    }
+
+    var statusShown: Bool { Self.statusShown(status, mode: mode) }
 
     var idleStatus: String {
         if stack.transcript != nil {
@@ -1100,7 +1222,7 @@ final class FloaterModel: ObservableObject {
         if !retrying.isEmpty {
             return Self.savedRetrying
         }
-        return keysTrusted ? "Hold to talk" : "Keys off - click !"
+        return keysTrusted ? Self.restingStatus : "Keys off - click !"
     }
 
     /// Asks macOS for the Accessibility permission again (the keys-off badge).
@@ -2130,25 +2252,43 @@ final class FloaterModel: ObservableObject {
 /// line plays or the voice is muted, and Hear again under a reply. Voice volume
 /// and mute are on a right-click of the card; recent replies are on the web page.
 struct FloaterView: View {
+    /// The floater's two windows: its card, and the reply bubble beside it.
+    enum Part {
+        case card
+        case bubble
+    }
+
     @ObservedObject var model: FloaterModel
     let mover: WindowMover
+    var part: Part = .card
 
     private let talkSize: CGFloat = 36
     private let showSize: CGFloat = 27
     private let statusWidth: CGFloat = 112
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        switch part {
+        case .card:
             cluster
-            if model.bubbleShown {
-                bubble
+                .fixedSize()
+                .onGeometryChange(for: CGSize.self) { proxy in
+                    proxy.size
+                } action: { size in
+                    mover.fit(size)
+                }
+        case .bubble:
+            let shown = model.bubbleShown
+            VStack {
+                if shown {
+                    bubble
+                }
             }
-        }
-        .fixedSize()
-        .onGeometryChange(for: CGSize.self) { proxy in
-            proxy.size
-        } action: { size in
-            mover.fit(size)
+            .fixedSize()
+            .onGeometryChange(for: CGSize.self) { proxy in
+                shown ? proxy.size : .zero
+            } action: { size in
+                mover.fitBubble(size)
+            }
         }
     }
 
@@ -2192,19 +2332,21 @@ struct FloaterView: View {
                 talkButton
                 showButton
             }
-            Text(model.status)
-                .help(model.status)
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(keysOffIdle ? Self.warnInk : Self.soft)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .truncationMode(.tail)
-                .frame(width: statusWidth)
-                .allowsHitTesting(false)
+            if model.statusShown {
+                Text(model.status)
+                    .help(model.status)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(keysOffIdle ? Self.warnInk : Self.soft)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .truncationMode(.tail)
+                    .frame(width: statusWidth)
+                    .allowsHitTesting(false)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.bottom, model.statusShown ? 6 : 8)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Self.paper)

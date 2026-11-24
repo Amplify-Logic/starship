@@ -13,7 +13,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## What you get
 
-- Always-on-top, draggable floating control (SwiftUI): two round buttons, Talk and a smaller Show, with a status line under them, and nothing else until there is something to show.
+- Always-on-top, draggable floating control (SwiftUI): two round buttons, Talk and a smaller Show, with a status line under them only while there is something to say, and nothing else until there is something to show.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
@@ -21,7 +21,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
-- Firstmate's newest reply in a bubble under the floater, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something (see [Reply bubble](#reply-bubble)).
+- Firstmate's newest reply in a bubble beside the floater, always wholly on screen, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something (see [Reply bubble](#reply-bubble)).
 - A Do it button on that bubble when Firstmate offers to take an easy-to-undo step on your screen (see [Do it](#do-it)).
 - A voice-volume level of its own and mute on a right-click of the floater, and both, with the recent replies to hear again, in the web page's Settings ([web.md](web.md#settings)).
 - A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
@@ -56,14 +56,15 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## Controls
 
-At rest the floater is a small paper card: Talk, Show and the status line.
-Drag it by the card or the status line.
+At rest the floater is a small paper card that hugs Talk and Show; the status line appears under them only while there is something to say.
+Drag it by the card.
+It stays wherever you put it, even pushed almost wholly off the screen into a corner with only an edge left to grab: neither a reply nor the status line moves it.
 
 | Control | What it does |
 | --- | --- |
 | Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
 | Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
-| Status line | One line under the buttons saying what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
+| Status line | One line under the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
 | Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else) and Mute or Unmute. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
 
 Everything else appears on the reply bubble while it means something, below.
@@ -73,9 +74,10 @@ Muting affects voice only: every reply still shows in the bubble, a reply playin
 
 ### Reply bubble
 
-When Firstmate's reply arrives, it shows in a calm card under the floater: "Firstmate" with the time, then a few lines written for the eye.
+When Firstmate's reply arrives, it shows in a calm card beside the floater: "Firstmate" with the time, then a few lines written for the eye.
 The bubble's words are not the spoken line.
 The voice says the outcome and, when there is more, points at the screen ("There's a question for you on screen."); the bubble is on the screen, so it shows the outcome in one or two short sentences and then the actual ask, the question itself, and never a pointer to the screen.
+The bubble opens on the side toward the middle of the screen, below the floater in the top half and above it in the bottom half, and always wholly on the visible screen, so a floater parked almost off screen in any corner or edge still shows its reply in full.
 Click the words or the arrow to read the whole reply as it was written; an expanded bubble stays until you collapse it or click the cross.
 
 The bubble's controls appear only while they mean something:
