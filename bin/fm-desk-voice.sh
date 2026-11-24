@@ -1037,7 +1037,7 @@ person_prompt() {  # <plain-screen>
         if (choice[i] ~ /^No([^A-Za-z]|$)/) no = 1
       }
       kind = (yes && no) ? "yesno" : "choice"
-      printf "%s\t%s\t%s\n", kind, substr(question, 1, 300), substr(heading, 1, 120)
+      printf "%s\t%s\t%s\n", kind, question, heading
     }
   '
 }

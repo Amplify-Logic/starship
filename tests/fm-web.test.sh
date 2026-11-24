@@ -1041,6 +1041,25 @@ test_a_prompt_waiting_on_a_person_reaches_the_page() {
   printf '%s\n' '{"type":"user","uuid":"r9","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"read"}]}}' >> "$(transcript "$home")"
   rm "$home/prompt"
   assert_equals "$(jq -r '.prompt' <<<"$(conversation "$home")")" "null" "a new reading drops the prompt read before it at once"
+  printf 'choice\tPick \342\200\224 a\342\200\tcolour\n' > "$home/prompt"
+  n=0
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.prompt.kind' <<<"$out")" = choice ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.prompt | [.question, .heading] | join("|")' <<<"$out")" \
+    $'Pick \xe2\x80\x94 a\xef\xbf\xbd|colour' "a question cut inside a character still reaches the page"
+  printf 'yesno%sDo you want to proceed?%sBash command\n' "$tab" "$tab" > "$home/prompt"
+  n=0
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.prompt.kind' <<<"$out")" = yesno ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.prompt.kind' <<<"$out")" "yesno" "a later prompt is still read"
   printf 'nonsense%sWhat?%s\n' "$tab" "$tab" > "$home/prompt"
   sleep 2
   conversation "$home" >/dev/null
@@ -1694,6 +1713,8 @@ console.log([said(null), said({ kind: 'yesno', question: '' }),
   said({ kind: 'yesno', question: 'Do you want to make this edit to Makefile?', heading: '' }),
   said({ kind: 'choice', question: 'Which web framework should we use?', heading: 'Web stack' }),
   said({ kind: 'yesno', question: 'Do you trust the files in this folder?', heading: '' }),
+  said({ kind: 'yesno', question: 'Should I deploy now?', heading: 'Web deploy' }),
+  said({ kind: 'yesno', question: 'Do you want to create a release?', heading: '' }),
   said({ kind: 'other', question: 'Pick one?', heading: '' })].join(' | '));
 const at = Date.parse('2026-11-23T18:55:13Z'), q = { ts: '2026-11-23T18:55:13Z' };
 console.log([V.waitingWords(q, 'busy', at + 5000), V.waitingWords(q, 'busy', at + V.WAIT_LONG_MS + 1000),
@@ -1702,7 +1723,7 @@ JS
 ) || fail "the live line rules did not run: $out"
   assert_equals "$out" 'Thinking | Thinking | Thinking | Show the open pull requests | Running a command | Running a command | Running a command | Reading a file | Changing a file | Searching the files | Waiting on a helper: Look through the web code | Using a connected app | Reading its notes | true
 0s | 9s | 1m 01s | 59m 59s | 1h 03m
-none | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate wants to run a command | Waiting for your answer in the terminal / Pick a colour? | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate wants to run a command | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to use the web | Waiting for your answer in the terminal / Release: Ready to publish? | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your answer in the terminal / Web stack: Which web framework should we use? | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | none
+none | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate wants to run a command | Waiting for your answer in the terminal / Pick a colour? | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate wants to run a command | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to use the web | Waiting for your answer in the terminal / Release: Ready to publish? | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your answer in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your answer in the terminal / Web stack: Which web framework should we use? | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | Waiting for your yes or no in the terminal / Firstmate needs your yes or no | none
 Waiting, Firstmate will read it next | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Waiting, Firstmate will read it next' "the live line in plain words, how long the turn has run, and what a waiting message says"
   pass "the live line says what is happening in plain words and for how long"
 }

@@ -1627,6 +1627,7 @@ def read_prompt(home: Path, root: Path) -> Optional[Dict[str, str]]:
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=PROMPT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError):
@@ -1635,7 +1636,7 @@ def read_prompt(home: Path, root: Path) -> Optional[Dict[str, str]]:
     fields = (lines[0].split("\t") + ["", ""])[:3] if lines else []
     if not fields or fields[0] not in ("yesno", "choice"):
         return None
-    return {"kind": fields[0], "question": fields[1].strip(), "heading": fields[2].strip()}
+    return {"kind": fields[0], "question": fields[1].strip()[:300], "heading": fields[2].strip()[:120]}
 
 
 def prompt_reader(home: Path, root: Path) -> Any:
@@ -1648,11 +1649,14 @@ def prompt_reader(home: Path, root: Path) -> Any:
     held: Dict[str, Any] = {"value": None, "at": float("-inf"), "reading": False, "turn": 0, "key": None}
 
     def read(turn: int) -> None:
-        value = read_prompt(home, root)
-        with lock:
-            held["reading"] = False
-            if held["turn"] == turn:
-                held.update(value=value, at=time.monotonic())
+        value = None
+        try:
+            value = read_prompt(home, root)
+        finally:
+            with lock:
+                held["reading"] = False
+                if held["turn"] == turn:
+                    held.update(value=value, at=time.monotonic())
 
     def get(running: bool, key: str) -> Optional[Dict[str, str]]:
         with lock:
@@ -3420,7 +3424,7 @@ VIEW_JS = r"""
   /* What the live line says while the screen waits on a person: plain words
      for the kind of answer it needs, then what it asks. A yes or no is a
      permission and never shows its own words: the generic words for the
-     permission its heading or Claude Code's own question names (Edit file,
+     permission when its heading is one of Claude Code's own (Edit file,
      Bash command, Fetch), else plain words that it needs a yes or no. A
      choice shows its question and heading only when neither holds a path, a
      file name, a command or code. */
@@ -3430,18 +3434,17 @@ VIEW_JS = r"""
     if (!plainAbout(text) || /\w\.[A-Za-z][A-Za-z0-9]{0,7}\b|(^|[^\w.])\.[A-Za-z]|(^|[^\w-])--?[A-Za-z]/.test(text)) return null;
     return text;
   }
-  function askAbout(prompt) {
-    var heading = String(prompt.heading || ''), question = String(prompt.question || '');
-    if (/\b(edit|write|create|delete|notebook)\b/i.test(heading)
-        || /^Do you want to (make this edit to|create)\b/i.test(question)) return 'Firstmate wants to change a file';
-    if (/\bread\b/i.test(heading)) return 'Firstmate wants to read a file';
-    if (/\b(bash|command|shell)\b/i.test(heading)) return 'Firstmate wants to run a command';
-    if (/\b(fetch|web)\b/i.test(heading)) return 'Firstmate wants to use the web';
+  function askAbout(heading) {
+    heading = String(heading || '').trim();
+    if (/^(Edit|Create|Write|Delete) file$|^Edit notebook$/.test(heading)) return 'Firstmate wants to change a file';
+    if (heading === 'Read file') return 'Firstmate wants to read a file';
+    if (heading === 'Bash command') return 'Firstmate wants to run a command';
+    if (heading === 'Fetch') return 'Firstmate wants to use the web';
     return 'Firstmate needs your yes or no';
   }
   function promptWords(prompt) {
     if (!prompt) return null;
-    if (prompt.kind === 'yesno') return { what: 'Waiting for your yes or no in the terminal', ask: askAbout(prompt) };
+    if (prompt.kind === 'yesno') return { what: 'Waiting for your yes or no in the terminal', ask: askAbout(prompt.heading) };
     if (prompt.kind !== 'choice') return null;
     var question = plainAsk(prompt.question), heading = plainAsk(prompt.heading);
     var ask = question && heading !== null ? (heading ? heading + ': ' + question : question) : 'Firstmate needs an answer';
