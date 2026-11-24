@@ -102,11 +102,12 @@ The floater itself never clicks or acts.
 Do it sends one short line of yours into the Firstmate chat, `Do it: <what will happen> (floater offer <id>)`, through the same path as a talk message, and Firstmate takes the step under its own screen rules.
 Because it travels as a message, a chat showing a question, a permission prompt or a picker gets nothing: the line goes to the mailbox and Firstmate is rung, so a tap can never answer a dialog.
 The line names its offer, so a late tap cannot approve a newer, different one, and an offer nobody answered expires once a newer reply arrives, or after 30 minutes.
+A tap Firstmate has not taken up within 30 minutes expires too, so the bubble does not stay up for work that never started.
 Not now closes the offer and sends nothing.
 While Firstmate works the bubble says so and shows Stop, which sends `Stop: <what will happen> (floater offer <id>)`.
 
 The offer is a small record of its own beside the reply, because the spoken line can never ask you to decide; the voice says what Firstmate found, and the bubble carries the offer.
-`bin/fm-desk-offer.sh`'s header owns the record, its states and the lines a tap sends; Firstmate writes it under the screen-action rules in `.agents/skills/macos-computer-use/SKILL.md`.
+`bin/fm-desk-offer.sh`'s header owns the record, its states and the lines a tap sends; Firstmate records offers and answers taps under the rules in [desk voice replies](desk-voice-replies.md), only in a home with the `macos-computer-use` skill switched on (`.agents/opt-in-skills/macos-computer-use/SKILL.md`).
 
 You can talk while a reply is being spoken.
 The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.

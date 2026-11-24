@@ -23,7 +23,8 @@
 # into the chat, or saved to its mailbox when the chat shows a question, a
 # permission prompt or a picker, so a tap can never answer a dialog;
 # docs/desk-floater.md). Firstmate then takes the step under its own screen
-# rules (.agents/skills/macos-computer-use/SKILL.md).
+# rules (docs/desk-voice-replies.md and the macos-computer-use skill,
+# .agents/opt-in-skills/macos-computer-use/SKILL.md).
 #
 # Commands, for Firstmate:
 #   offer <what will happen...>
@@ -51,8 +52,10 @@
 #             other fields, when there is no offer. An open offer expires once
 #             a newer reply than the one it came with arrives (a reply history
 #             number above after + 1, read through bin/fm-speak.sh --history)
-#             or after 30 minutes. Any record not updated for two hours reads
-#             as none.
+#             or after 30 minutes. An accepted or stopping offer that
+#             Firstmate has not marked working or done within 30 minutes of the
+#             tap also reads as expired. Any record not updated for two hours
+#             reads as none.
 #   answer do <id>
 #             the Do it tap: only for the current open offer, it becomes
 #             accepted and the line `Do it: <text> (floater offer <id>)` is sent.
@@ -132,7 +135,7 @@ now = int(time.time())
 OPEN_FOR = 30 * 60
 KEPT_FOR = 2 * 60 * 60
 # Steps a tap may never approve (fm-desk-offer.sh offer).
-NOT_EASY = re.compile(r"\b(send|sends|sending|e-?mail|e-?mails|reply|buy|buys|purchase|pay|pays|book|books|booking|reserve|delete|deletes|trash|erase|submit|submits|publish|publishes)\b", re.I)
+NOT_EASY = re.compile(r"\b(send\w*|e-?mail\w*|repl(y|ies|ied|ying)|buy\w*|bought|purchas\w*|pa(y|ys|id|ying|yment|yments)|book(s|ed|ing)?|reserv(e|es|ed|ing|ation|ations)|delet\w*|trash\w*|eras\w*|submit\w*|publish\w*)\b", re.I)
 
 
 def load():
@@ -153,6 +156,8 @@ def shown(data):
         return {"schema": "fm-desk-offer.v1", "state": "none"}
     out = dict(data)
     if out["state"] == "open" and (newest > int(out.get("after") or 0) + 1 or now - int(out["created_at"]) > OPEN_FOR):
+        out["state"] = "expired"
+    if out["state"] in ("accepted", "stopping") and now - int(out["updated_at"]) > OPEN_FOR:
         out["state"] = "expired"
     return out
 

@@ -46,7 +46,9 @@
 #     points at the screen ("on screen", "see below", "is below", "are below")
 #     or a closing sentence ending in ":", then the actual ask when the reply
 #     has one: its last sentence ending in "?" outside code and tables, unless
-#     the outcome already holds it. It never carries a voice-only pointer;
+#     the outcome already holds it. When that leaves nothing, as with a lead
+#     that is a single sentence ending in ":", the caption is the spoken lead
+#     without its pointer. It never carries a voice-only pointer;
 #   - the full text: the whole reply as written, after the routine no-news line
 #     is dropped, which the bubble opens to.
 # When the register refuses the line (bin/fm-speak.sh exit 2), the hook asks the
@@ -457,6 +459,7 @@ CAPTION=$(printf '%s\n' "$PARA" | awk -v question="$QUESTION" '
     print out
   }
 ')
+CAPTION=${CAPTION:-$LEAD}
 EYE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-reply-eye.XXXXXX" 2>/dev/null) || EYE_DIR=
 EYE_ARGS=()
 if [ -n "$EYE_DIR" ]; then

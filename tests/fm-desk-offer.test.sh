@@ -80,7 +80,9 @@ test_steps_that_are_not_easy_to_undo_are_refused() {
   local fx code text
   fx=$(new_root refused)
   for text in "Send the reply to the landlord" "Book the 9am table" "Delete the old exports" \
-    "Submit the form" "Buy the cheaper ticket"; do
+    "Submit the form" "Buy the cheaper ticket" "Finish deleting the old exports" \
+    "Paying the invoice in Safari" "Submitting the expense claim" "Purchasing the upgrade" \
+    "Publishing the draft post" "Emailing the summary to Sam" "Erasing the spare disk"; do
     offer "$fx" offer "$text" >/dev/null 2>&1 && code=0 || code=$?
     expect_code 2 "$code" "a step that is not easy to undo: $text"
   done
@@ -88,6 +90,7 @@ test_steps_that_are_not_easy_to_undo_are_refused() {
   offer "$fx" offer "" >/dev/null 2>&1 && code=0 || code=$?
   expect_code 2 "$code" "an empty offer"
   offer "$fx" offer "Export the chart as a PNG to Downloads" >/dev/null || fail "an export is easy to undo"
+  offer "$fx" offer "Open the Bookmarks window in Safari" >/dev/null || fail "opening a window is easy to undo"
   pass "a step that sends, buys, books, deletes or submits is refused"
 }
 
@@ -122,6 +125,33 @@ test_an_open_offer_expires_when_a_newer_reply_arrives() {
   expect_code 1 "$code" "a tap on an expired offer"
   assert_absent "$fx/sent.log" "nothing was sent"
   pass "an open offer expires once a newer reply arrives"
+}
+
+age_record() {  # <fx> <seconds>
+  local f="$1/home/state/desk-voice/offer.json"
+  jq --argjson by "$2" '.updated_at -= $by | .created_at -= $by' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+test_a_tap_nobody_acts_on_expires_after_thirty_minutes() {
+  local fx id code
+  fx=$(new_root tapped-stale)
+  offer "$fx" offer "Open the Sound settings" >/dev/null
+  id=$(id_of "$fx")
+  offer "$fx" answer "do" "$id" >/dev/null || fail "the tap failed"
+  age_record "$fx" 1700
+  assert_equals accepted "$(state_of "$fx")" "a fresh tap still waits for Firstmate"
+  age_record "$fx" 200
+  assert_equals expired "$(state_of "$fx")" "a tap Firstmate never took up no longer holds the bubble"
+  offer "$fx" working "$id" >/dev/null 2>&1 && code=0 || code=$?
+  expect_code 1 "$code" "working on a stale tap"
+
+  offer "$fx" offer "Open the Sound settings" >/dev/null
+  id=$(id_of "$fx")
+  offer "$fx" answer "do" "$id" >/dev/null || fail "the tap failed"
+  offer "$fx" working "$id" >/dev/null || fail "working was refused"
+  age_record "$fx" 1900
+  assert_equals working "$(state_of "$fx")" "work Firstmate is doing keeps the bubble"
+  pass "a tap nobody acts on expires after thirty minutes"
 }
 
 test_not_now_sends_nothing_and_a_failed_send_can_be_tapped_again() {
@@ -162,5 +192,6 @@ test_an_offer_is_shown_and_a_do_it_tap_sends_one_line_naming_it
 test_steps_that_are_not_easy_to_undo_are_refused
 test_a_late_tap_never_approves_a_newer_offer
 test_an_open_offer_expires_when_a_newer_reply_arrives
+test_a_tap_nobody_acts_on_expires_after_thirty_minutes
 test_not_now_sends_nothing_and_a_failed_send_can_be_tapped_again
 test_taps_never_reach_the_chat_from_an_automated_run

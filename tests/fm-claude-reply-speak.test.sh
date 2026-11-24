@@ -161,6 +161,14 @@ test_the_bubble_never_carries_a_screen_pointer() {
 Shall I merge it?"
   assert_equals "Captain, the PR is green and approved. Shall I merge it?" "$(caption_of "$dir")" \
     "a reply the voice could only point at still shows its question"
+  dir=$(make_primary_dir "$TMP_ROOT/eye-colon-lead")
+  run_hook "$dir" "Captain, here is what changed:
+
+- the export is faster
+- the chart is fixed"
+  assert_contains "$(spoken "$dir")" "on screen." "the voice keeps its pointer"
+  assert_equals "Captain, here is what changed." "$(caption_of "$dir")" \
+    "a lead that only introduces a list shows that lead, closed, without the voice pointer"
   pass "the bubble never carries a screen pointer"
 }
 

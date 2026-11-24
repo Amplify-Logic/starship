@@ -3,7 +3,7 @@ name: macos-computer-use
 description: >-
   Agent-only procedure for operating a macOS app's interface on the captain's Mac - reading a window, clicking, typing, choosing a menu item or answering a dialog - or a page in the captain's own browser.
   Load before any such step, before briefing a worker to take one, and when a `Do it:` or `Stop:` line from the desk floater's offer arrives.
-  Owns the order of means (app scripting connection first, then accessibility-first Peekaboo, screenshots last), the act-by-element and batch-then-settle loop, the focus and dialog guard, the browser recipe, the per-app recipe cards, the Peekaboo pin and removal, and what a desk floater Do it tap may approve.
+  Owns the order of means (app scripting connection first, then accessibility-first Peekaboo, screenshots last), the act-by-element and batch-then-settle loop, the focus and dialog guard, the browser recipe, the per-app recipe cards, the Peekaboo pin and removal, and how the step a desk floater Do it tap approves is taken.
 user-invocable: false
 metadata:
   internal: true
@@ -137,12 +137,7 @@ When a worker's task needs the desktop, name this file and `recipes.md` beside i
 
 ## 9. Offers on the desk floater
 
-When a reply offers to take one step on the captain's screen and that step is easy to undo (a setting, a window, an export), record the offer beside the reply with `bin/fm-desk-offer.sh offer "<what will happen>"`, one plain line; the floater's bubble then shows it with Do it and Not now.
-Its header owns the record, the states and the lines a tap sends.
+A voice-reply home records a desk floater offer and answers its Do it and Stop lines under the rules in `docs/desk-voice-replies.md`; `bin/fm-desk-offer.sh`'s header owns the record, the states and the lines a tap sends.
 
-- A Do it tap arrives in the chat as `Do it: <what will happen> (floater offer <id>)`; it is the captain's yes for that one easy-to-undo step and nothing else.
-  Anything that sends, buys, books, deletes or submits still needs the captain's yes in the chat or on the approvals page, and `offer` refuses such a line.
-- Before acting on a tap, run `bin/fm-desk-offer.sh working <id>` with the id from the line; when it refuses, the tap was for an older or expired offer, so do not act, and say so.
-- Then take the step under sections 1 to 6 as usual, guard included, and run `bin/fm-desk-offer.sh done <id>` when it is finished, stopped or dropped.
-- A `Stop: ... (floater offer <id>)` line means stop at once, before the next batch: leave the screen as it is, say what was and was not done, and run `done <id>`.
+- The step a tap approves is taken under sections 1 to 6 as usual, guard included.
 - Passwords, verification codes and privacy prompts stay the captain's whatever a tap says.
