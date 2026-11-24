@@ -81,8 +81,8 @@ test_steps_that_are_not_easy_to_undo_are_refused() {
   fx=$(new_root refused)
   for text in "Send the reply to the landlord" "Book the 9am table" "Delete the old exports" \
     "Submit the form" "Buy the cheaper ticket" "Finish deleting the old exports" \
-    "Paying the invoice in Safari" "Submitting the expense claim" "Purchasing the upgrade" \
-    "Publishing the draft post" "Emailing the summary to Sam" "Erasing the spare disk"; do
+    "Paying the invoice in Safari" "Submitting the expense claim" "Finish purchasing the upgrade" \
+    "Publishing the draft post" "Start emailing the summary to Sam" "Erasing the spare disk"; do
     offer "$fx" offer "$text" >/dev/null 2>&1 && code=0 || code=$?
     expect_code 2 "$code" "a step that is not easy to undo: $text"
   done
@@ -90,7 +90,7 @@ test_steps_that_are_not_easy_to_undo_are_refused() {
   offer "$fx" offer "" >/dev/null 2>&1 && code=0 || code=$?
   expect_code 2 "$code" "an empty offer"
   offer "$fx" offer "Export the chart as a PNG to Downloads" >/dev/null || fail "an export is easy to undo"
-  offer "$fx" offer "Open the Bookmarks window in Safari" >/dev/null || fail "opening a window is easy to undo"
+  offer "$fx" offer "Open the bookmarks window in Safari" >/dev/null || fail "opening a window is easy to undo"
   pass "a step that sends, buys, books, deletes or submits is refused"
 }
 
