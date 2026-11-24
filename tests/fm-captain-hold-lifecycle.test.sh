@@ -883,6 +883,36 @@ test_answer_records_and_closes() {
   pass "answer records the captain's words, closes idempotently, and releases routed work"
 }
 
+# On 2026-11-24 the owner found settled calls on the Factory screens too
+# long: the whole recorded answer, quotes and notes and all. `--summary`
+# records one line saying what was decided, which those screens show instead.
+test_answer_records_a_one_line_summary() {
+  local home show
+  home=$(make_home answer-summary)
+  run_captain "$home" hold sample-name-call \
+    --title "Keep the product name?" --reason "naming choice pending" --repo sample >/dev/null \
+    || fail "could not register the captain-held task"
+  printf 'Captain 24 Nov 20:23: "keep it". Long note on why, with dates and asides.\n' > "$home/name.txt"
+  if run_captain "$home" answer sample-name-call --decision-file "$home/name.txt" \
+    --summary $'two\nlines' >/dev/null 2>&1; then
+    fail "answer accepted a summary of two lines"
+  fi
+  if run_captain "$home" answer sample-name-call --decision-file "$home/name.txt" \
+    --summary "$(printf 'x%.0s' $(seq 1 301))" >/dev/null 2>&1; then
+    fail "answer accepted a summary over 300 bytes"
+  fi
+  assert_contains "$(tasks_in "$home" show sample-name-call --full)" "state: queued" "a refused summary closed the call"
+  run_captain "$home" answer sample-name-call --decision-file "$home/name.txt" \
+    --summary "The product keeps its name." >/dev/null || fail "answer with a summary failed"
+  show=$(tasks_in "$home" show sample-name-call --full)
+  assert_contains "$show" "state: done" "the call answered with a summary did not close"
+  assert_contains "$show" "Outcome: The product keeps its name." "the summary was not recorded"
+  assert_contains "$show" "Long note on why, with dates and asides." "the captain's own words were not kept beside the summary"
+  run_captain "$home" answer sample-name-call --decision-file "$home/name.txt" >/dev/null \
+    || fail "a retry without the summary is not the same answer"
+  pass "answer records a one-line summary of what was decided above the captain's words"
+}
+
 # --release lifts the hold instead of closing, preserving the work item's own
 # body under the record; a re-held task later accepts a new answer.
 test_release_frees_held_work() {
@@ -5385,6 +5415,7 @@ test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
+test_answer_records_a_one_line_summary
 test_release_frees_held_work
 test_answer_expect_identity_answers_only_the_call_shown
 test_answer_expect_identity_follows_rewording

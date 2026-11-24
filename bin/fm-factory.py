@@ -1584,29 +1584,86 @@ def routine_lines(factory: Dict[str, Any],
 RESOLUTION_RE = re.compile(r"^Resolution recorded by fm-(captain|decision)-hold\.$")
 
 
-def recorded_answer(lines: Any) -> str:
+def answer_record(lines: Any) -> Dict[str, str]:
     """What the owner answered on a closed call, from its resolution record (bin/fm-captain-hold.sh answer).
 
     Records are prepended, so the newest is the first, up to the next one; only
     its words under `Captain decision:` are the owner's, and a captured answer
-    names the option as it was shown, which reads better than its key.
+    names the option as it was shown, which reads better than its key. `words`
+    is that answer in full, `outcome` the one-sentence `Outcome:` line written
+    with it (`answer --summary`), or nothing when none was. A closure on
+    evidence is no answer of the owner's, so it has neither.
     """
     lines = [str(line).strip() for line in lines or [] if isinstance(line, str)]
     starts = [i for i, line in enumerate(lines) if RESOLUTION_RE.match(line)]
     if not starts:
-        return ""
+        return {"words": "", "outcome": ""}
     record = lines[starts[0] + 1:starts[1] if len(starts) > 1 else len(lines)]
     labels = [line for line in record if line in ("Captain decision:", "Reconciliation evidence:")]
     if labels[:1] != ["Captain decision:"]:
-        return ""
-    block = [line for line in record[record.index("Captain decision:") + 1:] if line]
+        return {"words": "", "outcome": ""}
+    at = record.index("Captain decision:")
+    outcome = next((line.split(":", 1)[1] for line in record[:at] if line.startswith("Outcome:")), "")
+    block = [line for line in record[at + 1:] if line]
     shown = next((line.split(":", 1)[1] for line in block if line.startswith("Answer as shown to the captain:")), None)
     if shown is not None:
         words = shown.rsplit(" -> ", 1)[0]
+    elif any(line.startswith("Captain answered this") for line in block):
+        words = next((line.split(":", 1)[1] for line in block if line.startswith("Answer:")), "")
     else:
-        words = next((line.split(":", 1)[1] for line in block if line.startswith("Answer:")), None) or \
-            next((line for line in block if not line.startswith("Captain answered this")), "")
-    return tidy(card_words(words.strip()), 200)
+        words = " ".join(block)
+    return {"words": card_words(words.strip()), "outcome": tidy(card_words(outcome.strip()), 240)}
+
+
+# The parts of a recorded answer that are bookkeeping, not what was decided:
+# who said it and when, the question repeated, and asides in brackets.
+ANSWER_SAID_RE = re.compile(r"^(?:the\s+)?(?:captain|owner)\b[^\"\u201c]{0,60}?:\s+", re.I)
+ANSWER_ABOUT_RE = re.compile(r"^about\s.{1,240}?[?.!]?:\s+", re.I)
+QUOTED_RE = re.compile(r"^[\"\u201c](.+?)(?:[\"\u201d]|$)")
+
+
+def clip_words(text: str, limit: int) -> str:
+    """Text cut to at most `limit` characters, on a clause's end when one is past half way, else on a
+    whole word, ending in an ellipsis when cut."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = cut.rfind("; ")
+    cut = cut[:end] if end > limit // 2 else cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:-") + "\u2026"
+
+
+def sentence(text: str) -> str:
+    """Text as a sentence: a capital first letter and an end mark."""
+    text = text.strip()
+    if not text:
+        return ""
+    text = text[0].upper() + text[1:]
+    return text if text[-1] in ".?!\u2026" else text + "."
+
+
+def short_answer(words: str) -> str:
+    """The first sentence of what the owner answered, without who said it when, quote marks or asides."""
+    text = ANSWER_SAID_RE.sub("", words.strip())
+    text = ANSWER_ABOUT_RE.sub("", text)
+    quoted = QUOTED_RE.match(text)
+    if quoted:
+        text = quoted.group(1)
+    text = re.sub(r"\s*\([^()]*\)", "", text)
+    text = re.sub(r"[\"\u201c\u201d]", "", text)
+    text = re.split(r"(?<=[.!?;])\s", text.strip(), maxsplit=1)[0].rstrip(";")
+    return sentence(clip_words(text, 110))
+
+
+def settled_line(title: str, answer: Dict[str, str]) -> str:
+    """A settled call in a sentence or two: the outcome written with the answer, or else
+    the question and the first sentence of the answer, both short (docs/factory-pane.md)."""
+    if answer["outcome"]:
+        return sentence(answer["outcome"])
+    question = clip_words(re.sub(r"\s*\([^()]*\)", "", title).strip(), 80)
+    question = sentence(question) if question else ""
+    reply = short_answer(answer["words"]) if answer["words"] else ""
+    return " ".join(part for part in (question, reply) if part) or title
 
 
 def report_time(home: str, row: Dict[str, Any]) -> Optional[int]:
@@ -2046,11 +2103,13 @@ def build_record(home: str, now: int, snapshot: Dict[str, Any], since: Optional[
                  "job": row["id"], "title": title}
         if row["id"] not in delivered:
             if "captain" in (row.get("kind"), row.get("hold_kind")):
-                # A settled call says what the owner answered, from its resolution record.
-                answer = recorded_answer(row.get("body_lines"))
-                event.update(word="settled", answer=answer,
-                             text="%s%s You answered: %s" % (title, "" if title[-1:] in ".?!" else ".", answer)
-                             if answer else title)
+                # A settled call says in a sentence or two what was decided, from its
+                # resolution record, and keeps the question and the whole answer to unfold.
+                answer = answer_record(row.get("body_lines"))
+                event.update(word="settled", answer=tidy(answer["words"], 200),
+                             text=settled_line(title, answer) if answer["words"] else title)
+                if answer["words"]:
+                    event["detail"] = {"question": card_words(title), "answer": tidy(answer["words"], 2000)}
             else:
                 event.update(word="closed", text="%s was closed; no change or report on record." % title)
         elif completion.get("verb") == "reported" or (row.get("kind") == "scout" and row.get("report_path")):
@@ -2690,6 +2749,7 @@ class Row(list):
     stop: Optional[Tuple[str, str]] = None   # the highlight stop this row draws, if any
     read: Optional[Tuple[str, List[str]]] = None   # the title and sources a click on this row reads
     link: Optional[Tuple[str, str]] = None   # the title and PR a click on this row opens
+    unfold: Optional[str] = None   # the settled call a click on this row unfolds or folds
 
 
 def S(text: Any, colour: str = "ice", bold: bool = False) -> Tuple[str, str, bool]:
@@ -2857,6 +2917,7 @@ class View:
         self.cursor = 0
         self.selected: Optional[Tuple[str, str]] = None
         self.unfolded: Optional[str] = None   # the factory whose folded jobs are listed
+        self.shown: set = set()   # the settled calls unfolded to their question and whole answer
         # The older questions shelf listed: "" on the overview, else the factory whose page shows it.
         self.older_open: Optional[str] = None
         self.older_asked: Dict[str, Dict[str, Any]] = {}   # older questions asked about here a moment ago
@@ -3440,7 +3501,33 @@ class View:
             text = title
         return {"id": event.get("job"), "word": word, "label": NEW_LABELS[word],
                 "text": text, "when": self.stamp(event), "pr": event.get("pr") if word == "went live" else None,
-                "read": list(event.get("read") or []), "title": title}
+                "read": list(event.get("read") or []), "title": title,
+                "detail": event.get("detail") if word == "settled" else None}
+
+    def news_rows(self, width: int, lead, item: Dict[str, Any], indent: int) -> List[Row]:
+        """One outcome in New or Lately, in at most three lines.
+
+        A settled call with more to it than its sentence or two ends in `▸ more`;
+        a click on it unfolds the question and the whole answer, and a click
+        again folds them away.
+        """
+        detail = item.get("detail")
+        if not detail or not item.get("id"):
+            return flow(width, lead, item["text"], "ice", indent=indent, cap=3)
+        shown = item["id"] in self.shown
+        rows = flow(width, lead, item["text"], "ice", indent=indent, cap=3,
+                    tail=[S("  ▾ less" if shown else "  ▸ more", "faint")])
+        if shown:
+            pad = " " * indent
+            rows += flow(width, [S(pad), S("Asked: ", "faint")], detail["question"], "mist", indent=indent)
+            rows += flow(width, [S(pad), S("You answered: ", "faint")], detail["answer"], "mist", indent=indent)
+        for line in rows:
+            line.unfold = item["id"]
+        return rows
+
+    def toggle_shown(self, ident: str) -> None:
+        """Unfold a settled call's question and whole answer, or fold them away again."""
+        self.shown ^= {ident}
 
     def lately_events(self, fac: Dict[str, Any]) -> List[Dict[str, Any]]:
         """What a factory's own page lists under Lately: its New (news()), PAGE_FEED of them at most.
@@ -3573,7 +3660,7 @@ class View:
         for item in told["new"]:
             lead = [S(" " * pad), S(item["when"].ljust(7), "faint"),
                     S(item["label"] + ": ", FEED_COLOUR.get(item["word"], "amber"), True)]
-            new += flow(width, lead, item["text"], "ice", indent=pad + 7, cap=3)
+            new += self.news_rows(width, lead, item, pad + 7)
             if item["read"]:
                 new.append(read_row(width, " " * (pad + 7), item))
             if item["pr"]:
@@ -3820,7 +3907,7 @@ class View:
         for item in page["lately"]:
             lead = [S("   "), S(item["when"].ljust(9), "faint"),
                     S(item["label"] + ": ", FEED_COLOUR.get(item["word"].split(" ·")[0], "amber"), True)]
-            rows += flow(width, lead, item["text"], "ice", indent=12, cap=3)
+            rows += self.news_rows(width, lead, item, 12)
             if item["read"]:
                 rows.append(read_row(width, " " * 12, item))
             if item["pr"]:
@@ -3973,6 +4060,7 @@ def screen(view: View) -> Dict[str, Any]:
     def new_of(item: Dict[str, Any]) -> Dict[str, Any]:
         return {"id": item["id"], "word": item["word"], "label": item["label"], "text": item["text"],
                 "when": item["when"], "pr": item["pr"], "read": bool(item["read"]), "title": item["title"],
+                "detail": item.get("detail"),
                 "colour": FEED_COLOUR.get(item["word"].split(" ·")[0], "amber")}
 
     def factory_of(fac: Dict[str, Any]) -> Dict[str, Any]:
@@ -4958,7 +5046,8 @@ class Pane:
             view.scroll(3 if key == "wheel-down" else -3)
             return True
         if key.startswith(CLICK):
-            # A click reads the Read line or opens the change line it lands on; anywhere else it does nothing.
+            # A click reads the Read line or opens the change line it lands on, and unfolds or folds
+            # the settled call it lands on; anywhere else it does nothing.
             line = int(key[len(CLICK):])
             drawn = self.drawn[line - 1] if 0 < line <= len(self.drawn) else None
             if drawn is not None and view.talking is None and view.confirm is None:
@@ -4966,6 +5055,8 @@ class Pane:
                     self.read(drawn.read)
                 elif drawn.link:
                     self.open_change(drawn.link)
+                elif drawn.unfold:
+                    view.toggle_shown(drawn.unfold)
             return True
         if key in ("mouse", "other"):
             return True

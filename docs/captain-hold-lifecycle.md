@@ -88,6 +88,7 @@ The `answer` subcommand records the captain's exact words and resolves the call 
 | `answer` | Closes a question-shaped call. |
 | `answer --release` | Frees a captain-gated work item to proceed without completing it. |
 | `answer --expect-identity <identity>` | Records the answer only when the call's current `open --identity` value still matches, and otherwise exits 3 and records nothing. |
+| `answer --summary <sentence>` | Also records one line saying what was decided, which the Factory screens show for the settled call in place of a shortened answer. |
 
 It requires a non-empty captain decision file of at most 8192 bytes.
 `answer --release` is attended-only: while the away-posture record exists it is refused before anything is written, and the keyed-answer intake refuses a `release` line the same way, because only the captain in an attended session releases a captain hold.

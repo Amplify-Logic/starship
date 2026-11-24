@@ -27,7 +27,7 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
-#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release] [--expect-identity <identity>]
+#   fm-captain-hold.sh answer <task-id> --decision-file <path> [--summary <sentence>] [--release] [--expect-identity <identity>]
 #   fm-captain-hold.sh pr-policy <task-id> <PR-url> <merged|closed|terminal> <close|release>
 #   fm-captain-hold.sh settle-pr <task-id> <PR-url>
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -106,6 +106,12 @@
 # hold stops between the two, while a re-hold with an identical reason keeps
 # the stamp and the identity the captain was shown.
 # Without the option the answer behaves exactly as described above.
+# `--summary` is one plain line of at most 300 bytes saying what was decided,
+# written as an `Outcome:` line in the resolution block above the captain's
+# words; it is not part of the decision digest, so a retry with another
+# summary is still the same answer. The Factory screens show it as the settled
+# call's sentence (bin/fm-factory.py settled_line) and keep the full words to
+# unfold; without it they shorten the words themselves.
 #
 # ONE KEYED-ANSWER INTAKE, FED BY EVERY CHANNEL.
 # "A keyed answer resolves its matching captain-held task" is a single
@@ -416,6 +422,7 @@ BINDING_ANY='(any)'
 
 DECISION_TEXT=''
 DECISION_DIGEST=''
+DECISION_SUMMARY=''
 
 load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
   local path=$1 decision
@@ -602,10 +609,11 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 # reading as the captain's own words. Reconciliation modes carry evidence;
 # answer modes carry what the captain said.
 resolution_block() {  # <mode>
-  local label='Captain decision:'
+  local label='Captain decision:' outcome=''
   case "$1" in reconciled|forge-closed|forge-released) label='Reconciliation evidence:' ;; esac
-  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
-    "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
+  [ -z "$DECISION_SUMMARY" ] || [ "$label" != 'Captain decision:' ] || outcome="Outcome: $DECISION_SUMMARY"$'\n'
+  printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n%s\n%s\n%s\n' \
+    "$DECISION_DIGEST" "$1" "$outcome" "$label" "$DECISION_TEXT"
 }
 
 # Durable state of one captain call: an active captain hold (annotations
@@ -1415,12 +1423,13 @@ remove_interrupted_answer_stamp() {  # <task-id>
 
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
-  local expect_identity='' expect_given=0 current_identity
+  local expect_identity='' expect_given=0 current_identity summary='' summary_given=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --decision-file) shift; decision_file=${1:-} ;;
+      --summary) shift; summary=${1:-}; summary_given=1 ;;
       --release) release=1 ;;
       --expect-identity) shift; expect_identity=${1:-}; expect_given=1 ;;
       *) usage >&2; exit 2 ;;
@@ -1429,6 +1438,11 @@ command_answer() {
   done
   validate_slug task-id "$id"
   [ "$expect_given" = 0 ] || validate_one_line expect-identity "$expect_identity"
+  if [ "$summary_given" = 1 ]; then
+    validate_one_line summary "$summary"
+    [ "$(printf '%s' "$summary" | LC_ALL=C wc -c | tr -d ' ')" -le 300 ] || fail "summary exceeds 300 bytes"
+    DECISION_SUMMARY=$summary
+  fi
   if [ "$release" = 1 ] && ! release_attended; then
     fail "task $id stays held: $RELEASE_AWAY_REASON"
   fi
