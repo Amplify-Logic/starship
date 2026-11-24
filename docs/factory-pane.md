@@ -63,9 +63,9 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   The first counts the calls in NEEDS YOU, then the older questions and the calls put off to a date, so every call that waits on you is counted once; the second counts the jobs running and any that stopped or hit a problem, and says Starship is on them; the third counts what went live and the reports that came in since you last looked.
   Its figures come from the overview the bridge strip and the status bar show ([status-bar.md](status-bar.md#fleet-words) owns them); before the first reading the second sentence says `reading the crew`, and a reading that is no longer current carries its age, such as `(10m ago)`.
   On a narrow pane the wordmark shortens, and below 72 columns it takes a row of its own above the sentences.
-- A factory's page opens its work with that factory's queue line, which counts every job nobody has started.
+- The queue line (the record's `queue_line`) counts every job nobody has started; a factory's page draws no such line, and its UP NEXT folds the same counts.
   After the total it says what will start each of them: `start on their own` is work that waits on other work or on a date still ahead and needs no word from you, `parked until <date>` is work parked until a date still ahead, which is looked at again on that date and never starts by itself, counted once: `parked until <date>` when every parked job shares one date, else `parked, soonest <date>`, with each job's own date only in the opened list, `in line` is queued with nothing set to start it, `on hold` is held with no date ahead, `wait on other work` is a decision for you that other open work still blocks, so it cannot be decided yet, and `wait on you` is every other decision held for you, with the ones deferred to a date counted apart.
-  A count of zero is left out, and in a narrow pane the line wraps between counts.
+  A count of zero is left out.
   Work listed as in flight that has no worker is not queued; it reads `no worker` on its factory's page.
 - On a first run, with nothing waiting on you and no work in the backlog, open or finished, YOUR FACTORIES says to ask Starship for a first report, and with no factory at all the keys line offers only `q quit`, the one key that does something there.
 - NEEDS YOU comes first, across all factories, most pressing first: the decisions that have waited longest, then finished work, then a second mate's ready PRs.
@@ -96,7 +96,7 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
   A job that is not busy but waits, stopped, failed or is a call of yours that has started is one row with its state in words, and with nothing busy Now opens with `Nothing is running.`
   A job with something to read shows the same `r  Read the report` line.
   A factory with [routine work](#routine-work) adds one `↻` line per routine kind under Now.
-  New is what came out of the factory since the owner last looked: `Went live:`, `Report ready:`, `Settled:`, `PR ready:`, `Finished:`, `Failed:` or `Closed:` in front of the work's title, newest first, each with its time, at most four, then how many more there are, with `, on its own page` only when that page's eight newest events hold them all.
+  New is what came out of the factory since the owner last looked: `Went live:`, `Report ready:`, `Settled:`, `PR ready:`, `Finished:`, `Failed:` or `Closed:` in front of the work's title, newest first, each with its time, at most four, then how many more there are, with `, on its own page` only when that page's Lately, which lists eight, holds them all.
   A settled call says what the owner answered, from its resolution record's `Captain decision:` words, a report shows its `r  Read the report` line, a change that went live through a PR shows an `o  See what changed` line, and work that went live is told once, so its earlier finished or PR ready is left out.
   Next is the first job in line and how many more are lined up after it, or `, once you answer` when the next job waits on a call of yours.
   A factory with nothing that needs you, nothing in Now and nothing new is quiet: it folds into one line under QUIET FOR NOW, saying since when it is idle, or that nothing is running, how many jobs are lined up, and how many of its calls are put off with the date the next comes back.
@@ -104,7 +104,7 @@ The [factory registry](fork-configuration.md#factory-registry-datafactoriesmd) n
 - New starts where the owner last looked at the pane.
   A look is a key pressed in the pane, or the pane focused in Herdr for a few seconds; focus alone keeps a look going for at most 15 minutes after the focus began or the last key press, so a pane left focused all day does not hold New back. Only Herdr saying the pane is not focused ends a focus; a failed or unreadable answer from Herdr changes nothing. A look ends 15 minutes after its last key press or counted focus, and while one is under way New keeps starting where the look before it ended.
   With no look recorded yet it covers the last 12 hours, and it never reaches back more than two days.
-  A factory's own tab records no look, since it shows one factory only, and lists the same outcomes in its own feed, with what the owner and Starship said.
+  A factory's own tab records no look, since it shows one factory only, and lists the same outcomes under Lately.
 - A factory's feed is one rolling list since that start: the time, one word, and a sentence.
   It holds outcomes (`finished`, `report ready`, `PR ready`, `went live`, `closed`, `settled`, `failed`), the owner's own calls as they were held (`asked you`), and what the owner and Starship said; a worker's pause, a blocker, and a question a worker put to Starship never appear, and the overview's New holds the outcomes alone.
   A `report ready`, `went live` or `settled` row leads with that word and then names the work by its title alone, such as `went live  Faster cart`, and a settled call adds what the owner answered.
@@ -162,16 +162,25 @@ Under its factory's Now in YOUR FACTORIES, each routine kind that ran today, or 
 - New and the feed leave out a routine pass that finished, had its report or its PR ready, went live, or was closed or settled, while a failed one and a call it put to you are listed as usual.
 - A pass folded into that line is left out of the factory's busy crew and of whether the factory is at work, so a factory whose only busy work is a folded pass counts as idle, since its last pass or outcome; the top's running count still counts it, since it shows the overview's figures, as the strip and the status bar do.
 - Such a factory reads idle on the overview too, sorted with the idle factories, while any other card it would show, such as a pass that needs a look, still shows in its Now with its routine line, and a factory with a routine line is never folded as quiet.
-- A factory's own tab still lists every routine pass with the rest of its work.
+- A factory's own tab tells its routine work the same way, under HAPPENING NOW.
 
 ## A factory's own tab
 
 `enter` on a factory, or on something that needs you, opens that factory's tab, or focuses it when it is already open.
-Its page is on the left: the three sentences, so other factories' questions stay in view, then this factory's NEEDS YOU with its shelves, its work in order, the rules the crew follows, what it has learned lately, its own feed, and the talk history.
-The rules' size against the cap a brief takes them under is said only from nine tenths of that cap on, and over it.
-Its work opens with the factory's own queue line; everything moving is listed, then the first eight in line, and the rest of its queue folds into one count per queue word: a held decision that other open work blocks waits on other work, and any other is one more that waits on you.
-A call with a card under this page's NEEDS YOU, or on one of its shelves, is shown there only, neither listed again under its work nor counted in a fold; the queue line still counts it.
+Its page is on the left, under the three sentences so other factories' questions stay in view, and reads top to bottom:
+- The factory's name with who steers it on the right, what it is for, and one sentence of state: how many things there need you, how many jobs run there and whether one stopped or hit a problem, and, when something moved, how many changes went live and reports are ready, in the third sentence's words (`View.page_state`).
+- NEEDS YOU, this factory's cards, with its older questions shelf under them.
+- HAPPENING NOW, the factory's Now as the overview tells it, with `Nothing is running.` when nothing runs, its routine lines, and any other job under way that the queue does not hold.
+- LATELY, its New: the same outcomes in the same words, the eight newest, or `Nothing new.`
+- UP NEXT, how many jobs are lined up in its heading, then the first three in line; the rest folds into one count line, `N more lined up` first, then one count per queue word for the rest of its queue: a held decision that other open work blocks waits on other work, and any other is one more that waits on you.
+- COMING BACK, every call of this factory put off to a date, soonest first, each with its day and date, with how many in its heading; it is left out when there are none.
+- HOW THIS CREW WORKS, the rules the crew follows and what it has learned lately; the rules' size against the cap a brief takes them under is said only from nine tenths of that cap on, and over it.
+- CONVERSATION, what the owner and Starship said there.
+
+There is no line of queue counters, and a call with a card under this page's NEEDS YOU, or on its older questions shelf, is shown there only, never listed again under HAPPENING NOW or UP NEXT nor counted in a fold.
+`View.page_parts` owns that composition, and the screen's `page` carries it, so the web page tells the same facts.
 That folded count line can be highlighted like any other row: `enter` on it lists every job it stands for under it, each with its title and queue word, grouped by count, and `esc` hides the list again; while it is open, the keys line names `esc` only for hiding it.
+`r` reads the first thing with something to read under HAPPENING NOW, LATELY or UP NEXT, and `o` opens the first change in LATELY that went live.
 Its live workers are stacked on the right, at most four, each a read-only copy of that worker's own pane that refreshes every two seconds.
 Only a worker at work gets a copy: one that is `busy`, `with Starship`, `needs a look`, `failed`, or `decision for you`.
 A parked, held, queued, or finished job gets none, and a copy closes its own pane only once its job really ends: when the job is gone from the record or `finished`, landed, `ready to merge`, `stopped`, `no worker`, back in line (`next`, `later`), parked (`waiting`), or held (`on hold`, `on hold until <date>`, `waits on other work`); it stays open through `no reading`.
@@ -193,7 +202,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `r` | Read the highlighted call's report, or on a factory the first shown job's; a click on a `Read the report` line reads that one. |
 | `o` | On a factory on the overview, open the PR of the first change in its New that went live, in the browser (`FM_FACTORY_OPEN` stands in for the opener); a click on a `See what changed` line opens that one. |
 | `t` | Talk to the highlighted factory's crew, or talk the highlighted question through: by voice where the desk voice is set up, typed otherwise. |
-| `s` | Switch who steers the highlighted factory, both ways. |
+| `s` | Switch who steers the highlighted factory, both ways, after `enter` confirms it. |
 | `b` `n` | On a listed older question, ask Starship to bring it back into NEEDS YOU, or say it is no longer needed, after `enter` confirms it. |
 | `esc` | Back, hide an opened folded count line or older questions shelf, or cancel a confirmation or the talk box. |
 | `q` | Quit. |
@@ -248,7 +257,7 @@ Starship re-reads the conversation and records it in that turn: it closes the ca
 The card reads `checking` while that request is pending and either it or the pane's settled note for the call is from since the call was last held; a press that finds a request from before the call was last held names its note after that time, so it always wakes Starship.
 
 Talking never changes who steers; only `s` does.
-`s` records the change in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed.
+`s` opens a confirmation naming the change; `enter` records it in `state/factory/steer.log`, tells Starship through the same inbox, and shows it in the feed, and `esc` changes nothing.
 Who steers is the owner's stated choice of whether he is working with that crew himself or Starship is; it grants Starship no new authority and takes none away.
 
 ## One record behind the screen
@@ -271,7 +280,7 @@ The record is always built by the code on disk, so a running pane or worker copy
 The live pane holds that reload while the talk box, a confirmation or a notice is showing, so a draft or a sent or not-sent line is never lost, and reloads on the first frame after.
 
 `bin/fm-factory.py --screen` prints what the screen shows as data, schema `fm-factory-screen.v1`, for a second screen that lays the pane out its own way, such as the web page ([web.md](web.md)).
-It is the overview and every factory's page as the pane selects and words them: the three sentences and the part each leads to, the first card, the two shelves, the stopped jobs, each call with its answers and how long it has waited, each factory told as Now, New and Next (its badge, its jobs with the step a busy one is on and what it is doing, its routine lines, its New with times, links and what can be read, its Next, or its one quiet line) and the heading over them, and for a factory's page its whole queue, shown and folded jobs, rules, lessons, talk and the jobs whose workers its tab shows.
+It is the overview and every factory's page as the pane selects and words them: the three sentences and the part each leads to, the first card, the two shelves, the stopped jobs, each call with its answers and how long it has waited, each factory told as Now, New and Next (its badge, its jobs with the step a busy one is on and what it is doing, its routine lines, its New with times, links and what can be read, its Next, or its one quiet line) and the heading over them, and for a factory's page its parts top to bottom (its sentence of state, what HAPPENING NOW lists, its LATELY, its UP NEXT with how many are lined up and the folded rest, its COMING BACK with dates), its rules, lessons, talk and the jobs whose workers its tab shows.
 It answers from the cached record at once and keeps that record current the way a live pane does, starting a due refresh or a rebuild of the owner's calls in the background.
 `bin/fm-factory.py act` is the writing keys for such a screen: it reads one action as JSON on stdin, sends the note that key sends under the same request id, and prints whether it went and the words the pane would say.
 An action that names the asking its screen showed sends nothing once the record's differs.
@@ -355,5 +364,5 @@ An item the record does not hold yet keeps its place for up to a minute while a 
 
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's answer, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a factory's page read top to bottom with no line of queue counters and its calls put off to a date under COMING BACK, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's answer, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

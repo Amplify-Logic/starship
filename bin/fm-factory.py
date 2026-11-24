@@ -831,9 +831,7 @@ def sentences(record: Dict[str, Any], now: int) -> List[Dict[str, str]]:
             second = second[:-1] + " (%s)." % age_words(counts.get("age") or 0)
     news = record.get("news") or {}
     live, reports = news.get("went_live") or 0, news.get("report_ready") or 0
-    since = record.get("since_epoch")
-    when = {"12 hours": "in the last 12 hours", "48 hours": "in the last 48 hours"}.get(
-        record.get("since_from") or "", "since you looked at %s" % when_words(since, now) if since else "lately")
+    when = since_words(record, now)
     moved = []
     if live:
         moved.append("%s went live" % plural(live, "change", "changes"))
@@ -845,6 +843,13 @@ def sentences(record: Dict[str, Any], now: int) -> List[Dict[str, str]]:
     return [{"words": first, "to": "needs", "colour": "red" if calls else "mist"},
             {"words": second, "to": "factories", "colour": "amber" if trouble or counts.get("busy") else "mist"},
             {"words": third[0].upper() + third[1:], "to": "factories", "colour": "green" if moved else "mist"}]
+
+
+def since_words(record: Dict[str, Any], now: int) -> str:
+    """Since when the feed tells what moved, as the third sentence says it: "since you looked at 20:24"."""
+    since = record.get("since_epoch")
+    return {"12 hours": "in the last 12 hours", "48 hours": "in the last 48 hours"}.get(
+        record.get("since_from") or "", "since you looked at %s" % when_words(since, now) if since else "lately")
 
 
 def news_heading(record: Dict[str, Any], now: int) -> str:
@@ -1514,7 +1519,7 @@ def queue_parts(queue: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 # How a factory's page counts the jobs it folds away, per queue word: one and many.
-FOLD_NAMES = {"in line": ("more in line", "more in line"),
+FOLD_NAMES = {"in line": ("more lined up", "more lined up"),
               "starts on its own": ("starts on its own", "start on their own"),
               "on hold": ("on hold", "on hold"),
               "waits on other work": ("waits on other work", "wait on other work"),
@@ -2801,6 +2806,8 @@ NEW_LABELS = {"went live": "Went live", "report ready": "Report ready", "settled
 NEW_CAP = 4
 # How many of its newest feed events a factory's own page lists, on both screens.
 PAGE_FEED = 8
+# How many jobs in line a factory's own page names under Up next before it folds the rest.
+UP_NEXT = 3
 # How long after its start a busy job that has named no step reads `just started`.
 JUST_STARTED = 300
 FEED_COLOUR = {"finished": "green", "report ready": "green", "PR ready": "green", "went live": "green",
@@ -2882,7 +2889,10 @@ class View:
             talk["gone"] = True
         confirm = self.confirm
         if confirm is not None:
-            if confirm.get("older"):
+            if confirm.get("steer"):
+                fid = confirm["steer"]
+                gone = not self.has_factory(fid) or self.factory(fid)["steered_by"] == confirm["who"]
+            elif confirm.get("older"):
                 item = self.older_item(confirm["item"])
                 gone = item is None or item["asking"] != confirm["asked"]
             else:
@@ -3016,16 +3026,25 @@ class View:
         if not fid or not self.has_factory(fid):
             return None
         fac = self.factory(fid)
-        drawn = self.page_jobs(fac)[0] if self.opened else self.overview_jobs(fac) + self.told(fac)["new"]
+        if self.opened:
+            page = self.page_parts(fac)
+            drawn = page["now"] + page["lately"] + page["next"]
+        else:
+            drawn = self.overview_jobs(fac) + self.told(fac)["new"]
         job = next((j for j in drawn if j.get("read")), None)
         return (job["title"], job["read"]) if job else None
 
     def openable(self) -> Optional[Tuple[str, str]]:
-        """What `o` opens: on a highlighted factory on the overview, the PR of the first change in New that went live."""
+        """What `o` opens: the PR of the first change that went live, in a highlighted factory's New on the
+        overview, or in Lately on a factory's own page."""
         kind, ident = self.at()
-        if kind != "factory" or self.opened or not self.has_factory(ident):
+        if self.opened and kind != "need" and self.has_factory(self.opened):
+            items = self.page_parts(self.factory(self.opened))["lately"]
+        elif kind == "factory" and not self.opened and self.has_factory(ident):
+            items = self.told(self.factory(ident))["new"]
+        else:
             return None
-        item = next((n for n in self.told(self.factory(ident))["new"] if n["pr"]), None)
+        item = next((n for n in items if n["pr"]), None)
         return (item["title"], item["pr"]) if item else None
 
     @staticmethod
@@ -3055,7 +3074,7 @@ class View:
                 word = "on hold"   # a record from before the queue was counted
             if job["state"] in ("next", "later"):
                 shown_line += 1
-                if shown_line > 8:
+                if shown_line > UP_NEXT:
                     folded["in line"].append(job)
                     continue
             elif word and job["state"] != "decision for you":
@@ -3096,31 +3115,6 @@ class View:
                                 [S(clock, "mist")] if not rows else []))
         for line in rows:
             line.hull = True
-        return rows
-
-    def queue_rows(self, width: int, queue: Optional[Dict[str, int]] = None, lead: str = " ",
-                   hull: bool = True) -> List[Row]:
-        """The whole queue in one line of counts, wrapped between counts when the pane is narrow."""
-        queue = self.record.get("queue") if queue is None else queue
-        if not queue:
-            return []
-        colours = {"total": "ice", "starts_on_its_own": "ice", "parked": "mist", "in_line": "mist",
-                   "on_hold": "faint", "waits_on_other_work": "mist", "waits_on_you": "red"}
-        parts = queue_parts(queue)
-        lines = [[S(lead)]]
-        indent = len(lead) + len(parts[0][1])
-        for index, (key, words) in enumerate(parts):
-            head, comma, tail = words.partition(",")
-            segs = ([S("  ·  ", "faint")] if index else []) + [S(head, colours[key] if queue["total"] else "faint",
-                                                                 key == "total")]
-            if comma:
-                segs.append(S(comma + tail, "mist"))
-            if index and seg_len(lines[-1]) + seg_len(segs) + 1 > width:
-                lines.append([S(" " * indent)])
-            lines[-1] += segs
-        rows = [row(width, segs) for segs in lines]
-        for line in rows:
-            line.hull = hull
         return rows
 
     def waited(self, need: Dict[str, Any]) -> str:
@@ -3186,7 +3180,7 @@ class View:
             for line in rows:
                 line.band = band
             rows.append(row(width, [pad] + right))
-        confirm = self.confirm if self.confirm and self.confirm["item"] == need["id"] else None
+        confirm = self.confirm if self.confirm and self.confirm.get("item") == need["id"] else None
         chosen = (confirm or {}).get("option") or (self.answered_of(need) or {}).get("key")
         if question:
             if need.get("why"):
@@ -3401,24 +3395,10 @@ class View:
         jobs = self.overview_jobs(fac)
         routine = list(fac.get("routine_runs") or [])
         news = self.news(fac)
-        new = []
-        for event in news[:NEW_CAP]:
-            title = event.get("title") or event["text"]
-            if event["word"] == "settled":
-                text = event["text"]
-            elif event["word"] == "failed":
-                text = "%s. Starship is on it." % title.rstrip(".")
-            elif event["word"] == "closed":
-                text = "%s, with no change or report on record." % title.rstrip(".")
-            else:
-                text = title
-            new.append({"id": event.get("job"), "word": event["word"], "label": NEW_LABELS[event["word"]],
-                        "text": text,
-                        "when": self.stamp(event), "pr": event.get("pr") if event["word"] == "went live" else None,
-                        "read": list(event.get("read") or []), "title": title})
+        new = [self.new_item(event) for event in news[:NEW_CAP]]
         more = news[NEW_CAP:]
-        page = {id(e) for e in [e for e in self.record["feed"] if e["factory"] == fac["id"]][:PAGE_FEED]}
-        more_words = ("and %d more" % len(more) + (", on its own page" if all(id(e) in page for e in more) else "")
+        # Its own page's Lately lists the first PAGE_FEED of the same outcomes.
+        more_words = ("and %d more" % len(more) + (", on its own page" if len(news) <= PAGE_FEED else "")
                       if more else "")
         nxt = fac.get("next")
         lined = nxt["then"] + 1 if nxt else 0
@@ -3446,6 +3426,88 @@ class View:
                                        ", then %d more lined up" % nxt["then"] if nxt["then"] else ""])}
             if nxt else None}
 
+    def new_item(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """One outcome as New and Lately tell it: its word as a label, the work's title, its time and links."""
+        word = event["word"]
+        title = event.get("title") or event["text"]
+        if word == "settled":
+            text = event["text"]
+        elif word == "failed":
+            text = "%s. Starship is on it." % title.rstrip(".")
+        elif word == "closed":
+            text = "%s, with no change or report on record." % title.rstrip(".")
+        else:
+            text = title
+        return {"id": event.get("job"), "word": word, "label": NEW_LABELS[word],
+                "text": text, "when": self.stamp(event), "pr": event.get("pr") if word == "went live" else None,
+                "read": list(event.get("read") or []), "title": title}
+
+    def lately_events(self, fac: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """What a factory's own page lists under Lately: its New (news()), PAGE_FEED of them at most.
+
+        What was said is its CONVERSATION and a call that asks for the owner is a card, so neither is here.
+        """
+        return self.news(fac)[:PAGE_FEED]
+
+    def page_state(self, fac: Dict[str, Any]) -> str:
+        """The one sentence of state under a factory's name on its own page.
+
+        What needs the owner there, what runs or stopped (its Now), and, when
+        something moved, what went live and which reports came in (its New).
+        """
+        told = self.told(fac)
+        needs = len(fac["needs"])
+        words = ["Nothing needs you." if not needs else "%s %s you." % (
+            plural(needs, "thing", "things"), "needs" if needs == 1 else "need")]
+        running = sum(1 for j in told["jobs"] if j["state"] == "busy") + \
+            sum(1 for r in told["routine"] if r["running"])
+        second = "Nothing is running" if not running else "%s %s running" % (
+            plural(running, "job", "jobs"), "is" if running == 1 else "are")
+        trouble = []
+        stopped = sum(1 for j in told["jobs"] if j["state"] == "stopped")
+        failed = sum(1 for j in told["jobs"] if j["state"] == "failed")
+        if stopped:
+            trouble.append("%s %s stopped" % (plural(stopped, "job", "jobs"), "has" if stopped == 1 else "have"))
+        if failed:
+            trouble.append("%s hit a problem" % plural(failed, "job", "jobs"))
+        words.append(second + (", and %s." % " and ".join(trouble) if trouble else "."))
+        news = self.news(fac)
+        live = sum(1 for e in news if e["word"] == "went live")
+        reports = sum(1 for e in news if e["word"] == "report ready")
+        moved = []
+        if live:
+            moved.append("%s went live" % plural(live, "change", "changes"))
+        if reports:
+            moved.append("%s %s ready" % (plural(reports, "report", "reports"), "is" if reports == 1 else "are"))
+        if moved:
+            third = "%s %s." % (" and ".join(moved), since_words(self.record, self.now()))
+            words.append(third[0].upper() + third[1:])
+        return " ".join(words)
+
+    def page_parts(self, fac: Dict[str, Any]) -> Dict[str, Any]:
+        """A factory's own page, top to bottom, the one composition both screens draw.
+
+        `now` is what Happening now lists: the overview's Now (told()) and any
+        other job under way that the queue does not hold; `next` the first
+        UP_NEXT jobs in line and `lined` how many are in line in all; `folded`
+        the rest of the queue, one count per queue word, the overflow of the
+        line first; `lately` its newest feed events; `coming` every call of
+        this factory put off to a date, soonest first. A call with a card
+        under NEEDS YOU, or on its older questions shelf, is in neither list.
+        """
+        told = self.told(fac)
+        shown, folded = self.page_jobs(fac)
+        line = [j for j in shown if j["state"] in ("next", "later")]
+        routine = {ident for r in told["routine"] for ident in r["folded"]}
+        carded = set(fac["needs"])
+        listed = {j["id"] for j in told["jobs"]} | carded | routine
+        now = [j for j in told["jobs"] if j["id"] not in carded] + \
+            [j for j in shown if j not in line and j["id"] not in listed]
+        return {"state": self.page_state(fac), "now": now, "next": line, "folded": folded,
+                "lined": len(line) + len(folded["in line"]),
+                "lately": [self.new_item(e) for e in self.lately_events(fac)],
+                "coming": [c for c in self.record.get("coming_back") or [] if c["factory"] == fac["id"]]}
+
     def routine_words(self, line: Dict[str, Any]) -> Tuple[List[str], str]:
         """A routine line's words, how many runs today and the last of them, and what it does now if anything."""
         words = [plural(line["today"], "run today", "runs today") if line["today"] else "no run today"]
@@ -3459,10 +3521,9 @@ class View:
 
     @staticmethod
     def about_words(fac: Dict[str, Any]) -> List[str]:
-        """What a factory's page says under its name: what it is about, then its crew."""
+        """What a factory's page says under its name: what it is for (its HAPPENING NOW says who is at work)."""
         about = fac.get("about") or ", ".join(fac["projects"]) or ""
-        crew = fac["crew"]
-        return [x for x in (about, "%s, %d busy" % (plural(crew["workers"], "worker", "workers"), crew["busy"])) if x]
+        return [about] if about else []
 
     @staticmethod
     def learned(fac: Dict[str, Any]) -> List[Tuple[str, str]]:
@@ -3524,33 +3585,6 @@ class View:
         if nxt:
             rows += labelled(flow(width, [S(" " * pad), S(nxt["title"], "mist")], nxt["words"], "faint",
                                   indent=pad), "next")
-        return rows
-
-    def feed(self, fid: Optional[str] = None, cap: int = 12) -> Tuple[str, List[Tuple[str, Dict[str, Any]]]]:
-        """The feed's heading and its events, oldest first, each with the time it shows."""
-        now = self.now()
-        events = [e for e in self.record["feed"] if fid in (None, e["factory"])][:cap]
-        since = self.record.get("since_epoch")
-        since_from = self.record.get("since_from")
-        if since_from in ("12 hours", "48 hours"):
-            title = "LAST %s" % since_from.upper()
-        else:
-            title = "SINCE YOU LAST LOOKED" + (", %s" % when_words(since, now) if since else "")
-        return title, [(self.stamp(event), event) for event in reversed(events)]
-
-    def feed_rows(self, width: int, fid: Optional[str] = None, cap: int = 12) -> List[Row]:
-        title, events = self.feed(fid, cap)
-        rows = [row(width, [S(" " + title, "mist", True)]), row(width)]
-        if not events:
-            return rows + [row(width, [S("     nothing new", "faint")])]
-        names = max(len(e["actor"]) for _stamp, e in events) if not fid else 0
-        words = max(len(e["word"]) for _stamp, e in events)
-        for stamp, event in events:
-            left = [S("   "), S(stamp.ljust(10), "faint")]
-            if not fid:
-                left.append(S(event["actor"].ljust(names + 2), "mist"))
-            left.append(S(event["word"].ljust(words + 2), FEED_COLOUR.get(event["word"].split(" ·")[0], "amber")))
-            rows += flow(width, left, event["text"], "ice", cap=2)
         return rows
 
     def notice_rows(self, width: int) -> List[Row]:
@@ -3651,6 +3685,8 @@ class View:
     def action_stop(self) -> Optional[Tuple[str, str]]:
         """The row an open confirmation or talk box is about, while the record still holds it."""
         if self.confirm is not None:
+            if self.confirm.get("steer"):
+                return ("factory", self.confirm["steer"])
             return ("old" if self.confirm.get("older") else "need", self.confirm["item"])
         if self.talking is not None and not self.talking.get("gone"):
             return self.talking.get("stop")
@@ -3746,27 +3782,55 @@ class View:
         return rows
 
     def factory_page(self, width: int) -> List[Row]:
+        """A factory's own page, top to bottom (page()): its name, what it is for and one sentence of state,
+        then NEEDS YOU with its older questions, HAPPENING NOW, LATELY, UP NEXT, COMING BACK,
+        HOW THIS CREW WORKS and the CONVERSATION."""
         fac = self.factory(self.opened)
+        page = self.page_parts(fac)
+        told = self.told(fac)
         rows: List[Row] = []
         rows += [row(width, [S(" "), S("  " if fac["needs"] else "▸ ", "cyan", True), S(fac["name"], "ice", True)],
-                     self.steer(fac), band=not fac["needs"]),
-                 row(width, [S("   " + " · ".join(self.about_words(fac)), "faint")]),
-                 row(width)]
+                     self.steer(fac), band=not fac["needs"])]
         rows[0].stop = ("factory", fac["id"])
+        for about in self.about_words(fac):
+            rows += flow(width, [S("   ")], about, "faint")
+        rows += flow(width, [S("   ")], page["state"], "red" if fac["needs"] else "mist") + [row(width)]
+
+        def heading(title: str, small: str = "") -> List[Row]:
+            return [row(width, [S(" " + title, "mist", True)] + ([S("  " + small, "faint")] if small else [])),
+                    row(width)]
+
         needs = self.needs(fac["id"])
         if needs:
             rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
             rows += self.need_list(width, needs, full=True)
-        rows += self.older_rows(width, fac["id"]) + self.coming_rows(width, fac["id"])
-        rows += [row(width, [S(" WORK, IN ORDER", "mist", True)]), row(width)]
-        if not fac["jobs"]:
-            rows.append(row(width, [S("     Nothing in line.", "faint")]))
-        elif fac.get("queue"):
-            rows += self.queue_rows(width, fac["queue"], lead="     ", hull=False) + [row(width)]
-        shown, folded = self.page_jobs(fac)
-        for job in shown:
+        older = self.older_rows(width, fac["id"])
+        if older and not needs:
+            rows += [row(width, [S(" NEEDS YOU", "red", True)]), row(width)]
+        rows += older
+        rows += heading("HAPPENING NOW")
+        if told["now"]:
+            rows += flow(width, [S("     ")], told["now"], "mist")
+        for job in page["now"]:
             rows += self.job_rows(width, job, full=True)
-        parts = fold_parts(folded)
+        rows += self.routine_rows(width, fac)
+        rows += [row(width)] + heading("LATELY", since_words(self.record, self.now()))
+        if not page["lately"]:
+            rows.append(row(width, [S("     Nothing new.", "faint")]))
+        for item in page["lately"]:
+            lead = [S("   "), S(item["when"].ljust(9), "faint"),
+                    S(item["label"] + ": ", FEED_COLOUR.get(item["word"].split(" ·")[0], "amber"), True)]
+            rows += flow(width, lead, item["text"], "ice", indent=12, cap=3)
+            if item["read"]:
+                rows.append(read_row(width, " " * 12, item))
+            if item["pr"]:
+                rows.append(link_row(width, " " * 12, item))
+        rows += [row(width)] + heading("UP NEXT", "%d lined up" % page["lined"] if page["lined"] else "")
+        if not page["next"]:
+            rows.append(row(width, [S("     Nothing lined up.", "faint")]))
+        for job in page["next"]:
+            rows += self.job_rows(width, job, full=True)
+        parts = fold_parts(page["folded"])
         if parts:
             # The rest of the queue, one count per queue word; enter lists every job it stands for.
             stop = ("fold", fac["id"])
@@ -3782,10 +3846,16 @@ class View:
             for line in fold:
                 line.stop = stop
             rows += fold
-        rows += [row(width), row(width, [S(" RULES THIS CREW FOLLOWS", "mist", True)]), row(width)]
-        if not fac["rules"]:
-            rows.append(row(width, [S("     none written down yet", "faint")]))
-        else:
+        if page["coming"]:
+            rows += [row(width)] + heading("COMING BACK", "%d put off to a date" % len(page["coming"]))
+            dates = [date_words(item["until"]) for item in page["coming"]]
+            room = max(len(d) for d in dates) + 2
+            for date, item in zip(dates, page["coming"]):
+                rows += flow(width, [S("     "), S(date.ljust(room), "faint")], item["title"], "ice")
+        rows += [row(width)] + heading("HOW THIS CREW WORKS")
+        if not fac["rules"] and not fac["learned"]:
+            rows.append(row(width, [S("     No rules written down yet.", "faint")]))
+        if fac["rules"]:
             words, colour = rules_size_words(fac.get("rules_size", profile_size(fac["rules"])),
                                              self.record.get("rules_cap", PROFILE_CAP))
             if words:
@@ -3793,18 +3863,16 @@ class View:
         for rule in fac["rules"]:
             for index, line in enumerate(wrap(rule, max(width - 8, 20))):
                 rows.append(row(width, [S("     " if index else "   · ", "faint"), S(line, "mist")]))
-        rows += [row(width), row(width, [S(" WHAT IT HAS LEARNED LATELY", "mist", True)]), row(width)]
-        if not fac["learned"]:
-            rows.append(row(width, [S("     nothing recorded yet", "faint")]))
+        if fac["learned"]:
+            rows += [row(width), row(width, [S("   Learned lately", "mist")])]
         for stamp, what in self.learned(fac):
             rows += flow(width, [S("   "), S(stamp.ljust(8), "faint")], what, "mist")
-        rows += [row(width)] + self.feed_rows(width, fac["id"], cap=PAGE_FEED)
-        rows += [row(width), row(width, [S(" TALK", "mist", True)]), row(width)]
+        rows += [row(width)] + heading("CONVERSATION")
         if not fac["talk"]:
             rows.append(row(width, [S("     Nothing said here yet. Press t to talk to this crew.", "faint")]))
         for stamp, who, said in self.talk(fac):
             you = who == "you"
-            rows += flow(width, [S("   "), S(stamp.ljust(9), "faint"),
+            rows += flow(width, [S("   "), S(stamp.ljust(10), "faint"),
                                  S(who.ljust(10), "cyan" if you else "mist")],
                          said, "ice" if you else "mist")
         return rows
@@ -3886,13 +3954,6 @@ def screen(view: View) -> Dict[str, Any]:
                 "step": STEPS.index(job["step"]) if job.get("step") in STEPS else 1,
                 "queue": job_queue_words(job) if job.get("queue") else "", "read": bool(job.get("read"))}
 
-    def feed_of(fid: Optional[str], cap: int) -> Dict[str, Any]:
-        title, events = view.feed(fid, cap)
-        return {"title": title, "events": [{"when": stamp, "actor": e["actor"], "factory": e["factory"],
-                                            "word": e["word"], "text": e["text"],
-                                            "colour": FEED_COLOUR.get(e["word"].split(" ·")[0], "amber")}
-                                           for stamp, e in events]}
-
     def shelves_of(fid: Optional[str]) -> Dict[str, Any]:
         words = shelves(record, view.now(), fid)
         coming = words["coming"]
@@ -3907,13 +3968,18 @@ def screen(view: View) -> Dict[str, Any]:
                                       "factory_name": view.factory(c["factory"])["name"], "title": c["title"],
                                       "when": date_words(c["until"])} for c in coming["items"]]}}
 
+    def new_of(item: Dict[str, Any]) -> Dict[str, Any]:
+        return {"id": item["id"], "word": item["word"], "label": item["label"], "text": item["text"],
+                "when": item["when"], "pr": item["pr"], "read": bool(item["read"]), "title": item["title"],
+                "colour": FEED_COLOUR.get(item["word"].split(" ·")[0], "amber")}
+
     def factory_of(fac: Dict[str, Any]) -> Dict[str, Any]:
         told = view.told(fac)
         routine = []
         for line in told["routine"]:
             words, now = view.routine_words(line)
             routine.append({"kind": line["kind"], "words": words, "now": now})
-        shown, folded = view.page_jobs(fac)
+        page = view.page_parts(fac)
         rules_words, rules_colour = ("", "faint") if not fac["rules"] else rules_size_words(
             fac.get("rules_size", profile_size(fac["rules"])), record.get("rules_cap", PROFILE_CAP))
         return {
@@ -3922,24 +3988,26 @@ def screen(view: View) -> Dict[str, Any]:
             # Told as Now, New and Next (View.told), the overview's one block for this factory.
             "quiet": told["quiet"], "quiet_words": told["quiet_words"], "badge": told["badge"],
             "now": told["now"], "jobs": [job_of(job) for job in told["jobs"]], "routine": routine,
-            "new": [{"id": item["id"], "word": item["word"], "label": item["label"], "text": item["text"], "when": item["when"],
-                     "pr": item["pr"], "read": bool(item["read"]), "title": item["title"],
-                     "colour": FEED_COLOUR.get(item["word"], "amber")} for item in told["new"]],
+            "new": [new_of(item) for item in told["new"]],
             "more": told["more"], "more_words": told["more_words"],
             "next": told["next"],
+            # Its own page, top to bottom (View.page_parts), as the pane's page draws it.
             "page": {
                 "needs": [need["id"] for need in view.needs(fac["id"])],
-                "queue": [words for _key, words in queue_parts(fac["queue"])] if fac["jobs"] and fac.get("queue")
-                else [],
-                "jobs": [job_of(job) for job in shown],
+                "state": page["state"],
+                "now": [job_of(job) for job in page["now"]],
+                "lately": [new_of(item) for item in page["lately"]],
+                "lately_since": since_words(record, view.now()),
+                "next": [job_of(job) for job in page["next"]], "lined": page["lined"],
                 "workers": [job_of(job) for job in tab_workers(fac)],
                 "folded": [{"words": words, "jobs": [{"title": job["title"], "queue": job_queue_words(job)}
-                                                     for job in jobs]} for words, jobs in fold_parts(folded)],
+                                                     for job in jobs]} for words, jobs in fold_parts(page["folded"])],
+                "coming": [{"id": c["id"], "title": c["title"], "when": date_words(c["until"])}
+                           for c in page["coming"]],
                 "rules": list(fac["rules"]), "rules_size": rules_words,
                 "rules_mark": {"red": "over", "amber": "near"}.get(rules_colour, ""),
                 "learned": [{"when": stamp, "what": what} for stamp, what in view.learned(fac)],
                 "shelves": shelves_of(fac["id"]),
-                "feed": feed_of(fac["id"], PAGE_FEED),
                 "talk": [{"when": stamp, "who": who, "said": said} for stamp, who, said in view.talk(fac)]}}
 
     # The jobs behind the bridge strip's "N stopped", the ones the top sentence counts.
@@ -4733,7 +4801,10 @@ class Pane:
             return False
         if key == "enter":
             view.confirm = None
-            self.send(confirm["request_id"], confirm["body"], confirm["done"], confirm["mark"])
+            if confirm.get("steer"):
+                self.steer(confirm["steer"], confirm["who"])
+            else:
+                self.send(confirm["request_id"], confirm["body"], confirm["done"], confirm["mark"])
         elif key == "esc":
             view.confirm = None
             self.say("Not sent: %s was cancelled." % confirm["what"], "amber")
@@ -4877,7 +4948,6 @@ class Pane:
 
     def key(self, key: str) -> bool:
         view = self.view
-        now = now_epoch()
         # Scrolling only moves the view, so it never closes a box or a confirmation.
         if key in ("pgup", "pgdn"):
             view.scroll((1 if key == "pgdn" else -1) * max(view.page - 1, 1))
@@ -4998,19 +5068,30 @@ class Pane:
             if fid:
                 fac = view.factory(fid)
                 who = "Starship" if fac["steered_by"] == "you" else "you"
-                note = steer_note(fac, who, now)
-                ok, why = send_note(self.home, note["request_id"], note["body"])
-                if ok:
-                    record_steer(self.home, fid, who, now)
-                    fac["steered_by"] = who
-                    view.record["feed"].insert(0, {
-                        "at": now, "date": None, "actor": "you", "factory": fid, "job": None,
-                        "word": "took the helm" if who == "you" else "handed back", "text": note["done"]})
-                    self.say(note["done"], "cyan")
-                    refresh_in_background(self.home)
-                else:
-                    self.say("Who steers did not change: %s" % why, "red", 12)
+                view.confirm = {
+                    "steer": fid, "who": who, "what": "the change of who steers",
+                    "title": "Who steers · %s" % fac["name"],
+                    "prompt": ("You steer %s from now on, and Starship is told." if who == "you"
+                               else "Starship steers %s again, and is told.") % fac["name"]}
+                view.follow = True
         return True
+
+    def steer(self, fid: str, who: str) -> None:
+        """Change who steers factory <fid> to <who>: tell Starship, record it and show it in the feed."""
+        view, now = self.view, now_epoch()
+        fac = view.factory(fid)
+        note = steer_note(fac, who, now)
+        ok, why = send_note(self.home, note["request_id"], note["body"])
+        if not ok:
+            self.say("Who steers did not change: %s" % why, "red", 12)
+            return
+        record_steer(self.home, fid, who, now)
+        fac["steered_by"] = who
+        view.record["feed"].insert(0, {
+            "at": now, "date": None, "actor": "you", "factory": fid, "job": None,
+            "word": "took the helm" if who == "you" else "handed back", "text": note["done"]})
+        self.say(note["done"], "cyan")
+        refresh_in_background(self.home)
 
 
 KEYS = {b"\x1b[A": "up", b"\x1b[B": "down", b"\x1b[C": "right", b"\x1b[D": "left",

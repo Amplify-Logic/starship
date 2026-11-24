@@ -16,7 +16,7 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Your factories |
-| A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, in one column |
+| A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, with Needs you beside the rest on a wide screen and one column on a narrow one |
 | The pane's keys line | The same keys, and a line of them at the bottom |
 
 On Control Centre the line between Firstmate and Factories can be dragged to make either one as big as you like, as in the terminal; a double-click puts it back, and with the line focused the arrow keys move it.
@@ -63,10 +63,12 @@ A web address in a title or the feed reads as a short label, such as `the pull r
 
 #### What the page lays out its own way
 
-- A project's tab has no list of workers beside its page: its Work list already names each worker with the step it is on, so a second list would only repeat it.
-  Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Work list.
+- A project's tab reads top to bottom as the pane's page does ([factory-pane.md](factory-pane.md#a-factorys-own-tab)), with Needs you on the left and Happening now, Lately, Up next, Coming back, How this crew works and Conversation on the right on a wide screen, and all of them in that order in one scrolling column on a narrow one.
+  Up next names the first three in line and folds the rest behind `N more lined up` and the other counts, and Coming back lists every call put off to a date, each with its date.
+- A project's tab has no list of workers beside its page: its Happening now already names each worker with the step it is on, so a second list would only repeat it.
+  Watch this worker, on a busy job in Your factories, opens that project's tab and marks the job in its Happening now.
 - A call on its own project's tab does not repeat the project's name beside its title.
-- Who steers has its switch on the project's own tab only.
+- Who steers is a quiet line under Talk to this crew on the project's own tab only, such as `Starship steers this factory. Change`; Change, or the `s` key there, asks first and changes it only on Change who steers, as an answer takes two clicks.
   A project's head in Your factories says `You steer` when you do, and nothing when Starship does; the `s` key still switches the highlighted project there, as in the pane.
 - A project in Your factories sets Now, New and Next side by side with their words on the left, and on a narrow screen the words sit above what they lead; in New a change that went live links to the change and a report has a Read it button.
 - A project's conversation reads newest first.
@@ -98,7 +100,7 @@ Each button is one of the Factory pane's writing keys and sends the note that ke
 | Talk it through, Talk to this crew | `t`, typed |
 | This is already settled | `x` |
 | Read the report, Read it | `r` |
-| Who steers | `s` |
+| Change (who steers), then Change who steers | `s` |
 | Bring back, No longer needed, then Send to Starship | `b`, `n`, then enter |
 
 An answer, a keep, or an older question's Bring back or No longer needed takes two clicks, the choice and then Send to Starship, so a stray click sends nothing, and the page says whether the note was sent.
