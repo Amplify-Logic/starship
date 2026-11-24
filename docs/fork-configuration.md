@@ -851,7 +851,7 @@ The two bounds are deliberately separate because they protect different things: 
 The script's header owns their defaults.
 `bin/fm-speak.sh --enabled` answers whether this home is opted in, for the scripts above.
 `bin/fm-speak.sh --check` answers whether a spoken line would actually be heard, naming each missing piece, such as no `shaper` line, a shaper that is not executable, or a shaper whose dry run fails on an interpreter too old for it, and speaks nothing; the first-hour checklist shows its answer ([ONBOARDING.md](../ONBOARDING.md#voice-a-deepgram-key-and-spoken-replies)).
-`bin/fm-speak.sh --stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute`, `--muted` and `--volume` are the desk floater's voice controls: a mute is a per-home runtime flag in `state/speak-muted` and the voice level a per-home runtime value in `state/speak-volume`, never `config/speak` keys, and both affect voice only, while the text reply stays authoritative; the script's header owns their behavior and docs/desk-floater.md describes the buttons.
+`bin/fm-speak.sh`'s voice controls (stop, replay, the reply history, mute and volume) back the desk floater's reply bubble and right-click menu and the web page's Voice settings: a mute is a per-home runtime flag in `state/speak-muted` and the voice level a per-home runtime value in `state/speak-volume`, never `config/speak` keys, and both affect voice only, while the text reply stays authoritative; the script's header owns their behavior and flags, and docs/desk-floater.md describes the controls.
 
 ## Desk floater signing identity (config/desk-floater-signing-identity)
 

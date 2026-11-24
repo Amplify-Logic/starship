@@ -597,7 +597,7 @@ final class HotkeyMonitor {
 
 /// The Screen Recording permission screenshots need. Like Accessibility, macOS
 /// ties it to the app's signature: it is asked for once per build, checked every few
-/// seconds, and asked for again from the camera button's badge.
+/// seconds, and asked for again from the Show button's badge.
 @MainActor
 final class ScreenAccess {
     var onChanged: ((Bool) -> Void)?
@@ -1110,10 +1110,10 @@ final class FloaterModel: ObservableObject {
         onFixKeys?()
     }
 
-    /// Asks macOS for the Screen Recording permission again (the camera badge).
+    /// Asks macOS for the Screen Recording permission again (the Show badge).
     var onFixScreen: (() -> Void)?
 
-    // MARK: screenshots (camera button, or a tap of the screenshot key)
+    // MARK: screenshots (Show button, or a tap of the screenshot key)
 
     func shotButton() {
         if screenTrusted {
