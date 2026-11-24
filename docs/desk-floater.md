@@ -21,7 +21,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
-- Firstmate's newest reply in a bubble beside the floater, always wholly on screen, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something; it stays quiet while you are already looking at Starship, and one click turns it off or on (see [Reply bubble](#reply-bubble)).
+- Firstmate's newest reply in a card the floater unfolds into, always wholly on screen, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something; it stays quiet while you are already looking at Starship, one click turns it off or on, and one more turns its motion off or on (see [Reply bubble](#reply-bubble)).
 - A Do it button on that bubble when Firstmate offers to take an easy-to-undo step on your screen (see [Do it](#do-it)).
 - A voice-volume level of its own and mute on a right-click of the floater, and both, with the recent replies to hear again, in the web page's Settings ([web.md](web.md#settings)).
 - A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
@@ -66,7 +66,7 @@ It stays wherever you put it, even pushed almost wholly off the screen into a co
 | Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
 | Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
 | Status line | One line beside the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
-| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else), Mute or Unmute, and Turn reply bubble off or on. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
+| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else), Mute or Unmute, Turn reply bubble off or on, Reply motion (Off, Calm or Full) and Reply stays (8 s, 15 s, 30 s or 1 min); see [Reply bubble](#reply-bubble). The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
 | Bell badge on Talk | Shown only while the reply bubble is off (see [Reply bubble](#reply-bubble)); blue while an offer waits behind it. Click it to turn the bubble back on. |
 
 Everything else appears on the reply bubble while it means something, below.
@@ -76,10 +76,12 @@ Muting affects voice only: every reply still shows in the bubble, a reply playin
 
 ### Reply bubble
 
-When Firstmate's reply arrives, it shows in a calm card beside the floater: "Firstmate" with the time, then a few lines written for the eye.
+When Firstmate's reply arrives, the floater unfolds into a calm card: "Firstmate" with the time, then a few lines written for the eye.
 The bubble's words are not the spoken line.
 The voice says the outcome and, when there is more, points at the screen ("There's a question for you on screen."); the bubble is on the screen, so it shows the outcome in one or two short sentences and then the actual ask, the question itself, and never a pointer to the screen.
-The bubble opens on the side toward the middle of the screen, below the floater in the top half and above it in the bottom half, and always wholly on the visible screen, so a floater parked almost off screen in any corner or edge still shows its reply in full.
+The card opens toward the middle of the screen and always lands wholly on the visible screen, and the floater itself never moves.
+When there is room, the card grows around the floater from the corner the floater keeps still, with "Firstmate" and the card's controls beside Talk and Show, which stay exactly where they were and work throughout.
+When there is not, such as with the floater parked almost off screen in a corner or at an edge, the card opens beside it instead, below the floater in the top half and above it in the bottom half, out of the part of the floater still on screen.
 Click the words or the arrow to read the whole reply as it was written; an expanded bubble stays until you collapse it or click the cross.
 
 The bubble's controls appear only while they mean something:
@@ -88,7 +90,7 @@ The bubble's controls appear only while they mean something:
 - **The speaker mark**, while a line is being spoken (click to mute) or while the voice is muted, as a crossed-out speaker in orange (click to unmute), so a muted voice always has a visible way back.
 - **Hear again**, under a reply while the voice is on and quiet; it speaks that reply again, from the audio kept when it was first spoken when there is some.
 
-The bubble shows for about 15 seconds, and stays up for as long as a line is being spoken, an offer waits for your tap, or Firstmate is acting on one.
+The bubble shows for about 15 seconds, or as long as **Reply stays** in the right-click menu says, and stays up for as long as a line is being spoken, an offer waits for your tap, or Firstmate is acting on one.
 It shows the same way while the voice is muted.
 Replies kept before the floater started are never shown as new.
 The last 10 replies, with their audio and their words for the eye, are kept in this home's private `state/`, readable only by your own account on the Mac; older ones are removed as new ones arrive.
@@ -105,6 +107,19 @@ The voice is unchanged either way.
 The bubble has a switch of its own: **Turn reply bubble off** in the right-click menu, or the bell mark on the bubble itself, turns it off in one click.
 Off means no bubble anywhere, for replies and offers alike, until you turn it back on: a bell badge on Talk says it is off, turning blue while an offer waits, and clicking the badge, or **Turn reply bubble on** in the menu, turns it on again.
 The switch is per home and survives restarting the floater, kept as the file `state/desk-voice/bubble-off` while the bubble is off.
+
+#### Reply motion
+
+The card moves in one of three ways, picked under **Reply motion** in the right-click menu:
+
+- **Calm**, the default: the card unfolds out of the floater, its words fade in a beat later and an offer rises in last; leaving, the words fade, the card folds back into the floater and is gone, in under a second each way.
+- **Full**: Calm plus a warm glow behind the card as it opens, one band of light across it, a little more spring, and one small settle of the floater as the card folds back.
+- **Off**: no motion; the card simply appears beside the floater and goes, as the bubble always did.
+
+The sparkles mark on the card turns the motion off in one click, and on again to the motion it had.
+With the Mac's Reduce motion setting on (System Settings, Accessibility, Display), Calm and Full become a plain 0.2 second fade at the card's final size; the floater follows a change to that setting at once.
+The card never takes keyboard focus, takes no click until it has fully arrived, and its shadow and glow never catch a click meant for the window behind.
+The motion, the motion one click brings back and the stay are per home and survive restarting the floater, kept as `motion=`, `last=` and `stay=` lines in the file `state/desk-voice/reply-motion`.
 
 The words for the eye come from the Stop hook that speaks Claude's reply (`bin/fm-claude-reply-speak.sh`, whose header owns the rule): the outcome is the first one or two sentences of the reply's opening paragraph, at most about 45 words, without any sentence that points at the screen, and the ask is the reply's last question.
 They are kept with the spoken line in the reply history, as its caption and its whole written reply, and read back with `bin/fm-speak.sh --caption` and `--full`; a reply with none, such as a line Firstmate spoke itself, shows its spoken line.

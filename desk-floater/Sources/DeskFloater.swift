@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import AVFoundation
+import Combine
 import SwiftUI
 
 @main
@@ -169,16 +170,22 @@ extension HomeLocation {
 }
 
 final class FloaterPanel: NSPanel {
-    /// The reply bubble's own panel, so a reply never moves or resizes the
-    /// floater: the bubble opens on the visible screen whatever corner or edge
+    /// The reply card's own panel, so a reply never moves or resizes the
+    /// floater: the card opens on the visible screen whatever corner or edge
     /// the floater is parked in.
     private let bubblePanel: NSPanel
+    /// The card's shadow and glow, in a panel of their own a little larger
+    /// than the card that never takes a click, so soft pixels around the
+    /// card can never catch one meant for the window behind.
+    private let haloPanel: NSPanel
+    private var motionSetting: AnyCancellable?
+    private var reduceMotionWatch: NSObjectProtocol?
 
     @MainActor
     init(model: FloaterModel) {
         let mover = WindowMover()
         let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
-        // WindowMover sizes both windows: left to itself a hosting view would
+        // WindowMover sizes every window: left to itself a hosting view would
         // grow its window from the top-left corner.
         hosting.sizingOptions = []
         hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
@@ -192,6 +199,21 @@ final class FloaterPanel: NSPanel {
             defer: false
         ))
         bubblePanel.contentView = bubbleHosting
+        // A window's own shadow is drawn once for its shape and lags a shape
+        // that moves, so the halo panel draws the card's shadow instead.
+        bubblePanel.hasShadow = false
+        let haloHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .halo))
+        haloHosting.sizingOptions = []
+        haloHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
+        haloPanel = Self.floating(NSPanel(
+            contentRect: haloHosting.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        ))
+        haloPanel.contentView = haloHosting
+        haloPanel.hasShadow = false
+        haloPanel.ignoresMouseEvents = true
         super.init(
             contentRect: hosting.frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -200,6 +222,9 @@ final class FloaterPanel: NSPanel {
         )
         self.contentView = hosting
         _ = Self.floating(self)
+        // One level above the card, so Talk and Show stay on top of a card
+        // that unfolds around them, even after a click on the card.
+        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
             self.setFrameOrigin(NSPoint(x: f.maxX - hosting.frame.width - 24, y: f.midY))
@@ -207,7 +232,20 @@ final class FloaterPanel: NSPanel {
         // Only once the panel is placed, so the first fit anchors to where the
         // captain sees it rather than to the origin it was created at.
         mover.bubble = bubblePanel
+        mover.halo = haloPanel
         mover.window = self
+
+        let motion = mover.motion
+        motionSetting = model.$motion.sink { motion.style = $0.style }
+        // The Mac's Reduce motion setting, watched so a change applies at once.
+        motion.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        reduceMotionWatch = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                motion.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            }
+        }
     }
 
     /// Floats a panel above other windows on every Space without ever taking
@@ -281,6 +319,38 @@ enum FloaterLayout {
         return rect
     }
 
+    /// How far the card's shadow and glow reach past it (FloaterPanel's halo).
+    static let haloMargin: CGFloat = 28
+
+    /// The card the floater unfolds into, when it fits around Talk and Show:
+    /// grown from the corner the floater keeps still, so the floater sits in
+    /// its own corner of the card and never moves. Nil when that card would
+    /// not be wholly on the visible screen; it then opens beside the floater
+    /// (bubbleFrame).
+    static func inPlaceFrame(_ size: CGSize, anchor: Anchor, on visible: NSRect) -> NSRect? {
+        let rect = anchor.frame(size)
+        return visible.contains(rect) ? rect : nil
+    }
+
+    /// The paper the card unfolds from and folds back into: the part of the
+    /// floater on the visible screen, moved just inside the card. For a card
+    /// around the floater that is the floater itself; for one beside it, a
+    /// floater-sized piece at the card's edge nearest the floater, so the
+    /// motion never starts off screen.
+    static func unfoldStart(floater: NSRect, card: NSRect, on visible: NSRect) -> NSRect {
+        var seen = floater.intersection(visible)
+        if seen.isNull || seen.isEmpty {
+            let x = max(min(floater.midX, visible.maxX), visible.minX)
+            let y = max(min(floater.midY, visible.maxY), visible.minY)
+            seen = NSRect(x: x, y: y, width: 0, height: 0)
+        }
+        let width = min(max(seen.width, 1), card.width)
+        let height = min(max(seen.height, 1), card.height)
+        return NSRect(x: max(min(seen.minX, card.maxX - width), card.minX),
+                      y: max(min(seen.minY, card.maxY - height), card.minY),
+                      width: width, height: height)
+    }
+
     private static func area(_ rect: NSRect) -> CGFloat {
         rect.isNull || rect.isEmpty ? 0 : rect.width * rect.height
     }
@@ -292,24 +362,50 @@ enum FloaterLayout {
 }
 
 /// Moves the floater with the pointer while its card is dragged, resizes it as
-/// the status line comes and goes, and places the reply bubble beside it. The
-/// floater is never moved to fit the screen: it stays where it was put. The
-/// card lays its buttons against the anchored corner, so they stay still on
-/// screen while the status line grows the card away from them.
+/// the status line comes and goes, and places the reply card. The floater is
+/// never moved to fit the screen: it stays where it was put. The card lays its
+/// buttons against the anchored corner, so they stay still on screen while the
+/// status line grows the card away from them.
+///
+/// The reply card unfolds out of the floater (CardMotion): around Talk and
+/// Show, from the corner the floater keeps still, when that card fits wholly
+/// on the visible screen, and otherwise beside the floater, where the bubble
+/// always opened. Its window is sized once to the card and never animated;
+/// the paper and words move inside it.
+@MainActor
 final class WindowMover: ObservableObject {
     weak var window: NSWindow? {
         didSet {
             if let window {
                 _ = settle(window.frame)
+                floaterSize = window.frame.size
             }
         }
     }
     weak var bubble: NSWindow?
+    /// The card's shadow and glow (FloaterPanel's halo panel).
+    weak var halo: NSWindow?
+    let motion = CardMotion()
     private var startOrigin: NSPoint?
     private var startMouse: NSPoint?
     @Published private(set) var anchor: FloaterLayout.Anchor?
+    /// The floater's size, which a card around it leaves free in its corner.
+    @Published private(set) var floaterSize: CGSize = .zero
+    /// The card is laid out around the floater rather than beside it.
+    @Published private(set) var cardInPlace = false
+    /// Where the card's paper unfolds from, in the card's own coordinates
+    /// with the origin at its top left.
+    @Published private(set) var unfoldStart: CGRect = .zero
+    /// A card around the floater covers its outline and shadow, so the two
+    /// read as one piece of paper.
+    @Published private(set) var coversFloater = false
     private var statusShown = false
     private var bubbleSize: CGSize = .zero
+    private var cardPhase: CardMotion.Phase = .hidden
+
+    init() {
+        motion.onPhase = { [weak self] phase in self?.phaseChanged(phase) }
+    }
 
     func drag() {
         guard let window else { return }
@@ -335,10 +431,13 @@ final class WindowMover: ObservableObject {
         }
         self.statusShown = statusShown
         _ = settle(window.frame)
+        if floaterSize != window.frame.size {
+            floaterSize = window.frame.size
+        }
         placeBubble()
     }
 
-    /// The bubble's size, or zero while there is no bubble to show.
+    /// The card's size, or zero while there is no card to show.
     func fitBubble(_ size: CGSize) {
         bubbleSize = size
         placeBubble()
@@ -350,6 +449,7 @@ final class WindowMover: ObservableObject {
         if let window {
             _ = settle(window.frame)
         }
+        placeBubble()
     }
 
     /// The corner the card keeps still. At rest it is the one away from the
@@ -370,21 +470,75 @@ final class WindowMover: ObservableObject {
         return next
     }
 
+    /// A card that arrives with motion first tries to unfold around the
+    /// floater; one without motion opens beside it, as the bubble always
+    /// did. The card takes clicks only once it has fully arrived.
+    private func phaseChanged(_ phase: CardMotion.Phase) {
+        if cardPhase == .hidden {
+            let around = phase == .arriving
+            if cardInPlace != around {
+                cardInPlace = around
+            }
+        }
+        cardPhase = phase
+        bubble?.ignoresMouseEvents = phase != .shown
+        if phase == .hidden {
+            cover(false)
+        }
+    }
+
     private func placeBubble() {
         guard let window, let bubble else { return }
         guard bubbleSize.width > 0, bubbleSize.height > 0,
               let visible = visibleFrame(for: window.frame) else {
             bubble.orderOut(nil)
+            halo?.orderOut(nil)
+            cover(false)
             return
         }
-        let rect = FloaterLayout.bubbleFrame(bubbleSize, beside: window.frame, on: visible)
+        var rect = FloaterLayout.bubbleFrame(bubbleSize, beside: window.frame, on: visible)
+        if cardInPlace {
+            // The still corner as the floater is now, also mid-drag.
+            let frame = window.frame
+            let corner = anchor.map {
+                FloaterLayout.Anchor(point: NSPoint(x: $0.growsLeft ? frame.maxX : frame.minX,
+                                                    y: $0.growsDown ? frame.maxY : frame.minY),
+                                     growsLeft: $0.growsLeft, growsDown: $0.growsDown)
+            } ?? FloaterLayout.anchor(for: frame, on: visible)
+            if let around = FloaterLayout.inPlaceFrame(bubbleSize, anchor: corner, on: visible) {
+                rect = around
+            } else {
+                // It does not fit: the card is laid out again beside the
+                // floater and placed once more at its new size.
+                cardInPlace = false
+            }
+        }
+        let start = FloaterLayout.unfoldStart(floater: window.frame, card: rect, on: visible)
+        let local = CGRect(x: start.minX - rect.minX, y: rect.maxY - start.maxY,
+                           width: start.width, height: start.height)
+        if local != unfoldStart {
+            unfoldStart = local
+        }
         if rect != bubble.frame {
             bubble.setFrame(rect, display: true)
-            bubble.invalidateShadow()
+        }
+        let haloRect = rect.insetBy(dx: -FloaterLayout.haloMargin, dy: -FloaterLayout.haloMargin)
+        if let halo, halo.frame != haloRect {
+            halo.setFrame(haloRect, display: true)
         }
         if !bubble.isVisible {
+            halo?.orderFrontRegardless()
             bubble.orderFrontRegardless()
         }
+        cover(cardInPlace)
+        motion.placed()
+    }
+
+    private func cover(_ on: Bool) {
+        guard coversFloater != on else { return }
+        coversFloater = on
+        window?.hasShadow = !on
+        window?.invalidateShadow()
     }
 
     private func visibleFrame(for frame: NSRect) -> NSRect? {
@@ -1171,6 +1325,297 @@ enum Bubble {
     }
 }
 
+/// How the reply card arrives and leaves, kept per home beside the bubble's
+/// switch in state/desk-voice/reply-motion as `key=value` lines: `motion`
+/// (off, calm or full), `last` (the motion one click brings back after off)
+/// and `stay` (seconds an unexpanded reply stays up). A home that never
+/// touched it, or a line that does not read, gets calm and 15 seconds.
+struct ReplyMotion: Equatable {
+    enum Style: String, CaseIterable {
+        /// No motion: the card simply appears beside the floater and goes.
+        case off
+        /// The card unfolds out of the floater, the words fade in a beat
+        /// later and the offer rises last; it folds back on leaving.
+        case calm
+        /// Calm plus a warm glow behind the card, one light sweep across it,
+        /// a little more spring and one small settle of the floater.
+        case full
+
+        var title: String {
+            switch self {
+            case .off: return "Off"
+            case .calm: return "Calm"
+            case .full: return "Full"
+            }
+        }
+    }
+
+    /// The stays the right-click menu offers, in seconds.
+    static let stays: [TimeInterval] = [8, 15, 30, 60]
+
+    var style: Style = .calm
+    /// The motion a click on the switch brings back; never off.
+    var last: Style = .calm
+    var stay: TimeInterval = FloaterModel.captionShown
+
+    static func path(home: String) -> String {
+        (home as NSString).appendingPathComponent("state/desk-voice/reply-motion")
+    }
+
+    static func parse(_ text: String) -> ReplyMotion {
+        var motion = ReplyMotion()
+        for line in text.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "motion":
+                if let style = Style(rawValue: parts[1]) { motion.style = style }
+            case "last":
+                if let style = Style(rawValue: parts[1]), style != .off { motion.last = style }
+            case "stay":
+                if let seconds = TimeInterval(parts[1]), seconds >= 3, seconds <= 600 { motion.stay = seconds }
+            default:
+                continue
+            }
+        }
+        if motion.style != .off {
+            motion.last = motion.style
+        }
+        return motion
+    }
+
+    var text: String {
+        "motion=\(style.rawValue)\nlast=\(last.rawValue)\nstay=\(Int(stay))\n"
+    }
+
+    static func load(home: String) -> ReplyMotion {
+        guard let text = try? String(contentsOfFile: path(home: home), encoding: .utf8) else { return ReplyMotion() }
+        return parse(text)
+    }
+
+    /// Keeps the setting; false when it could not be kept.
+    @discardableResult
+    func save(home: String) -> Bool {
+        let file = Self.path(home: home)
+        let dir = (file as NSString).deletingLastPathComponent
+        guard (try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)) != nil else {
+            return false
+        }
+        return (try? text.write(toFile: file, atomically: true, encoding: .utf8)) != nil
+    }
+
+    /// One click: off, or back to the motion it had.
+    func toggled() -> ReplyMotion {
+        var next = self
+        next.style = style == .off ? last : .off
+        return next
+    }
+
+    func with(style: Style) -> ReplyMotion {
+        var next = self
+        next.style = style
+        if style != .off {
+            next.last = style
+        }
+        return next
+    }
+}
+
+/// What the reply card shows, kept as it was while the card folds away.
+struct CardContent: Equatable {
+    var caption: Reply?
+    var offer: Offer?
+    var expanded = false
+
+    var isEmpty: Bool { caption == nil && offer == nil }
+}
+
+/// The reply card's arrive, read and leave, the Unfold motion. Arriving, the
+/// card's paper unfolds out of the floater (unfold 0 to 1), the words fade in
+/// a beat later and the offer rises last; leaving, the words fade, the paper
+/// folds back into the floater and the card fades. Full adds a warm glow, one
+/// light sweep and a settle of the floater; off shows and hides at once; with
+/// the Mac's Reduce motion on, both arrive and leave are a plain 0.2 s fade at
+/// the final size. A reply that lands while the card folds away turns it
+/// around. The views read these values, so SwiftUI animates them inside
+/// windows that are never resized for the motion.
+@MainActor
+final class CardMotion: ObservableObject {
+    enum Phase: Equatable {
+        case hidden
+        case arriving
+        case shown
+        case leaving
+    }
+
+    @Published private(set) var phase: Phase = .hidden
+    // What the views draw. Only the phases below change them; they are open
+    // so a still of any moment of the motion can be drawn on its own.
+    /// The paper, from the floater (0) to the whole card (1).
+    @Published var unfold: CGFloat = 0
+    /// The whole card's opacity.
+    @Published var fade: Double = 0
+    @Published var words: Double = 0
+    @Published var offerRise: Double = 0
+    @Published var glow: Double = 0
+    @Published var sweep: CGFloat = 0
+    /// The floater's one small settle as the card folds back into it.
+    @Published var settle: CGFloat = 0
+    /// The last card shown, which stays on the paper while it folds away.
+    @Published private(set) var held: CardContent?
+    var style: ReplyMotion.Style = .calm
+    var reduceMotion = false
+    /// Told when the phase changes, so the windows follow it.
+    var onPhase: ((Phase) -> Void)?
+    private var turn = 0
+    private var waitingForPlace = false
+
+    /// The card moves at all: not switched off.
+    var moves: Bool { style != .off }
+    /// The card unfolds, rather than only fading for Reduce motion.
+    var grows: Bool { moves && !reduceMotion }
+
+    func update(shown: Bool) {
+        shown ? show() : hide()
+    }
+
+    /// The card shows what it is given until it starts to leave.
+    func keep(_ content: CardContent) {
+        guard !content.isEmpty, phase != .leaving, content != held else { return }
+        held = content
+    }
+
+    func show() {
+        switch phase {
+        case .arriving, .shown:
+            return
+        case .hidden:
+            turn += 1
+            guard moves else {
+                setAll(1)
+                set(.shown)
+                return
+            }
+            setAll(0)
+            waitingForPlace = true
+            // The windows are placed for the card first; placed() starts it.
+            set(.arriving)
+        case .leaving:
+            turn += 1
+            set(.arriving)
+            start()
+        }
+    }
+
+    /// The card's window is placed at its final size, so the motion can start.
+    func placed() {
+        guard phase == .arriving, waitingForPlace else { return }
+        waitingForPlace = false
+        let current = turn
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.turn == current, self.phase == .arriving else { return }
+            self.start()
+        }
+    }
+
+    func hide() {
+        guard phase == .arriving || phase == .shown else { return }
+        turn += 1
+        waitingForPlace = false
+        guard moves else {
+            finish()
+            return
+        }
+        set(.leaving)
+        if reduceMotion {
+            withAnimation(.easeIn(duration: 0.2)) {
+                fade = 0
+                words = 0
+            }
+            after(0.2) { $0.finish() }
+            return
+        }
+        let full = style == .full
+        withAnimation(.easeIn(duration: 0.18)) {
+            words = 0
+            offerRise = 0
+        }
+        after(0.18) { motion in
+            withAnimation(.timingCurve(0.55, 0, 0.2, 1, duration: 0.4)) {
+                motion.unfold = 0
+                motion.glow = 0
+            }
+            motion.after(0.4) { motion in
+                withAnimation(.easeOut(duration: 0.12)) { motion.fade = 0 }
+                if full {
+                    withAnimation(.easeOut(duration: 0.1)) { motion.settle = 1 }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak motion] in
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { motion?.settle = 0 }
+                    }
+                }
+                motion.after(0.12) { $0.finish() }
+            }
+        }
+    }
+
+    private func start() {
+        if reduceMotion {
+            unfold = 1
+            offerRise = 1
+            withAnimation(.easeOut(duration: 0.2)) {
+                fade = 1
+                words = 1
+            }
+            after(0.2) { $0.set(.shown) }
+            return
+        }
+        let full = style == .full
+        withAnimation(.easeOut(duration: 0.12)) { fade = 1 }
+        // Calm is critically damped: no overshoot. Full springs a little.
+        withAnimation(.spring(response: full ? 0.5 : 0.45, dampingFraction: full ? 0.86 : 1)) { unfold = 1 }
+        withAnimation(.easeOut(duration: full ? 0.4 : 0.3).delay(full ? 0.3 : 0.2)) { words = 1 }
+        withAnimation(.easeOut(duration: 0.35).delay(full ? 0.45 : 0.32)) { offerRise = 1 }
+        if full {
+            withAnimation(.easeOut(duration: 0.45)) { glow = 1 }
+            withAnimation(.easeInOut(duration: 0.9).delay(0.22)) { sweep = 1 }
+            after(0.45) { motion in
+                withAnimation(.easeOut(duration: 1)) { motion.glow = 0.25 }
+            }
+        }
+        after(full ? 0.8 : 0.65) { $0.set(.shown) }
+    }
+
+    private func finish() {
+        setAll(0)
+        held = nil
+        set(.hidden)
+    }
+
+    private func setAll(_ value: CGFloat) {
+        unfold = value
+        fade = Double(value)
+        words = Double(value)
+        offerRise = Double(value)
+        glow = 0
+        sweep = 0
+    }
+
+    private func set(_ next: Phase) {
+        guard phase != next else { return }
+        phase = next
+        onPhase?(next)
+    }
+
+    /// Runs `body` after `seconds` unless the card has turned since.
+    private func after(_ seconds: TimeInterval, _ body: @escaping (CardMotion) -> Void) {
+        let current = turn
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.turn == current else { return }
+            body(self)
+        }
+    }
+}
+
 @MainActor
 final class FloaterModel: ObservableObject {
     enum Mode {
@@ -1206,6 +1651,9 @@ final class FloaterModel: ObservableObject {
     @Published var dismissedOffer: Offer?
     /// The reply bubble's switch (Bubble), kept per home.
     @Published private(set) var bubbleOn: Bool
+    /// How the reply card moves and how long it stays (ReplyMotion), kept
+    /// per home.
+    @Published private(set) var motion: ReplyMotion
     /// The captain is looking at Starship (lookingAtStarship), so the bubble
     /// stays quiet: a new reply is not shown, and an offer waits until they
     /// look away.
@@ -1262,7 +1710,8 @@ final class FloaterModel: ObservableObject {
     /// newer caption be.
     private var captionTurn = 0
     /// How long a caption stays up unless it is expanded, or held up by an
-    /// offer, work under way or a line still playing.
+    /// offer, work under way or a line still playing, until the captain picks
+    /// another stay (ReplyMotion.stay).
     nonisolated static let captionShown: TimeInterval = 15
 
     // The offer follows bin/fm-desk-offer.sh's record, read through `status`
@@ -1287,6 +1736,7 @@ final class FloaterModel: ObservableObject {
         historyDir = (fmHome as NSString).appendingPathComponent("state/speak-history")
         offerFile = (fmHome as NSString).appendingPathComponent("state/desk-voice/offer.json")
         bubbleOn = Bubble.isOn(home: fmHome)
+        motion = ReplyMotion.load(home: fmHome)
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
@@ -1748,6 +2198,40 @@ final class FloaterModel: ObservableObject {
         }
     }
 
+    // MARK: the reply card's motion
+
+    /// One click turns the card's motion off, or back to what it was, kept
+    /// across restarts. Off, the card simply appears and goes.
+    func toggleMotion() {
+        let next = motion.toggled()
+        keepMotion(next, saying: next.style == .off ? "Motion off" : "Motion \(next.style.title.lowercased())")
+    }
+
+    func setMotionStyle(_ style: ReplyMotion.Style) {
+        keepMotion(motion.with(style: style),
+                   saying: style == .off ? "Motion off" : "Motion \(style.title.lowercased())")
+    }
+
+    /// How long an unexpanded reply stays up, from the next reply on.
+    func setCaptionStay(_ seconds: TimeInterval) {
+        var next = motion
+        next.stay = seconds
+        keepMotion(next, saying: "Replies stay \(Self.stayLabel(seconds))")
+    }
+
+    nonisolated static func stayLabel(_ seconds: TimeInterval) -> String {
+        seconds >= 60 && seconds.truncatingRemainder(dividingBy: 60) == 0
+            ? "\(Int(seconds / 60)) min" : "\(Int(seconds)) s"
+    }
+
+    private func keepMotion(_ next: ReplyMotion, saying message: String) {
+        motion = next
+        let kept = next.save(home: fmHome)
+        if mode == .idle {
+            flash(kept ? message : "Motion setting not kept")
+        }
+    }
+
     /// While the bubble has something to show, looks every few seconds at
     /// whether the captain is on Starship.
     private func screenTick() {
@@ -1901,7 +2385,8 @@ final class FloaterModel: ObservableObject {
         }
     }
 
-    private func scheduleCaptionHide(after delay: TimeInterval = FloaterModel.captionShown) {
+    private func scheduleCaptionHide(after wait: TimeInterval? = nil) {
+        let delay = wait ?? motion.stay
         captionTurn += 1
         let turn = captionTurn
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -2448,15 +2933,27 @@ final class FloaterModel: ObservableObject {
 /// line plays or the voice is muted, and Hear again under a reply. Voice volume
 /// and mute are on a right-click of the card; recent replies are on the web page.
 struct FloaterView: View {
-    /// The floater's two windows: its card, and the reply bubble beside it.
+    /// The floater's windows: its card, the reply card, and the reply card's
+    /// shadow and glow.
     enum Part {
         case card
         case bubble
+        case halo
     }
 
     @ObservedObject var model: FloaterModel
     @ObservedObject var mover: WindowMover
+    @ObservedObject var motion: CardMotion
     var part: Part = .card
+
+    init(model: FloaterModel, mover: WindowMover, part: Part = .card) {
+        self.model = model
+        self.mover = mover
+        self.motion = mover.motion
+        self.part = part
+    }
+
+    private static let cardRadius: CGFloat = 14
 
     private let talkSize: CGFloat = 36
     private let showSize: CGFloat = 27
@@ -2473,10 +2970,15 @@ struct FloaterView: View {
                     mover.fit(size, statusShown: model.statusShown)
                 }
         case .bubble:
-            let shown = model.bubbleShown
+            let live = CardContent(caption: model.caption, offer: model.shownOffer,
+                                   expanded: model.captionExpanded)
+            // While it folds away, and for the moment before it starts to,
+            // the card keeps what it showed.
+            let content = motion.phase == .leaving || live.isEmpty ? motion.held : live
+            let shown = motion.phase != .hidden && content?.isEmpty == false
             VStack {
-                if shown {
-                    bubble
+                if shown, let content {
+                    bubble(content)
                 }
             }
             .fixedSize()
@@ -2485,7 +2987,30 @@ struct FloaterView: View {
             } action: { size in
                 mover.fitBubble(size)
             }
+            .onChange(of: live, initial: true) { _, now in
+                motion.keep(now)
+            }
+            .onChange(of: model.bubbleShown, initial: true) { _, now in
+                motion.update(shown: now)
+            }
+        case .halo:
+            halo
         }
+    }
+
+    /// The card's paper at this point of its unfolding, in a card of `size`.
+    private func paper(in size: CGSize) -> CGRect {
+        let start = mover.unfoldStart
+        let open = min(max(motion.unfold, 0), 1)
+        func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * open }
+        return CGRect(x: mix(start.minX, 0), y: mix(start.minY, 0),
+                      width: mix(start.width, size.width), height: mix(start.height, size.height))
+    }
+
+    private func paperShape(_ rect: CGRect) -> some View {
+        RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous)
+            .frame(width: rect.width, height: rect.height)
+            .offset(x: rect.minX, y: rect.minY)
     }
 
     // MARK: colours
@@ -2545,7 +3070,10 @@ struct FloaterView: View {
         .padding(growsDown ? .bottom : .top, model.statusShown ? 6 : 8)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Self.paper)
+                // Under a reply card around it, the floater all but lets its
+                // own paper go as the card's words come in, so the card's edge
+                // runs unbroken around it; a trace stays to drag it by.
+                .fill(Self.paper.opacity(1 - 0.98 * coverage))
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 1)
@@ -2556,9 +3084,18 @@ struct FloaterView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Self.line)
+                .opacity(1 - coverage)
                 .allowsHitTesting(false)
         )
+        .scaleEffect(1 - 0.04 * motion.settle)
         .contextMenu { voiceMenu }
+    }
+
+    /// How far a reply card around the floater has taken over its paper:
+    /// following the card's words, which come in once the card is wholly
+    /// there and go before it starts to fold.
+    private var coverage: Double {
+        mover.coversFloater ? motion.words : 0
     }
 
     private var statusLine: some View {
@@ -2588,7 +3125,29 @@ struct FloaterView: View {
             }
             Button(model.muted ? "Unmute voice" : "Mute voice", action: model.toggleMute)
             Button(model.bubbleOn ? "Turn reply bubble off" : "Turn reply bubble on", action: model.toggleBubble)
+            Picker("Reply motion", selection: Binding(
+                get: { model.motion.style },
+                set: { model.setMotionStyle($0) }
+            )) {
+                ForEach(ReplyMotion.Style.allCases, id: \.self) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            Picker("Reply stays", selection: Binding(
+                get: { model.motion.stay },
+                set: { model.setCaptionStay($0) }
+            )) {
+                ForEach(stayChoices, id: \.self) { seconds in
+                    Text(FloaterModel.stayLabel(seconds)).tag(seconds)
+                }
+            }
         }
+    }
+
+    private var stayChoices: [TimeInterval] {
+        ReplyMotion.stays.contains(model.motion.stay)
+            ? ReplyMotion.stays
+            : (ReplyMotion.stays + [model.motion.stay]).sorted()
     }
 
     private var volumeChoices: [Int] {
@@ -2739,59 +3298,174 @@ struct FloaterView: View {
     private var acting: Bool { model.offer?.isActing == true }
 
     /// Firstmate's newest reply, written for the eye, and any offer under it.
-    /// Clicking the words opens the whole reply; the bubble never acts itself.
-    private var bubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                if model.muted || model.speaking {
-                    smallButton(model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                                help: model.muted ? "Voice muted - click to unmute" : "Mute the voice",
-                                tint: model.muted ? Self.orange : Self.soft,
-                                action: model.toggleMute)
-                }
-                Text(model.caption.map { "Firstmate, \(Self.timeLabel($0.time))" } ?? "Firstmate")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Self.soft)
-                Spacer(minLength: 8)
-                if model.speaking || acting {
-                    stopButton
-                }
-                if model.caption != nil {
-                    smallButton(model.captionExpanded ? "chevron.up" : "chevron.down",
-                                help: model.captionExpanded ? "Show less" : "Show all of the reply",
-                                action: model.toggleCaptionExpanded)
-                }
-                smallButton("bell.slash", help: "Turn the reply bubble off", action: model.toggleBubble)
-                smallButton("xmark", help: "Dismiss", action: model.dismissCaption)
+    /// Clicking the words opens the whole reply; the card never acts itself.
+    /// Around the floater, the card leaves the floater's own corner free, so
+    /// Talk and Show stay exactly where they were, with the header beside them.
+    private func bubble(_ content: CardContent) -> some View {
+        let inPlace = mover.cardInPlace
+        let growsDown = mover.anchor?.growsDown ?? true
+        let blur = motion.grows ? (motion.style == .full ? 5.0 : 2.0) : 0
+        let words = motion.words
+        return VStack(alignment: .leading, spacing: 0) {
+            if inPlace && growsDown {
+                floaterRow(content).wordsIn(words, blur: blur)
             }
-            if let reply = model.caption {
-                replyText(reply)
-                if !model.muted && !model.speaking {
-                    Button(action: model.hearAgain) {
-                        Label("Hear again", systemImage: "arrow.counterclockwise")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Self.soft)
+            VStack(alignment: .leading, spacing: 6) {
+                if !inPlace {
+                    HStack(spacing: 5) { header(content) }
+                        .wordsIn(words, blur: blur)
+                }
+                if let reply = content.caption {
+                    VStack(alignment: .leading, spacing: 6) {
+                        replyText(reply, expanded: content.expanded)
+                        if !model.muted && !model.speaking {
+                            Button(action: model.hearAgain) {
+                                Label("Hear again", systemImage: "arrow.counterclockwise")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(Self.soft)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Speak this reply again")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .help("Speak this reply again")
+                    .wordsIn(words, blur: blur)
+                }
+                if let offer = content.offer {
+                    offerBox(offer)
+                        .opacity(motion.offerRise)
+                        .offset(y: 7 * (1 - motion.offerRise))
                 }
             }
-            if let offer = model.shownOffer {
-                offerBox(offer)
+            .padding(.horizontal, 11)
+            .padding(.top, inPlace && growsDown ? 2 : 9)
+            .padding(.bottom, inPlace && !growsDown ? 2 : 9)
+            if inPlace && !growsDown {
+                floaterRow(content).wordsIn(words, blur: blur)
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .frame(width: model.captionExpanded ? 340 : 260, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.paper))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Self.line))
+        .frame(width: content.expanded ? 340 : (inPlace ? 300 : 260), alignment: .leading)
+        .mask(alignment: .topLeading) {
+            GeometryReader { proxy in
+                paperShape(paper(in: proxy.size))
+            }
+        }
+        .background(alignment: .topLeading) {
+            GeometryReader { proxy in
+                let rect = paper(in: proxy.size)
+                ZStack(alignment: .topLeading) {
+                    paperShape(rect).foregroundStyle(Self.paper)
+                    if motion.grows && motion.style == .full {
+                        lightSweep(rect)
+                    }
+                    RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous)
+                        .strokeBorder(Self.line)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .opacity(motion.fade)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Firstmate's reply")
     }
 
-    private func replyText(_ reply: Reply) -> some View {
+    /// The card's header: who and when, then the controls that mean
+    /// something now, the motion and bubble switches and the cross.
+    @ViewBuilder
+    private func header(_ content: CardContent) -> some View {
+        if model.muted || model.speaking {
+            smallButton(model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        help: model.muted ? "Voice muted - click to unmute" : "Mute the voice",
+                        tint: model.muted ? Self.orange : Self.soft,
+                        action: model.toggleMute)
+        }
+        Text(content.caption.map { "Firstmate, \(Self.timeLabel($0.time))" } ?? "Firstmate")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Self.soft)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .layoutPriority(-1)
+        Spacer(minLength: 4)
+        if model.speaking || acting {
+            stopButton
+        }
+        if content.caption != nil {
+            smallButton(content.expanded ? "chevron.up" : "chevron.down",
+                        help: content.expanded ? "Show less" : "Show all of the reply",
+                        action: model.toggleCaptionExpanded)
+        }
+        smallButton("sparkles",
+                    help: model.motion.style == .off ? "Reply motion off - click to turn it on"
+                                                     : "Turn the reply motion off",
+                    tint: model.motion.style == .off ? Self.soft.opacity(0.45) : Self.soft,
+                    action: model.toggleMotion)
+        smallButton("bell.slash", help: "Turn the reply bubble off", action: model.toggleBubble)
+        smallButton("xmark", help: "Dismiss", action: model.dismissCaption)
+    }
+
+    /// The card's row at the floater's corner: the floater's own spot left
+    /// free, and the header beside it.
+    private func floaterRow(_ content: CardContent) -> some View {
+        let growsLeft = mover.anchor?.growsLeft ?? true
+        return HStack(spacing: 5) {
+            if !growsLeft {
+                Color.clear.frame(width: mover.floaterSize.width + 3)
+            }
+            header(content)
+            if growsLeft {
+                Color.clear.frame(width: mover.floaterSize.width + 3)
+            }
+        }
+        .padding(growsLeft ? .leading : .trailing, 11)
+        .frame(height: mover.floaterSize.height)
+    }
+
+    /// Full motion's one band of light across the paper as it opens.
+    private func lightSweep(_ rect: CGRect) -> some View {
+        let band = max(rect.width * 0.35, 40)
+        return LinearGradient(colors: [.clear, .white.opacity(0.28), .clear],
+                              startPoint: .leading, endPoint: .trailing)
+            .frame(width: band, height: rect.height * 1.6)
+            .rotationEffect(.degrees(18))
+            .offset(x: rect.minX - band * 1.3 + (rect.width + band * 2.6) * motion.sweep,
+                    y: rect.minY - rect.height * 0.3)
+            .mask(alignment: .topLeading) { paperShape(rect) }
+            .blendMode(.plusLighter)
+    }
+
+    /// The card's shadow, and in full motion its warm glow, drawn around the
+    /// paper as it unfolds, in a window that never takes a click.
+    private var halo: some View {
+        GeometryReader { proxy in
+            let margin = FloaterLayout.haloMargin
+            let size = CGSize(width: max(proxy.size.width - 2 * margin, 0),
+                              height: max(proxy.size.height - 2 * margin, 0))
+            let rect = paper(in: size).offsetBy(dx: margin, dy: margin)
+            let shown = motion.phase != .hidden
+            ZStack(alignment: .topLeading) {
+                if shown && motion.style == .full && !motion.reduceMotion {
+                    paperShape(rect.insetBy(dx: -6, dy: -6))
+                        .foregroundStyle(Self.glowColor)
+                        .blur(radius: 14)
+                        .opacity(0.6 * motion.glow)
+                }
+                if shown {
+                    paperShape(rect)
+                        .foregroundStyle(Self.paper)
+                        .shadow(color: .black.opacity(0.22), radius: 9, y: -3)
+                }
+            }
+            .opacity(motion.fade)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private static let glowColor = Color(red: 1.0, green: 0.78, blue: 0.42)
+
+    private func replyText(_ reply: Reply, expanded: Bool) -> some View {
         Group {
-            if model.captionExpanded {
+            if expanded {
                 ScrollView {
                     Text(Self.markdown(reply.full))
                         .font(.system(size: 12))
@@ -2918,5 +3592,15 @@ struct FloaterView: View {
     /// Today's replies show the time; older ones the day as well.
     private static func timeLabel(_ time: Date) -> String {
         Calendar.current.isDateInToday(time) ? clock.string(from: time) : dayClock.string(from: time)
+    }
+}
+
+extension View {
+    /// The words of the reply card as they come in: faded, softly blurred and
+    /// a few points low at 0, sharp and in place at 1.
+    func wordsIn(_ amount: Double, blur: Double) -> some View {
+        opacity(amount)
+            .blur(radius: blur * (1 - amount))
+            .offset(y: 3 * (1 - amount))
     }
 }

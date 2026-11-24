@@ -23,7 +23,8 @@ final class VoiceVolumeTests: XCTestCase {
                                        windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                        clickCount: 1, pressure: 1)!
         let menu = hosting.hitTest(point)?.menu(for: event)
-        XCTAssertEqual(menu?.items.map(\.title), ["Voice volume", "Mute voice", "Turn reply bubble off"])
+        XCTAssertEqual(menu?.items.map(\.title), ["Voice volume", "Mute voice", "Turn reply bubble off",
+                                                  "Reply motion", "Reply stays"])
         let levels = menu?.items.first?.submenu?.items.map(\.title) ?? []
         XCTAssertTrue(levels.contains("100% (system volume)"), "the levels are offered: \(levels)")
         XCTAssertTrue(levels.contains("200%"))
@@ -370,5 +371,20 @@ extension VoiceVolumeTests {
         XCTAssertTrue(Bubble.allowed(on: true, lookingAtStarship: false))
         XCTAssertFalse(Bubble.allowed(on: true, lookingAtStarship: true))
         XCTAssertFalse(Bubble.allowed(on: false, lookingAtStarship: false))
+    }
+
+    /// A reply stays up as long as the captain chose in the right-click menu.
+    @MainActor
+    func testAReplyStaysAsLongAsTheCaptainChose() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        model.setCaptionStay(3)
+        try await follow(model, home)
+        try reply(home, 1)
+        try await waitUntil { model.caption?.id == 1 }
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        XCTAssertNotNil(model.caption, "still up within its stay")
+        try await waitUntil { model.caption == nil }
     }
 }
