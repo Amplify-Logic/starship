@@ -165,11 +165,11 @@
 #             sentence under the same register bound, and looks for a speaker
 #             (`say`, or a Deepgram key) and, when `voice` is set, that voice.
 #             Every piece that is missing gets its own `missing:` line on
-#             stdout: spoken replies not turned on, no shaper line, a shaper
-#             path that is not there or not executable, a dry run that fails
-#             (with the shaper's own last error line, such as a Python too old
-#             for it), refuses or prints nothing, no speaker, or a voice this
-#             machine does not have. With nothing missing it prints one
+#             stdout: spoken replies not turned on, voice muted, no shaper
+#             line, a shaper path that is not there or not executable, a dry
+#             run that fails (with the shaper's own last error line, such as a
+#             Python too old for it), refuses or prints nothing, no speaker, or
+#             a voice this machine does not have. With nothing missing it prints one
 #             `ready:` line. Exit 0 when ready, 1 when anything is missing.
 #             It never takes the playback lock and never reaches a speaker.
 #   --volume [<percent>]
@@ -1034,6 +1034,7 @@ check_voice() {
   load_config
   [ "$CFG_ENABLED" = true ] \
     || missing "spoken replies are not turned on: add 'enabled = true' to config/speak"
+  ! is_muted || missing "voice is muted (fm-speak.sh --unmute)"
   if ! resolve_shaper; then
     missing "no shaper line: add 'shaper = <path>' to config/speak, naming the spoken-voice shaper"
   elif [ ! -e "$SHAPER" ]; then

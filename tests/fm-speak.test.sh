@@ -1020,7 +1020,7 @@ test_enabled_reports_the_opt_in() {
 check() {  # <home> [extra env assignments...]
   local home=$1
   shift
-  env -u FM_SPEAK_SHAPER FM_HOME="$home" FM_SPEAK_SAY="$home/speaker" \
+  env -u FM_SPEAK_SHAPER -u FM_STATE_OVERRIDE FM_HOME="$home" FM_SPEAK_SAY="$home/speaker" \
     FM_SPEAK_SHAPER_TIMEOUT=15 "$@" "$SPEAK" --check 2>&1
 }
 
@@ -1096,6 +1096,15 @@ test_check_names_each_missing_piece_without_speaking() {
   out=$(check "$home") && code=0 || code=$?
   expect_code 1 "$code" "a voice this machine does not have is not ready"
   assert_contains "$out" "missing: say has no voice named 'Nobody'" "the missing voice is named"
+
+  home=$(new_home check-muted "enabled = true" "shaper = shaper")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  mkdir -p "$home/state" && : > "$home/state/speak-muted"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a muted home is not ready: $out"
+  assert_contains "$out" "missing: voice is muted (fm-speak.sh --unmute)" "the mute is named"
+  assert_not_contains "$out" "ready:" "a muted home must not say ready"
 
   home=$(new_home check-ready "enabled = true" "shaper = shaper")
   install_shaper "$home" >/dev/null
