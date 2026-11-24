@@ -21,7 +21,7 @@ make_world() {
   mkdir -p "$dir/fmhome" "$dir/tools"
   fakebin=$(fm_fakebin "$dir")
   fm_fake_real_tool "$fakebin" bash sh env cat grep sed awk head mkdir ls \
-    dirname uname git sleep tr cut perl || fail "a basic tool is missing on this host"
+    dirname uname git sleep tr cut perl python3 mktemp rm || fail "a basic tool is missing on this host"
   cat > "$dir/bootstrap" <<'SH'
 #!/usr/bin/env bash
 [ -e "$FAKE_WORLD/tools-installed" ] && exit 0
@@ -54,12 +54,22 @@ SH
   : > "$dir/tools-installed"
 }
 
+# The optional steps read Tailscale, the SSH port, the Deepgram key and the
+# spoken voice; each is pinned to the case's own fixture, so the host's real
+# Tailscale, Remote Login, keys and config/speak never reach a case.
 run_checklist() {  # <world> [args...]
   local dir=$1
   shift
-  PATH="$dir/fakebin:$dir/tools" FAKE_WORLD="$dir" FM_HOME="$dir/fmhome" \
-    FM_FIRST_HOUR_BOOTSTRAP="$dir/bootstrap" bash "$CHECKLIST" "$@" 2>&1
+  env -u DEEPGRAM_API_KEY -u FM_SPEAK_SHAPER -u GLASSES_ANNOUNCE_CONFIG \
+    PATH="$dir/fakebin:$dir/tools" FAKE_WORLD="$dir" FM_HOME="$dir/fmhome" \
+    FM_FIRST_HOUR_BOOTSTRAP="$dir/bootstrap" \
+    FM_FIRST_HOUR_TAILSCALE="${FAKE_TAILSCALE:-$dir/no-tailscale}" \
+    FM_FIRST_HOUR_SSH_PORT="${FAKE_SSH_PORT:-$CLOSED_PORT}" \
+    FM_SPEAK_SAY="$dir/tools/say" bash "$CHECKLIST" "$@" 2>&1
 }
+
+# A port nothing listens on: bound and released, so a connect is refused.
+CLOSED_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 
 test_blank_machine_has_nothing_ticked() {
   local w out status
@@ -186,7 +196,64 @@ test_watch_redraws_until_done_and_usage() {
   pass "--watch exits as soon as every step is done, and a bad interval or argument is a usage error"
 }
 
+test_the_optional_steps_guide_and_tick_without_being_counted() {
+  local w out status port listener
+  w=$(make_world optional)
+  out=$(run_checklist "$w")
+  assert_contains "$out" "Joining a teammate's Starship (optional, not counted above):" "the teammate group is shown"
+  assert_contains "$out" "  [ ] Tailscale - install Tailscale from tailscale.com/download" \
+    "a machine without Tailscale is sent to install it"
+  assert_contains "$out" "  [ ] Remote Login (SSH) - turn on Remote Login in System Settings, General, Sharing" \
+    "Remote Login off says where to turn it on"
+  assert_contains "$out" "  [ ] Deepgram key - for speech-to-text and the spoken voice" "a missing Deepgram key is a guided step"
+  assert_contains "$out" "  [ ] Spoken voice - spoken replies are not turned on" "an unarmed voice says so"
+  assert_contains "$out" "0 of 12 done" "the optional steps are never counted"
+
+  cat > "$w/tailscale" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = "status --json" ] || exit 64
+cat "$FAKE_WORLD/tailscale.json"
+SH
+  chmod +x "$w/tailscale"
+  printf '{"BackendState": "Stopped"}\n' > "$w/tailscale.json"
+  out=$(FAKE_TAILSCALE="$w/tailscale" run_checklist "$w")
+  assert_contains "$out" "  [ ] Tailscale - open the inviter's invite link and sign in with a personal account, not a Google login on a company domain" \
+    "a signed-out Tailscale explains which account to use"
+  assert_contains "$out" "join the inviter's tailnet rather than creating a new one" "it says to join, not create"
+  printf '{"BackendState": "Running", "Self": {"DNSName": "this-mac.example-tailnet.ts.net."}}\n' > "$w/tailscale.json"
+  out=$(FAKE_TAILSCALE="$w/tailscale" run_checklist "$w")
+  assert_contains "$out" "  [x] Tailscale - connected, on the tailnet example-tailnet.ts.net: check its addresses end the same way as those on the inviter's Machines page" \
+    "a connected Tailscale ticks and names the tailnet to compare"
+  assert_contains "$out" "ask the inviter to check this Mac shows there" "it asks for the Machines page check"
+
+  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+  python3 -c 'import socket, sys, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(8); time.sleep(30)' "$port" &
+  listener=$!
+  sleep 0.5
+  out=$(FAKE_SSH_PORT=$port run_checklist "$w")
+  kill "$listener" 2>/dev/null; wait "$listener" 2>/dev/null
+  assert_contains "$out" "  [x] Remote Login (SSH)" "an answering SSH port ticks Remote Login"
+
+  printf 'DEEPGRAM_API_KEY=dg-test-key\n' > "$w/fmhome/.env"
+  mkdir -p "$w/fmhome/config"
+  printf 'enabled = true\nshaper = shaper\n' > "$w/fmhome/config/speak"
+  printf '#!/usr/bin/env bash\necho "needs Python 3.11 or newer" >&2\nexit 1\n' > "$w/fmhome/shaper"
+  chmod +x "$w/fmhome/shaper"
+  out=$(run_checklist "$w")
+  assert_contains "$out" "  [x] Deepgram key - " "a key in the home's .env ticks the Deepgram step"
+  assert_not_contains "$out" "dg-test-key" "the key itself is never printed"
+  assert_contains "$out" "  [ ] Spoken voice - the shaper's dry run failed (exit 1): needs Python 3.11 or newer" \
+    "a failing shaper is named instead of speech silently doing nothing"
+  printf '#!/usr/bin/env bash\nshift\nprintf "%%s\\n" "$*"\n' > "$w/fmhome/shaper"
+  out=$(run_checklist "$w")
+  status=$?
+  assert_contains "$out" "  [x] Spoken voice" "a shaper that runs ticks the spoken voice"
+  [ "$status" -eq 1 ] || fail "ticked optional steps must not finish the checklist, got $status"
+  pass "the optional Tailscale, Remote Login, Deepgram and spoken-voice steps guide and tick, and are never counted"
+}
+
 test_blank_machine_has_nothing_ticked
+test_the_optional_steps_guide_and_tick_without_being_counted
 test_each_step_ticks_itself_off_as_its_evidence_appears
 test_a_name_left_blank_does_not_tick
 test_watch_redraws_until_done_and_usage

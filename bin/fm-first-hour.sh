@@ -27,6 +27,23 @@
 #   12. First report back           any data/<task>/report.md
 #
 # Below the list, one "Next:" line says how to finish the first open step.
+#
+# Then two optional groups, ticked the same way but never counted, so they
+# never hold the list or --watch open:
+#   Joining a teammate's Starship, for a Mac that joins an inviter's tailnet:
+#     Tailscale            `tailscale status --json` reports Running; the
+#                          tailnet's DNS name is shown, because only the
+#                          person can tell it is the inviter's and not a new
+#                          one
+#     Remote Login (SSH)   something answers on this machine's SSH port, so
+#                          the inviter's Starship can help remotely
+#   Voice:
+#     Deepgram key         DEEPGRAM_API_KEY in the environment or the home's
+#                          .env (bin/fm-deepgram-lib.sh); never printed
+#     Spoken voice         `bin/fm-speak.sh --check` prints ready; otherwise
+#                          its first missing piece is the hint
+# These are guided steps: the checklist explains them and checks what can be
+# checked, and never signs in, invites, or changes a tailnet or a setting.
 # Steps 1 to 5 belong to the setup command and the two sign-ins, in a plain
 # terminal; steps 6 to 12 to the first conversation (the first-voyage skill).
 # It reads only; it installs, signs in and writes nothing.
@@ -38,6 +55,9 @@
 # Environment: FM_HOME selects the home (default: this code root).
 #   FM_FIRST_HOUR_BOOTSTRAP names the tool check to run instead of
 #   bin/fm-bootstrap.sh (a test seam).
+#   FM_FIRST_HOUR_TAILSCALE names the Tailscale command (default: tailscale on
+#   PATH, else the Mac app's own command line).
+#   FM_FIRST_HOUR_SSH_PORT names the port Remote Login answers on (default 22).
 # Exit: 0 when every step is done; 1 while any step is open; 2 on a usage error.
 set -u
 
@@ -45,6 +65,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FM_HOME="${FM_HOME:-$ROOT}"
 BOOTSTRAP="${FM_FIRST_HOUR_BOOTSTRAP:-$SCRIPT_DIR/fm-bootstrap.sh}"
+SSH_PORT="${FM_FIRST_HOUR_SSH_PORT:-22}"
+if [ -n "${FM_FIRST_HOUR_TAILSCALE+x}" ]; then
+  TAILSCALE=$FM_FIRST_HOUR_TAILSCALE
+else
+  TAILSCALE=$(command -v tailscale 2>/dev/null) || TAILSCALE=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+fi
 # shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
@@ -115,6 +141,72 @@ step_report() {
   return 1
 }
 
+# --- optional steps: each sets HINT, and succeeds when the step is done ------
+
+extra_tailscale() {
+  local json state tailnet
+  if [ ! -x "$TAILSCALE" ]; then
+    HINT="install Tailscale from tailscale.com/download, then open the invite link the inviter sent you"
+    return 1
+  fi
+  json=$(fm_run_timed 10 "$TAILSCALE" status --json </dev/null 2>/dev/null) || json=
+  state=$(printf '%s' "$json" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("BackendState", ""))' 2>/dev/null) || state=
+  if [ "$state" != Running ]; then
+    HINT="open the inviter's invite link and sign in with a personal account, not a Google login on a company domain, which lands on that domain's own separate tailnet; join the inviter's tailnet rather than creating a new one (in the Tailscale menu, switch to it under your account, or Add account)"
+    return 1
+  fi
+  # This machine's tailnet address ends in the tailnet's own DNS name, the
+  # same ending every address on the inviter's Machines page carries.
+  tailnet=$(printf '%s' "$json" | python3 -c 'import json, sys; print((json.load(sys.stdin).get("Self") or {}).get("DNSName", "").rstrip(".").partition(".")[2])' 2>/dev/null) || tailnet=
+  HINT="connected${tailnet:+, on the tailnet $tailnet}: check its addresses end the same way as those on the inviter's Machines page, not on a new tailnet of your own, and ask the inviter to check this Mac shows there"
+}
+
+extra_remote_login() {
+  HINT="turn on Remote Login in System Settings, General, Sharing (on Linux, start the SSH server), so the inviter's Starship can help remotely"
+  # shellcheck disable=SC2016 # $1 is expanded by the inner bash.
+  fm_run_timed 3 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$SSH_PORT" </dev/null >/dev/null 2>&1
+}
+
+extra_deepgram() {
+  local key
+  HINT="for speech-to-text and the spoken voice: make a key at console.deepgram.com, then put DEEPGRAM_API_KEY=<your key> in $FM_HOME/.env yourself; never paste it into a chat"
+  # shellcheck disable=SC2016 # $1 is expanded by the inner bash.
+  key=$(FM_HOME="$FM_HOME" bash -c '. "$1/fm-deepgram-lib.sh" && fm_deepgram_api_key' _ "$SCRIPT_DIR" 2>/dev/null) || key=
+  [ -n "$key" ]
+}
+
+extra_voice() {
+  local out
+  out=$(FM_HOME="$FM_HOME" fm_run_timed 30 "$SCRIPT_DIR/fm-speak.sh" --check </dev/null 2>&1) && return 0
+  HINT=$(printf '%s\n' "$out" | awk '/^missing: / { sub(/^missing: /, ""); print; exit }')
+  [ -n "$HINT" ] || HINT=$(printf '%s\n' "$out" | awk 'NF { print; exit }')
+  HINT="${HINT:-the voice check did not answer}; see docs/fork-configuration.md, Desk voice-out"
+  return 1
+}
+
+# One group per block: a `# <heading>` line, then <check function>|<label>.
+EXTRAS="# Joining a teammate's Starship (optional, not counted above):
+extra_tailscale|Tailscale
+extra_remote_login|Remote Login (SSH)
+# Voice (optional, not counted above):
+extra_deepgram|Deepgram key
+extra_voice|Spoken voice"
+
+render_extras() {
+  local fn label mark
+  while IFS='|' read -r fn label; do
+    case "$fn" in
+      '') continue ;;
+      '# '*) printf '\n%s\n' "${fn#\# }"; continue ;;
+    esac
+    HINT=
+    if "$fn"; then mark='[x]'; else mark='[ ]'; fi
+    printf '  %s %s - %s\n' "$mark" "$label" "$HINT"
+  done <<EOF
+$EXTRAS
+EOF
+}
+
 if [ "$(uname -s)" = Darwin ]; then
   SETUP_HINT="in a plain Terminal window (not inside Herdr), run: curl -fsSL https://raw.githubusercontent.com/Amplify-Logic/starship/main/bin/fm-mac-setup.sh | bash"
 else
@@ -155,10 +247,11 @@ EOF
   printf 'Your first hour with Starship: %s of %s done\n\n%s\n' "$done_count" "$total" "$lines"
   if [ -n "$next" ]; then
     printf 'Next: %s\n' "$next"
-    return 1
+  else
+    printf 'All done: you are set up.\n'
   fi
-  printf 'All done: you are set up.\n'
-  return 0
+  render_extras
+  [ -z "$next" ]
 }
 
 WATCH=0

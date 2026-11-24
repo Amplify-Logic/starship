@@ -90,6 +90,12 @@ The first time, Herdr shows a short welcome in that window; press Enter, then Es
 
 You should see: a Terminal window with your first mate's pane, the bridge strip across its top and the Factory pane beside it, and a Starship window in your browser.
 
+**Make it yours: pick your colours.** While the installs settle, give the web page a look of your own.
+Click **Settings** in its header, then under **Colours** try the ready-made schemes, Sea, Green, Warm, Slate and Paper, each one click on its swatch, and watch the whole page change.
+Want something only you have? Choose **Custom** and drag the Accent, Background and Text pickers; the page follows as you pick and keeps every word readable, even if you go wild.
+Flip **Light or dark** to see your scheme both ways, try **Style** Lively for stronger colours, and **Back to default** is always one click away ([docs/web.md](docs/web.md#settings)).
+Each browser keeps its own choice, so your phone and your Mac can look different.
+
 Coming from [ONBOARDING-windows.md](ONBOARDING-windows.md)? Its setup script already did the first part, and its step 8 opened Herdr; start at **Start your first mate**, in Herdr's shell.
 Coming from [ONBOARDING-linux-server.md](ONBOARDING-linux-server.md)? A server runs in tmux instead; start at **Start your first mate**, inside your tmux session.
 
@@ -195,9 +201,42 @@ Check it against what you know.
 That one report proves the whole stack end to end: your access to the project, a worker starting in its own isolated copy, its Claude sign-in, and the report coming back to you.
 Your setup is finished, and every step of your first-hour checklist is ticked.
 To see this and every later job at a glance, ask your first mate to open the Factory pane (`bin/fm-factory-pane.sh install`, run inside Herdr; see [docs/factory-pane.md](docs/factory-pane.md)).
+On the web page the same view is **Factories**, on the right of Control Centre: [how Factories works](docs/web.md#how-factories-works) explains its three sentences, Needs you, each project's Now, New and Next, and a project's own page.
 
 If the session ends before the first report, just say so next time, for example "let's finish setting up", and your first mate picks up where it left off.
 If the report never comes back, ask "why can't you start a worker?" and fix what it names.
+
+---
+
+## Joining a teammate's Starship: Tailscale and Remote Login
+
+Skip this unless someone who already runs Starship, the inviter, set you up and wants their Starship to reach this Mac, for example to help you remotely.
+Your first mate never signs in, invites or changes a tailnet for you; you do these steps, and the first-hour checklist (`~/starship/bin/fm-first-hour.sh`) checks each one under **Joining a teammate's Starship**.
+
+1. **Install Tailscale** from [tailscale.com/download](https://tailscale.com/download) and open it.
+2. **Sign in with a personal account, through the inviter's invite link.**
+   Use a personal login, not a Google login on a company domain: a company-domain login lands on that domain's own separate tailnet, where the inviter's machines are not.
+   Join the inviter's tailnet rather than creating a new one of your own.
+   Already signed in to the wrong one? Open the Tailscale menu, choose your account, and switch to the inviter's tailnet, or use **Add account** if it is not listed.
+3. **Check this Mac shows on the inviter's Machines page.**
+   The checklist shows the tailnet this Mac is on by its address ending, such as `tail1234.ts.net`; it must match the ending of the addresses on the inviter's Machines page, so ask the inviter to look.
+4. **Turn on Remote Login (SSH)**: **System Settings**, then **General**, then **Sharing**, then switch on **Remote Login**.
+   That is what lets the inviter's Starship help on this Mac over the tailnet; switch it off again whenever you like.
+
+You should see: `[x] Tailscale` and `[x] Remote Login (SSH)` in the checklist, and this Mac on the inviter's Machines page.
+
+## Voice: a Deepgram key and spoken replies
+
+Both are optional; without them everything works in text.
+
+1. **A Deepgram key**, for speech-to-text (the desk floater and the call recorder) and the spoken voice.
+   Make one at [console.deepgram.com](https://console.deepgram.com), then put it in your home's private `.env` file yourself, as the line `DEEPGRAM_API_KEY=<your key>` in `~/starship/.env`; never paste it into the chat.
+   The checklist shows `[x] Deepgram key` once it is there, and never prints the key.
+2. **Spoken replies** need `enabled = true` and a `shaper` line in `config/speak`, naming the spoken-voice shaper ([desk voice-out](docs/fork-configuration.md#desk-voice-out-configspeak)).
+   When speech stays silent, `~/starship/bin/fm-speak.sh --check` says exactly which piece is missing, such as no shaper line, a shaper that is not executable, or a shaper whose dry run fails because its Python is too old, and speaks nothing while it checks.
+   The checklist's `Spoken voice` line shows the same answer.
+
+You should see: `[x] Deepgram key` and, once spoken replies are set up, `[x] Spoken voice` in the checklist.
 
 ---
 

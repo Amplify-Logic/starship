@@ -1013,6 +1013,111 @@ test_enabled_reports_the_opt_in() {
   pass "fm-speak: the starter config/speak turns spoken replies on"
 }
 
+# --check is the onboarding question "would a spoken line be heard here?".
+# Each piece that keeps speech silent must be named, the way a new Mac's
+# setup actually lost it: no shaper line, a shaper that is not executable, or
+# a shaper whose own interpreter is too old to run it. It must never speak.
+check() {  # <home> [extra env assignments...]
+  local home=$1
+  shift
+  env -u FM_SPEAK_SHAPER -u FM_STATE_OVERRIDE FM_HOME="$home" FM_SPEAK_SAY="$home/speaker" \
+    FM_SPEAK_SHAPER_TIMEOUT=15 "$@" "$SPEAK" --check 2>&1
+}
+
+test_check_names_each_missing_piece_without_speaking() {
+  local home out code
+  home=$(new_home check-off)
+  install_speaker "$home" >/dev/null
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a home that is not turned on is not ready"
+  assert_contains "$out" "missing: spoken replies are not turned on" "the off switch is named"
+  assert_contains "$out" "missing: no shaper line" "a missing shaper line is named"
+
+  home=$(new_home check-noline "enabled = true")
+  install_speaker "$home" >/dev/null
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "no shaper line is not ready"
+  assert_contains "$out" "missing: no shaper line: add 'shaper = <path>' to config/speak" \
+    "a missing shaper line says what to add"
+  assert_not_contains "$out" "not turned on" "a turned-on home is not reported as off"
+
+  home=$(new_home check-absent "enabled = true" "shaper = bin/shaper")
+  install_speaker "$home" >/dev/null
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a shaper that is not there is not ready"
+  assert_contains "$out" "missing: the shaper named in config/speak is not there: $home/bin/shaper" \
+    "a relative shaper path is resolved against the home and named"
+
+  home=$(new_home check-noexec "enabled = true" "shaper = shaper")
+  install_speaker "$home" >/dev/null
+  install_shaper "$home" >/dev/null
+  chmod -x "$home/shaper"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a shaper that is not executable is not ready"
+  assert_contains "$out" "missing: the shaper is not executable: $home/shaper" "the non-executable shaper is named"
+
+  home=$(new_home check-oldpython "enabled = true" "shaper = shaper")
+  install_speaker "$home" >/dev/null
+  printf '#!/usr/bin/env bash\necho "Traceback (most recent call last):" >&2\necho "ImportError: this shaper needs Python 3.12 or newer" >&2\nexit 1\n' \
+    > "$home/shaper"
+  chmod +x "$home/shaper"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a shaper whose dry run fails is not ready"
+  assert_contains "$out" "missing: the shaper's dry run failed (exit 1): ImportError: this shaper needs Python 3.12 or newer" \
+    "a failing dry run is named with the shaper's own last error line"
+
+  home=$(new_home check-refuse "enabled = true" "shaper = shaper")
+  install_speaker "$home" >/dev/null
+  printf '#!/usr/bin/env bash\necho "refused: no" >&2\nexit 2\n' > "$home/shaper"
+  chmod +x "$home/shaper"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a shaper that refuses a plain sentence is not ready"
+  assert_contains "$out" "missing: the shaper refused a plain check sentence (exit 2): refused: no" "a refusal is named"
+
+  home=$(new_home check-hung "enabled = true" "shaper = shaper")
+  install_speaker "$home" >/dev/null
+  install_hung_shaper "$home"
+  out=$(check "$home" FM_SPEAK_SHAPER_TIMEOUT=1) && code=0 || code=$?
+  expect_code 1 "$code" "a hung shaper is not ready"
+  assert_contains "$out" "did not answer within 1s" "a hung dry run is named with its bound"
+
+  home=$(new_home check-nospeaker "enabled = true" "shaper = shaper")
+  install_shaper "$home" >/dev/null
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "no speaker is not ready"
+  assert_contains "$out" "missing: no speaker: no say at $home/speaker and no DEEPGRAM_API_KEY" "a missing speaker is named"
+  out=$(check "$home" DEEPGRAM_API_KEY=test-key) && code=0 || code=$?
+  expect_code 0 "$code" "a Deepgram key is a speaker"
+
+  home=$(new_home check-voice "enabled = true" "shaper = shaper" "voice = Nobody")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  printf 'Samantha            en_US    # Hello\n' > "$home/voices"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a voice this machine does not have is not ready"
+  assert_contains "$out" "missing: say has no voice named 'Nobody'" "the missing voice is named"
+
+  home=$(new_home check-muted "enabled = true" "shaper = shaper")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  mkdir -p "$home/state" && : > "$home/state/speak-muted"
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 1 "$code" "a muted home is not ready: $out"
+  assert_contains "$out" "missing: voice is muted (fm-speak.sh --unmute)" "the mute is named"
+  assert_not_contains "$out" "ready:" "a muted home must not say ready"
+
+  home=$(new_home check-ready "enabled = true" "shaper = shaper")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  out=$(check "$home") && code=0 || code=$?
+  expect_code 0 "$code" "a complete setup is ready: $out"
+  assert_contains "$out" "ready: spoken replies are on and the shaper runs" "a complete setup says ready"
+  assert_not_contains "$out" "missing:" "a complete setup names nothing missing"
+  assert_stayed_silent "$home/spoken.log" "--check must never reach the speaker"
+  [ ! -e "$home/state/speak-history" ] || fail "--check must not keep a reply"
+  pass "fm-speak: --check names each missing piece of the spoken voice and never speaks"
+}
+
 # The desk floater's Mute button: voice goes quiet until unmuted, while the
 # caller still sees success because the text reply is the authoritative one,
 # and the shaped line is kept as text so the floater's caption still shows it.
@@ -1527,6 +1632,7 @@ test_a_lock_whose_pid_was_reused_is_reclaimed
 test_an_unusable_state_directory_is_refused_before_anything_is_shaped
 test_mute_silences_every_line_until_unmuted
 test_enabled_reports_the_opt_in
+test_check_names_each_missing_piece_without_speaking
 test_stop_cuts_the_current_line_and_cancels_the_queued_one
 test_repeat_speaks_the_last_spoken_line_again
 test_history_lists_the_newest_ten_replies_newest_first
