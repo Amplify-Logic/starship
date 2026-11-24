@@ -185,8 +185,10 @@ The Settings button opens one small panel:
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
 - **Show key hints**: the small key letters on the buttons and the line of keys at the bottom.
 - **Put the panels back**: returns the line between Firstmate and Factories to where it started.
+- **Voice**, shown only when the home speaks its replies: the voice volume, from 0 to 200% of the computer's own volume, with Back to 100%; Mute the voice; and the recent replies, each as the desk floater's bubble shows it, with Hear again.
+  These belong to the home rather than the browser: they are read and changed through `bin/fm-speak.sh` (`--volume`, `--mute`, `--unmute`, `--history`, `--caption`, `--replay`), so the floater's right-click menu and every browser see the same level ([desk-floater.md](desk-floater.md#controls)).
 
-Settings and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
+Every other setting and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.
 
 ### This week

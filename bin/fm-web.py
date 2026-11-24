@@ -85,7 +85,10 @@ HTML. There is no path that types into a worker.
 
 The page's settings (text size, style, light or dark, colours, reduced
 motion, key hints, panel sizes) live in the browser's own storage; SETTINGS_JS owns them
-and is served as /settings.js. VIEW_JS, served as /view.js, owns the page's
+and is served as /settings.js. The Voice part of Settings is the exception: it
+belongs to the home, not the browser, so GET /api/voice reads and POST
+/api/voice changes the spoken voice's level and mute and replays a recent reply,
+each only through bin/fm-speak.sh (voice_state, voice_change). VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
 the act of the button it stands for.
@@ -1838,6 +1841,61 @@ def desk_voice_send(home: Path, root: Path, text: str, images: List[Path]) -> Di
     return {"outcome": "failed", "detail": outcome}
 
 
+VOICE_TIMEOUT_SECONDS = 15
+
+
+def speak_call(home: Path, root: Path, args: List[str]) -> Optional[str]:
+    """One bin/fm-speak.sh control call; its output, or None when it failed."""
+    env = dict(os.environ)
+    env["FM_HOME"] = str(home)
+    try:
+        proc = subprocess.run([str(root / "bin" / "fm-speak.sh")] + args, env=env, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=VOICE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def voice_state(home: Path, root: Path) -> Dict[str, Any]:
+    """The home's spoken voice for Settings: whether it speaks, its level and
+    mute, and the recent replies with the caption each shows on the floater.
+    bin/fm-speak.sh owns every one of them; nothing here is kept in the browser."""
+    enabled = (speak_call(home, root, ["--enabled"]) or "").strip() == "enabled"
+    level = (speak_call(home, root, ["--volume"]) or "").strip()
+    replies = []
+    for line in (speak_call(home, root, ["--history"]) or "").splitlines():
+        cols = line.split("\t", 2)
+        if len(cols) != 3 or not cols[0].isdigit() or not cols[1].isdigit():
+            continue
+        caption = (speak_call(home, root, ["--caption", cols[0]]) or "").strip() or cols[2]
+        replies.append({"number": int(cols[0]), "time": int(cols[1]), "text": caption})
+    return {"enabled": enabled, "volume": int(level) if level.isdigit() else 100,
+            "muted": (speak_call(home, root, ["--muted"]) or "").strip() == "muted", "replies": replies}
+
+
+def voice_change(home: Path, root: Path, body: bytes) -> Tuple[int, Dict[str, Any]]:
+    """One change from Settings, handed to bin/fm-speak.sh: {"volume": 0-200},
+    {"mute": true|false} or {"replay": <reply number>}."""
+    try:
+        ask = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 400, {"ok": False, "said": "The request was not JSON."}
+    if not isinstance(ask, dict) or len(ask) != 1:
+        return 400, {"ok": False, "said": "Send one change at a time."}
+    key, value = next(iter(ask.items()))
+    if key == "volume" and isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 200:
+        args, said = ["--volume", str(value)], f"Voice at {value}%."
+    elif key == "mute" and isinstance(value, bool):
+        args, said = ["--mute" if value else "--unmute"], "Voice muted." if value else "Voice on."
+    elif key == "replay" and isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        args, said = ["--replay", str(value)], "Playing it again."
+    else:
+        return 400, {"ok": False, "said": "That is not a voice setting."}
+    if speak_call(home, root, args) is None:
+        return 502, {"ok": False, "said": "Not saved: the voice could not be reached."}
+    return 200, {"ok": True, "said": said, "voice": voice_state(home, root)}
+
+
 def decode_send_body(body: bytes) -> Tuple[str, List[bytes]]:
     try:
         payload = json.loads(body.decode("utf-8"))
@@ -2314,6 +2372,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(200, payload)
         elif parsed.path == "/api/worker":
             self._worker(query.get("job", [""])[0])
+        elif parsed.path == "/api/voice":
+            self._json(200, voice_state(STATE.home, STATE.root))
         else:
             self._text(404, "not found")
 
@@ -2370,13 +2430,18 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act"):
+        if path not in ("/api/send", "/api/act", "/api/voice"):
             self._text(404, "not found", close=True)
             return
         if length < 0 or length > (SEND_BODY_MAX if path == "/api/send" else ACT_BODY_MAX):
             self._text(413, "too large", close=True)
             return
         body = self.rfile.read(length)
+        if path == "/api/voice":
+            with STATE.act_lock:
+                status, answer = voice_change(STATE.home, STATE.root, body)
+            self._json(status, answer)
+            return
         if path == "/api/act":
             self._act(body)
             return
@@ -2842,6 +2907,12 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .set .now{margin-left:auto;font-weight:400;color:var(--ink-2);font-size:.8rem}
 .hint{font-size:.8rem;color:var(--ink-2);margin-top:.25rem}
 .settings>.hint{margin-top:.875rem}
+#voiceSet .switch{margin:.5rem 0 .625rem}
+.replies{list-style:none;margin:.25rem 0 0;padding:0;display:grid;gap:.375rem}
+.replies li{display:flex;gap:.5rem;align-items:flex-start;font-size:.8125rem;line-height:1.35}
+.replies li span{flex:1;min-width:0}
+.replies li time{color:var(--ink-2);font-variant-numeric:tabular-nums;flex:none}
+.replies li button{flex:none}
 .size-row{display:flex;align-items:center;gap:.625rem;margin-top:.45rem}
 .size-row .a{color:var(--ink-2);line-height:1}
 .size-row .a.s{font-size:.8rem}.size-row .a.l{font-size:1.45rem}
@@ -4311,9 +4382,29 @@ Object.keys(PICKERS).forEach(k=>{const input=$(PICKERS[k]);
   input.addEventListener('input',()=>pick(input,false));input.addEventListener('change',()=>pick(input,true));});
 $('colourReset').addEventListener('click',()=>{$('colourNote').textContent='';changeAll({colours:'default',custom:null});});
 if(dim&&dim.addEventListener)dim.addEventListener('change',()=>{settings=put(settings);drawSettings();});
+/* ---- voice: the home's, through /api/voice ---- */
+function drawVoice(v){
+  $('voiceSet').hidden=!v||!v.enabled;if(!v||!v.enabled)return;
+  $('voiceLevel').value=String(v.volume);$('voiceNow').textContent=v.volume+'%';
+  $('voiceReset').hidden=v.volume===100;$('voiceMute').checked=!!v.muted;
+  const list=$('voiceReplies');list.textContent='';
+  if(!v.replies.length)list.appendChild(el('li','',"Nothing spoken yet."));
+  v.replies.forEach(r=>{const li=el('li');const t=el('time','',new Date(r.time*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
+    const b=el('button','btn small','Hear again');b.type='button';b.disabled=!!v.muted;b.addEventListener('click',()=>voiceSend({replay:r.number}));
+    add(li,t,el('span','',r.text),b);list.appendChild(li);});}
+async function loadVoice(){try{const r=await fetch('/api/voice',{credentials:'same-origin'});if(r.ok)drawVoice(await r.json());}catch(e){}}
+async function voiceSend(change){
+  try{const r=await fetch('/api/voice',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify(change)});
+    const a=await r.json();$('voiceSaid').textContent=a.said||'';if(a.voice)drawVoice(a.voice);}
+  catch(e){$('voiceSaid').textContent='Not saved: the page could not reach this computer.';}}
+$('voiceLevel').addEventListener('input',e=>{$('voiceNow').textContent=e.target.value+'%';});
+$('voiceLevel').addEventListener('change',e=>voiceSend({volume:parseInt(e.target.value,10)}));
+$('voiceReset').addEventListener('click',()=>voiceSend({volume:100}));
+$('voiceMute').addEventListener('change',e=>voiceSend({mute:e.target.checked}));
 function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
 $('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
-  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();$('textSize').focus();}});
+  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();loadVoice();$('textSize').focus();}});
 $('settingsClose').addEventListener('click',closeSettings);
 $('textSize').addEventListener('input',e=>change('text',Number(e.target.value)));
 $('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
@@ -4509,7 +4600,18 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 <div class="set"><div class="lbl">Panels</div>
 <button class="btn small" id="resetSizes" type="button">Put the panels back</button>
 <p class="hint">Drag the line between two panels to resize them; double-click it to put it back.</p></div>
-<p class="hint">Kept in this browser only.</p>
+<div class="set" id="voiceSet" hidden><div class="lbl">Voice</div>
+<label for="voiceLevel">Volume<span class="now" id="voiceNow"></span></label>
+<div class="size-row"><span class="a s" aria-hidden="true">&#9834;</span>
+<input id="voiceLevel" type="range" min="0" max="200" step="5">
+<span class="a l" aria-hidden="true">&#9835;</span></div>
+<p class="hint">How loud Firstmate's voice is beside everything else on this computer; 100% is the system volume.</p>
+<button class="btn small" id="voiceReset" type="button">Back to 100%</button>
+<label class="switch"><input id="voiceMute" type="checkbox">Mute the voice</label>
+<div class="lbl">Recent replies</div>
+<ul class="replies" id="voiceReplies"></ul>
+<p class="hint" id="voiceSaid" role="status"></p></div>
+<p class="hint">The voice is kept for this home; everything else in this browser only.</p>
 </section>
 <section class="sheet" id="keysSheet" role="dialog" aria-modal="true" aria-label="Keyboard keys" hidden>
 <h2>Keyboard keys<button class="btn small plain" id="keysClose" type="button" aria-label="Close the keys"></button></h2>

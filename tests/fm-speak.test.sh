@@ -1185,6 +1185,67 @@ test_stop_cuts_the_current_line_and_cancels_the_queued_one() {
   pass "fm-speak: stop cuts the current line and cancels the one queued behind it"
 }
 
+# The desk floater's bubble shows words written for the eye, not the spoken
+# line with its "on screen" pointers: a caller hands the caption and the whole
+# reply with the line, they are kept with that reply only, and --caption and
+# --full read them back, falling back to the spoken text.
+test_a_reply_keeps_its_caption_and_full_text_for_the_eye() {
+  local home number out code
+  home=$(new_home captions "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_speaker "$home" >/dev/null
+  printf 'The fix landed. Shall I merge it?\n' > "$home/caption"
+  printf 'The fix landed.\n\nShall I merge it?\n' > "$home/full"
+
+  speak "$home" --caption-file "$home/caption" --full-file "$home/full" \
+    "The fix landed. There's a question for you on screen." >/dev/null 2>&1 \
+    || fail "fm-speak: a line with a caption failed"
+  number=$(speak "$home" --history | head -n 1 | cut -f 1)
+  assert_equals "The fix landed. There's a question for you on screen." \
+    "$(speak "$home" --history | head -n 1 | cut -f 3)" "--history still lists the spoken line"
+  assert_equals "The fix landed. Shall I merge it?" "$(speak "$home" --caption "$number")" \
+    "--caption prints the caption kept with the reply"
+  assert_equals "$(cat "$home/full")" "$(speak "$home" --full "$number")" \
+    "--full prints the whole reply kept with it"
+  [ "$(stat -f '%Lp' "$TMP_ROOT/captions/state/speak-history/$number/caption" 2>/dev/null \
+      || stat -c '%a' "$TMP_ROOT/captions/state/speak-history/$number/caption")" = 600 ] \
+    || fail "fm-speak: the caption must be readable only by its owner"
+
+  speak "$home" "A plain line." >/dev/null 2>&1 || fail "fm-speak: a plain line failed"
+  number=$(speak "$home" --history | head -n 1 | cut -f 1)
+  assert_equals "A plain line." "$(speak "$home" --caption "$number")" "a reply without a caption shows its text"
+  assert_equals "A plain line." "$(speak "$home" --full "$number")" "a reply without a full text shows its text"
+
+  speak "$home" --caption-file "$home/caption" "Shall I merge it?" >/dev/null 2>&1 || true
+  assert_equals "$number" "$(speak "$home" --history | head -n 1 | cut -f 1)" "a refused line keeps nothing"
+
+  out=$(speak "$home" --caption 99 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a reply that is not kept"
+  assert_contains "$out" "not kept" "the refusal says why"
+  out=$(speak "$home" --caption-file "$home/missing" "A line." 2>&1) && code=0 || code=$?
+  expect_code 1 "$code" "a caption file that cannot be read"
+  pass "fm-speak: a reply keeps its caption and full text for the eye, read back with --caption and --full"
+}
+
+# Stop shows on the floater only while there is something to stop.
+test_speaking_says_whether_a_line_is_playing_now() {
+  local home waited=0
+  home=$(new_home speaking "enabled = true")
+  install_shaper "$home" >/dev/null
+  install_marking_speaker "$home" 20
+  assert_equals quiet "$(speak "$home" --speaking)" "nothing has played yet"
+  speak "$home" "A long line plays." >/dev/null 2>&1 || fail "fm-speak: the line failed"
+  wait_for_content "$home/spoken.log" "start: A long line plays." "fm-speak: the line never started"
+  assert_equals speaking "$(speak "$home" --speaking)" "a line is playing"
+  speak "$home" --stop || fail "fm-speak: --stop failed"
+  while [ "$(speak "$home" --speaking)" != quiet ] && [ "$waited" -lt 50 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  assert_equals quiet "$(speak "$home" --speaking)" "a stopped line is no longer playing"
+  pass "fm-speak: --speaking says whether a line is playing now"
+}
+
 # The Repeat button replays the last line that was actually handed to a speaker,
 # as it was shaped: never a refused line, and never before anything was spoken.
 test_repeat_speaks_the_last_spoken_line_again() {
@@ -1634,6 +1695,8 @@ test_mute_silences_every_line_until_unmuted
 test_enabled_reports_the_opt_in
 test_check_names_each_missing_piece_without_speaking
 test_stop_cuts_the_current_line_and_cancels_the_queued_one
+test_a_reply_keeps_its_caption_and_full_text_for_the_eye
+test_speaking_says_whether_a_line_is_playing_now
 test_repeat_speaks_the_last_spoken_line_again
 test_history_lists_the_newest_ten_replies_newest_first
 test_replay_speaks_the_chosen_reply

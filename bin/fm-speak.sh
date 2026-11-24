@@ -3,11 +3,13 @@
 # own speaker, in the captain's spoken register.
 #
 # Usage:
-#   fm-speak.sh [--dry-run] <text>
+#   fm-speak.sh [--dry-run] [--caption-file <file>] [--full-file <file>] <text>
 #   fm-speak.sh --stop
+#   fm-speak.sh --speaking
 #   fm-speak.sh --repeat
 #   fm-speak.sh --history
 #   fm-speak.sh --replay <number>
+#   fm-speak.sh --caption <number> | --full <number>
 #   fm-speak.sh --mute | --unmute | --muted
 #   fm-speak.sh --enabled
 #   fm-speak.sh --check
@@ -120,6 +122,17 @@
 # leave the caller's process group, or anything that reaps that group takes the
 # audio with it. See detach_speaker for what that costs when it is missed.
 #
+# REPLY CAPTIONS: the spoken line is shaped for the ear and can carry pointers
+# such as "There's a question for you on screen." that mean nothing on the
+# screen itself, so a caller can hand a spoken line two more texts for the eye:
+# --caption-file <file>, the short caption the desk floater's bubble shows, and
+# --full-file <file>, the whole written reply its bubble opens to. Each is read
+# before the line is shaped, capped at 64 KiB, and kept in that reply's history
+# entry (`caption` and `full`, beside `text`) only when the line itself is kept,
+# so a refused or failed line keeps neither. They are never shaped, spoken or
+# listed by --history, whose three columns are unchanged; --caption and --full
+# read them back. bin/fm-claude-reply-speak.sh owns what goes into them.
+#
 # PLAYBACK CONTROLS, for the desk floater's buttons and any caller:
 #   --stop    cuts short the line playing now and cancels every line that was
 #             handed over before the stop and has not started yet, so a queued
@@ -131,6 +144,11 @@
 #             kills the player named in state/.speak-player. Either the speaker
 #             sees the new value or the stop sees the player, so no line slips
 #             between the two.
+#   --speaking
+#             prints `speaking` while a line is playing now (the player named
+#             in state/.speak-player is still that speaker's child, the test
+#             --stop uses before it kills it) and `quiet` otherwise, so the desk
+#             floater shows Stop only while there is something to stop.
 #   --repeat  speaks the newest line in the reply history again (see REPLY
 #             HISTORY below). Nothing spoken yet is exit 1.
 #   --history prints the reply history newest first, one line per reply:
@@ -143,6 +161,13 @@
 #             reply that arrives between reading the list and choosing from it
 #             never shifts the choice onto a different line. A number that is
 #             not kept (never used, or pruned) is exit 1.
+#   --caption <number>
+#             prints the reply's caption, the words written for the eye that the
+#             desk floater shows (REPLY CAPTIONS below), or its spoken text when
+#             it has none. A number that is not kept is exit 1.
+#   --full <number>
+#             prints the whole written reply kept with that reply, or its caption,
+#             or its spoken text, the first one it has. Not kept is exit 1.
 #   --mute    makes every later line, repeats included, stay silent until
 #             --unmute, and stops any line playing now. The flag is
 #             state/speak-muted and is per home. A muted line is still shaped,
@@ -259,6 +284,11 @@ KEPT_AUDIO=
 REPLAY_NUMBER=
 VOLUME_ARG=
 VOLUME_SET=false
+ENTRY_NUMBER=
+CAPTION_TEXT=
+CAPTION_SET=false
+FULL_TEXT=
+FULL_SET=false
 STOP_GEN_FILE="$STATE/speak-stop-generation"
 PLAYER_FILE="$STATE/.speak-player"
 STOP_GEN_AT_START=0
@@ -824,6 +854,8 @@ store_history() {  # <shaped text>
   entry=$HISTORY_DIR/$next
   date +%s > "$entry/time" 2>/dev/null || true
   attach_kept_audio "$entry"
+  [ "$CAPTION_SET" = false ] || [ -z "$CAPTION_TEXT" ] || printf '%s\n' "$CAPTION_TEXT" > "$entry/caption" 2>/dev/null || true
+  [ "$FULL_SET" = false ] || [ -z "$FULL_TEXT" ] || printf '%s\n' "$FULL_TEXT" > "$entry/full" 2>/dev/null || true
   if printf '%s\n' "$1" > "$entry/.text" 2>/dev/null; then
     mv -f "$entry/.text" "$entry/text" 2>/dev/null || true
   fi
@@ -841,6 +873,37 @@ list_history() {
     case "$when" in ''|*[!0-9]*) when=0 ;; esac
     printf '%s\t%s\t%s\n' "$number" "$when" "$text"
   done
+}
+
+# Read one of the eye texts a caller handed over (REPLY CAPTIONS).
+read_eye_text() {  # <file>
+  [ -f "$1" ] && [ -r "$1" ] || die "cannot read $1"
+  head -c 65536 "$1"
+}
+
+# Prints the first of <names> the entry for <number> holds (REPLY CAPTIONS).
+print_entry() {  # <number> <name>...
+  local number=$1 entry name
+  shift
+  case "$number" in ''|*[!0-9]*|0*) die "needs a reply number from --history: $number" ;; esac
+  entry=$HISTORY_DIR/$number
+  for name in "$@"; do
+    if [ -s "$entry/$name" ]; then
+      cat "$entry/$name"
+      return 0
+    fi
+  done
+  die "reply $number is not kept"
+}
+
+# True while a line is playing now: the same parent test stop_playback uses.
+is_speaking() {
+  local player holder parent
+  [ -f "$PLAYER_FILE" ] || return 1
+  read -r player holder 2>/dev/null < "$PLAYER_FILE" || return 1
+  case "$player$holder" in ''|*[!0-9]*) return 1 ;; esac
+  parent=$(ps -o ppid= -p "$player" 2>/dev/null | tr -d '[:space:]') || return 1
+  [ "$parent" = "$holder" ]
 }
 
 # Play a reply's kept audio straight away, with no synthesis. The speaker gets a
@@ -1120,9 +1183,18 @@ main() {
     case "$1" in
       --help|-h) usage; exit 0 ;;
       --dry-run) dry_run=true; shift ;;
-      --stop|--repeat|--history|--replay|--mute|--unmute|--muted|--enabled|--check|--volume)
+      --caption-file|--full-file)
+        [ "$#" -ge 2 ] || { note "$1 needs a file"; exit 1; }
+        if [ "$1" = --caption-file ]; then
+          CAPTION_TEXT=$(read_eye_text "$2") || exit 1; CAPTION_SET=true
+        else
+          FULL_TEXT=$(read_eye_text "$2") || exit 1; FULL_SET=true
+        fi
+        shift 2
+        ;;
+      --stop|--speaking|--repeat|--history|--replay|--caption|--full|--mute|--unmute|--muted|--enabled|--check|--volume)
         [ -z "$control" ] || {
-          note "only one of --stop, --repeat, --history, --replay, --mute, --unmute, --muted, --enabled, --check, --volume"
+          note "only one of --stop, --speaking, --repeat, --history, --replay, --caption, --full, --mute, --unmute, --muted, --enabled, --check, --volume"
           exit 1
         }
         control=${1#--}
@@ -1137,6 +1209,11 @@ main() {
           case "$REPLAY_NUMBER" in
             ''|*[!0-9]*|0*) note "--replay needs a reply number from --history: $REPLAY_NUMBER"; exit 1 ;;
           esac
+          shift
+        fi
+        if [ "$control" = caption ] || [ "$control" = full ]; then
+          [ "$#" -ge 2 ] || { note "--$control needs a reply number from --history"; exit 1; }
+          ENTRY_NUMBER=$2
           shift
         fi
         shift
@@ -1154,6 +1231,9 @@ main() {
       || { note "--$control takes no other text and no --dry-run"; exit 1; }
     case "$control" in
       stop) stop_playback ;;
+      speaking) if is_speaking; then printf 'speaking\n'; else printf 'quiet\n'; fi ;;
+      caption) print_entry "$ENTRY_NUMBER" caption text ;;
+      full) print_entry "$ENTRY_NUMBER" full caption text ;;
       mute) set_muted true ;;
       unmute) set_muted false ;;
       muted) if is_muted; then printf 'muted\n'; else printf 'unmuted\n'; fi ;;

@@ -38,7 +38,7 @@ Because the floater is built on your PC rather than downloaded, Windows SmartScr
 
 ## Controls
 
-The controls match the Mac floater's ([desk-floater.md](desk-floater.md#controls)).
+The Windows floater keeps the earlier layout of the Mac floater, before its quieter redesign ([desk-floater.md](desk-floater.md#controls)): every control below is on the floater itself.
 Drag the floater by its dark plate.
 
 | Control | What it does |

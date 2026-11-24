@@ -41,13 +41,21 @@ install_hook_scripts() {
 # exits 2, reports the register's reason on stderr, and is not kept; an accepted
 # line is recorded and kept as the next numbered entry in state/speak-history/.
 # Like the installed register, it refuses an approval word even inside news.
-# --dry-run prints an accepted line without recording or keeping it.
+# --dry-run prints an accepted line without recording or keeping it. The
+# --caption-file and --full-file it is handed are kept with an accepted line.
 install_speak_stub() {
   local dir=$1
   cat > "$dir/speak-stub" <<'EOF'
 #!/usr/bin/env bash
-dry_run=0
+dry_run=0 caption= full=
 [ "${1-}" != --dry-run ] || { dry_run=1; shift; }
+while :; do
+  case "${1-}" in
+    --caption-file) caption=$2; shift 2 ;;
+    --full-file) full=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
 text=$*
 case "$text" in
   *"Shall I"*|*approved*)
@@ -65,6 +73,8 @@ n=$(ls "$FM_HOME/state/speak-history" 2>/dev/null | sort -n | tail -n 1)
 n=$(( ${n:-0} + 1 ))
 mkdir -p "$FM_HOME/state/speak-history/$n"
 printf '%s\n' "$text" > "$FM_HOME/state/speak-history/$n/text"
+[ -z "$caption" ] || cp "$caption" "$FM_HOME/state/speak-history/$n/caption"
+[ -z "$full" ] || cp "$full" "$FM_HOME/state/speak-history/$n/full"
 EOF
   chmod +x "$dir/speak-stub"
 }
@@ -113,6 +123,46 @@ run_hook_without_lock() {  # <dir> <reply>
 }
 
 spoken() { cat "$1/spoken.log" 2>/dev/null || true; }
+
+newest_entry() { find "$1/state/speak-history" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort -n | tail -n 1; }
+caption_of() { cat "$1/state/speak-history/$(newest_entry "$1")/caption" 2>/dev/null || true; }
+full_of() { cat "$1/state/speak-history/$(newest_entry "$1")/full" 2>/dev/null || true; }
+
+# The bubble sits on the screen, so it shows the outcome and the actual
+# question, never the voice's "on screen" pointer, and opens to the whole reply.
+test_the_bubble_gets_the_outcome_and_the_question_written_for_the_eye() {
+  local dir reply
+  dir=$(make_primary_dir "$TMP_ROOT/eye-question")
+  reply="Captain, the export finished. The file is in your downloads folder. It took two minutes.
+
+Details:
+
+- 40 rows
+
+Do you want the chart as well?"
+  run_hook "$dir" "$reply"
+  assert_contains "$(spoken "$dir")" "There's a question for you on screen." "the voice keeps its pointer"
+  assert_equals "Captain, the export finished. The file is in your downloads folder. Do you want the chart as well?" \
+    "$(caption_of "$dir")" "the caption is the outcome, then the question itself"
+  assert_equals "$reply" "$(full_of "$dir")" "the whole reply is kept for the bubble to open"
+  pass "the bubble gets the outcome and the question written for the eye"
+}
+
+test_the_bubble_never_carries_a_screen_pointer() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/eye-pointer")
+  run_hook "$dir" "Captain, the fix is green. The details are below.
+
+- three files changed"
+  assert_equals "Captain, the fix is green." "$(caption_of "$dir")" "a sentence pointing at the screen is left out"
+  dir=$(make_primary_dir "$TMP_ROOT/eye-refused")
+  run_hook "$dir" "Captain, the PR is green and approved.
+
+Shall I merge it?"
+  assert_equals "Captain, the PR is green and approved. Shall I merge it?" "$(caption_of "$dir")" \
+    "a reply the voice could only point at still shows its question"
+  pass "the bubble never carries a screen pointer"
+}
 
 test_plain_reply_is_spoken() {
   local dir out
@@ -788,6 +838,8 @@ test_settings_register_async_primary_hook() {
 }
 
 test_plain_reply_is_spoken
+test_the_bubble_gets_the_outcome_and_the_question_written_for_the_eye
+test_the_bubble_never_carries_a_screen_pointer
 test_home_not_opted_in_runs_nothing
 test_decision_reply_falls_back_to_first_sentence
 test_decision_only_reply_speaks_notice

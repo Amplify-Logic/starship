@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen.start()
         self.screen = screen
         model.refreshMute()
+        model.refreshVolume()
         model.startCaption()
         model.recoverRecordings()
         DispatchQueue.main.async {
@@ -205,10 +206,10 @@ final class FloaterPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// Moves the floater with the pointer while its backing plate is dragged, and
-/// resizes it when the recent-replies list opens or closes. The top-right
-/// corner stays put, so the controls do not jump and the list drops down and
-/// to the left of them.
+/// Moves the floater with the pointer while its card is dragged, and resizes
+/// it when the reply bubble opens, grows or closes. The top-right corner stays
+/// put, so the buttons do not jump and the bubble drops down and to the left
+/// of them.
 final class WindowMover {
     weak var window: NSWindow?
     private var startOrigin: NSPoint?
@@ -918,74 +919,57 @@ enum VoiceVolume {
     }
 }
 
-/// What a click on the speaker button does: a plain click mutes or unmutes,
-/// while a right-click or a Control-click - the Mac's secondary click - opens
-/// the voice-volume control.
-enum SpeakerClick: Equatable {
-    case mute
-    case volume
-
-    static func route(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags) -> SpeakerClick? {
-        switch type {
-        case .rightMouseDown:
-            return .volume
-        case .leftMouseDown:
-            return modifiers.contains(.control) ? .volume : .mute
-        default:
-            return nil
-        }
-    }
+/// The voice-volume steps the floater's right-click menu offers; any other
+/// level, such as one set on the web page, is kept and shown as it is.
+extension VoiceVolume {
+    static let steps = [25, 50, 75, 100, 125, 150, 200]
 }
 
-/// Takes the speaker button's clicks in AppKit, because SwiftUI has no
-/// secondary-click gesture: every click is routed through SpeakerClick, so a
-/// Control-click opens the volume control instead of also muting.
-final class SpeakerClickView: NSView {
-    var onMute: (() -> Void)?
-    var onVolume: (() -> Void)?
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        dispatch(event)
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        dispatch(event)
-    }
-
-    private func dispatch(_ event: NSEvent) {
-        switch SpeakerClick.route(event.type, modifiers: event.modifierFlags) {
-        case .mute: onMute?()
-        case .volume: onVolume?()
-        case nil: break
-        }
-    }
-}
-
-struct SpeakerClickCatcher: NSViewRepresentable {
-    let help: String
-    let onMute: () -> Void
-    let onVolume: () -> Void
-
-    func makeNSView(context: Context) -> SpeakerClickView {
-        let view = SpeakerClickView()
-        updateNSView(view, context: context)
-        return view
-    }
-
-    func updateNSView(_ view: SpeakerClickView, context: Context) {
-        view.onMute = onMute
-        view.onVolume = onVolume
-        view.toolTip = help
-    }
-}
-
-/// One reply from the speak-out history, as `bin/fm-speak.sh --history` lists it.
-struct RecentReply: Identifiable, Equatable {
+/// One reply from the speak-out history, as `bin/fm-speak.sh --history` lists
+/// it, with the words written for the eye that `--caption` and `--full` read.
+struct Reply: Identifiable, Equatable {
     let id: Int
     let time: Date
+    /// The spoken line.
     let text: String
+    /// The bubble's caption: the outcome and the ask, never a voice pointer.
+    var eye: String
+    /// The whole written reply the bubble opens to.
+    var full: String
+
+    init(id: Int, time: Date, text: String, eye: String? = nil, full: String? = nil) {
+        self.id = id
+        self.time = time
+        self.text = text
+        self.eye = eye ?? text
+        self.full = full ?? eye ?? text
+    }
+}
+
+/// Firstmate's offer to take one easy-to-undo step on the screen, as
+/// `bin/fm-desk-offer.sh status` prints it.
+struct Offer: Equatable, Decodable {
+    enum State: String, Decodable {
+        case open, expired, accepted, working, stopping, none
+    }
+
+    let id: String
+    let text: String
+    let state: State
+
+    /// The offer still belongs on the bubble: waiting for a tap, or work the
+    /// captain set going that has not finished.
+    var isActive: Bool { [.open, .accepted, .working, .stopping].contains(state) }
+    /// Firstmate is acting on it, so Stop is shown.
+    var isActing: Bool { [.accepted, .working].contains(state) }
+
+    /// Reads `status`; nil for no offer, or for anything that is not one.
+    static func parse(_ out: String?) -> Offer? {
+        guard let data = out?.data(using: .utf8),
+              let offer = try? JSONDecoder().decode(Offer.self, from: data),
+              offer.state != .none else { return nil }
+        return offer
+    }
 }
 
 @MainActor
@@ -1011,13 +995,16 @@ final class FloaterModel: ObservableObject {
     @Published var muted = false
     /// The spoken voice's level as a percentage of the system volume.
     @Published var voiceVolume = VoiceVolume.standard
-    @Published var showingVolume = false
-    @Published var recent: [RecentReply] = []
-    @Published var showingRecent = false
     /// Firstmate's newest reply, shown as a caption beside the floater whether
     /// the voice is muted or not; nil when there is none to show.
-    @Published var caption: RecentReply?
+    @Published var caption: Reply?
     @Published var captionExpanded = false
+    /// A line is playing now, so the bubble shows Stop.
+    @Published var speaking = false
+    /// Firstmate's current offer to take a step on the screen.
+    @Published var offer: Offer?
+    /// The offer, in the state it had, that the captain closed the bubble on.
+    @Published var dismissedOffer: Offer?
     @Published var keysTrusted = false {
         didSet {
             if mode == .idle {
@@ -1069,20 +1056,33 @@ final class FloaterModel: ObservableObject {
     /// Bumped whenever the caption changes, so an older hide timer lets a
     /// newer caption be.
     private var captionTurn = 0
-    /// How long a caption stays up unless it is expanded.
-    static let captionShown: TimeInterval = 15
+    /// How long a caption stays up unless it is expanded, or held up by an
+    /// offer, work under way or a line still playing.
+    nonisolated static let captionShown: TimeInterval = 15
+
+    // The offer follows bin/fm-desk-offer.sh's record, read through `status`
+    // when it changes, after a new reply (which can expire it), and now and
+    // then for its time limit.
+    private let offerFile: String
+    private var offerStamp: Date?
+    private var offerTicks = 0
+    private var speakingTimer: Timer?
+    private var speakingAsked = false
+
+    // The Show button: held, it is talk with a picture taken as it went down.
+    private var showPressAt: Date?
+    private var showTalking = false
 
     init(repoRoot: String, fmHome: String) {
         self.repoRoot = repoRoot
         self.fmHome = fmHome
         recordingDir = (fmHome as NSString).appendingPathComponent("state/desk-voice/recording")
         historyDir = (fmHome as NSString).appendingPathComponent("state/speak-history")
+        offerFile = (fmHome as NSString).appendingPathComponent("state/desk-voice/offer.json")
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
-                if self?.showingRecent == true {
-                    self?.refreshRecent()
-                }
+                self?.refreshVolume()
             }
         }
     }
@@ -1120,6 +1120,46 @@ final class FloaterModel: ObservableObject {
             takeShot()
         } else {
             onFixScreen?()
+        }
+    }
+
+    /// Show went down: the picture of the display under the pointer is taken
+    /// now, and the microphone opens in case the captain speaks while holding.
+    func showPressBegan() {
+        guard showPressAt == nil else { return }
+        showPressAt = Date()
+        guard screenTrusted else { return }
+        takeShot()
+        if mode == .idle {
+            begin(.firstmate)
+            showTalking = true
+            pressStartedAt = Date()
+        }
+    }
+
+    /// Show came up: a tap sends the picture alone, as the stack does; a hold
+    /// sends the words spoken meanwhile with it. Without Screen Recording the
+    /// press asks macOS again instead.
+    func showPressEnded() {
+        let held = showPressAt.map { Date().timeIntervalSince($0) } ?? 0
+        showPressAt = nil
+        guard screenTrusted else {
+            onFixScreen?()
+            return
+        }
+        guard showTalking else { return }
+        showTalking = false
+        switch mode {
+        case .starting:
+            cancelCapture()
+        case .recording where purpose == .firstmate:
+            if held < tapWindow {
+                cancelCapture()
+            } else {
+                stopAndDeliver()
+            }
+        case .recording, .idle, .busy:
+            break
         }
     }
 
@@ -1345,49 +1385,26 @@ final class FloaterModel: ObservableObject {
 
     // MARK: voice-out controls
 
-    func stopTalking() {
+    /// Stop on the bubble: cuts the line playing now and, while Firstmate is
+    /// acting on an offer, asks it to stop.
+    func stopAll() {
         runSpeak(["--stop"]) { ok in ok ? "Stopped" : "Stop failed" }
+        if let offer, offer.isActing {
+            answerOffer("stop", offer)
+        }
     }
 
-    func repeatLast() {
+    /// "Hear again" under a reply: speaks that reply again.
+    func hearAgain() {
+        guard let reply = caption else { return }
         guard !muted else {
             if mode == .idle {
                 finish(status: "Voice muted")
             }
             return
         }
-        runSpeak(["--repeat"]) { ok in ok ? "Repeating" : "Nothing to repeat" }
-    }
-
-    func toggleRecent() {
-        showingRecent.toggle()
-        if showingRecent {
-            refreshRecent()
-        }
-    }
-
-    /// Speaks one reply from the recent list again; stays silent while muted,
-    /// exactly like Repeat.
-    func replay(_ reply: RecentReply) {
-        guard !muted else {
-            if mode == .idle {
-                finish(status: "Voice muted")
-            }
-            return
-        }
-        runSpeak(["--replay", String(reply.id)]) { ok in ok ? "Replaying" : "No longer kept" }
-    }
-
-    func refreshRecent() {
-        Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
-            let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--history"]) ?? ""
-            let replies = Self.parseHistory(out)
-            await MainActor.run {
-                if self.recent != replies {
-                    self.recent = replies
-                }
-            }
-        }
+        runSpeak(["--replay", String(reply.id)]) { ok in ok ? "Repeating" : "No longer kept" }
+        watchSpeaking()
     }
 
     // MARK: reply caption
@@ -1396,8 +1413,16 @@ final class FloaterModel: ObservableObject {
     func startCaption() {
         historyStamp = Self.modified(historyDir)
         readCaption(initial: true)
+        offerStamp = Self.modified(offerFile)
+        readOffer()
         captionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkHistory() }
+            MainActor.assumeIsolated {
+                self?.checkHistory()
+                self?.checkOffer()
+            }
+        }
+        speakingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkSpeaking() }
         }
     }
 
@@ -1406,6 +1431,7 @@ final class FloaterModel: ObservableObject {
         guard stamp != historyStamp else { return }
         historyStamp = stamp
         readCaption(initial: false)
+        readOffer()
         // A reply's text is written just after its folder appears.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.readCaption(initial: false)
@@ -1415,14 +1441,26 @@ final class FloaterModel: ObservableObject {
     private func readCaption(initial: Bool) {
         Task.detached(priority: .utility) { [repoRoot, fmHome] in
             let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--history"]) ?? ""
-            let newest = Self.parseHistory(out).first
+            var newest = Self.parseHistory(out).first
+            if !initial, let found = newest {
+                let number = String(found.id)
+                newest = Reply(id: found.id, time: found.time, text: found.text,
+                               eye: Self.kept(Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--caption", number])),
+                               full: Self.kept(Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--full", number])))
+            }
+            let reply = newest
             await MainActor.run {
-                self.historyRead(newest, initial: initial)
+                self.historyRead(reply, initial: initial)
             }
         }
     }
 
-    private func historyRead(_ newest: RecentReply?, initial: Bool) {
+    nonisolated private static func kept(_ out: String?) -> String? {
+        guard let text = out?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+
+    private func historyRead(_ newest: Reply?, initial: Bool) {
         if initial {
             captionSeen = max(captionSeen ?? 0, newest?.id ?? 0)
             return
@@ -1432,15 +1470,108 @@ final class FloaterModel: ObservableObject {
         caption = newest
         captionExpanded = false
         scheduleCaptionHide()
-        if showingRecent {
-            refreshRecent()
-        }
+        watchSpeaking()
     }
 
     func dismissCaption() {
         captionTurn += 1
         caption = nil
         captionExpanded = false
+        if let offer, offer.isActive {
+            dismissedOffer = offer
+        }
+    }
+
+    /// The offer the bubble shows, unless the captain closed the bubble on it
+    /// in this same state.
+    var shownOffer: Offer? {
+        guard let offer, offer.isActive, offer != dismissedOffer else { return nil }
+        return offer
+    }
+
+    var bubbleShown: Bool { caption != nil || shownOffer != nil }
+
+    /// Something on the bubble still means something, so it stays up.
+    private var holdsBubble: Bool { speaking || shownOffer != nil }
+
+    // MARK: the offer (Do it / Not now)
+
+    func doIt() {
+        guard let offer = shownOffer, offer.state == .open else { return }
+        answerOffer("do", offer)
+    }
+
+    func notNow() {
+        guard let offer = shownOffer, offer.state == .open else { return }
+        answerOffer("not-now", offer)
+    }
+
+    /// A tap travels as a line to Firstmate through bin/fm-desk-offer.sh; the
+    /// floater itself never acts.
+    private func answerOffer(_ kind: String, _ offer: Offer) {
+        Task.detached(priority: .userInitiated) { [repoRoot, fmHome] in
+            let out = Self.run(bin: (repoRoot as NSString).appendingPathComponent("bin/fm-desk-offer.sh"),
+                               args: ["answer", kind, offer.id], env: ["FM_HOME": fmHome])
+            await MainActor.run {
+                if self.mode == .idle {
+                    switch kind {
+                    case "not-now": self.flash(out == nil ? "Offer gone" : "Not now")
+                    default: self.flash(out == nil ? "Not sent" : SendOutcome.status(out) ?? "Sent")
+                    }
+                }
+                self.readOffer()
+            }
+        }
+    }
+
+    private func checkOffer() {
+        offerTicks += 1
+        let stamp = Self.modified(offerFile)
+        guard stamp != offerStamp || offerTicks % 20 == 0 else { return }
+        offerStamp = stamp
+        readOffer()
+    }
+
+    func readOffer() {
+        Task.detached(priority: .utility) { [repoRoot, fmHome] in
+            let out = Self.run(bin: (repoRoot as NSString).appendingPathComponent("bin/fm-desk-offer.sh"),
+                               args: ["status"], env: ["FM_HOME": fmHome])
+            let offer = Offer.parse(out)
+            await MainActor.run {
+                guard self.offer != offer else { return }
+                let held = self.holdsBubble
+                self.offer = offer
+                if self.dismissedOffer != nil && self.dismissedOffer != offer {
+                    self.dismissedOffer = nil
+                }
+                if held && !self.holdsBubble && self.caption != nil {
+                    self.scheduleCaptionHide()
+                }
+                self.watchSpeaking()
+            }
+        }
+    }
+
+    // MARK: speaking (Stop shows only while a line plays)
+
+    /// Asks once now whether a line is playing, rather than waiting a tick.
+    private func watchSpeaking() {
+        checkSpeaking(force: true)
+    }
+
+    private func checkSpeaking(force: Bool = false) {
+        guard !speakingAsked, force || bubbleShown || speaking else { return }
+        speakingAsked = true
+        Task.detached(priority: .utility) { [repoRoot, fmHome] in
+            let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--speaking"])
+            let now = out?.trimmingCharacters(in: .whitespacesAndNewlines) == "speaking"
+            await MainActor.run {
+                self.speakingAsked = false
+                if self.speaking != now {
+                    self.speaking = now
+                }
+            }
+        }
     }
 
     /// An expanded caption stays until it is dismissed or collapsed again.
@@ -1452,11 +1583,15 @@ final class FloaterModel: ObservableObject {
         }
     }
 
-    private func scheduleCaptionHide() {
+    private func scheduleCaptionHide(after delay: TimeInterval = FloaterModel.captionShown) {
         captionTurn += 1
         let turn = captionTurn
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captionShown) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.captionTurn == turn, !self.captionExpanded else { return }
+            if self.holdsBubble {
+                self.scheduleCaptionHide(after: 2)
+                return
+            }
             self.caption = nil
         }
     }
@@ -1466,13 +1601,13 @@ final class FloaterModel: ObservableObject {
     }
 
     /// Reads `<number> TAB <epoch> TAB <text>` lines, newest first.
-    nonisolated private static func parseHistory(_ out: String) -> [RecentReply] {
+    nonisolated private static func parseHistory(_ out: String) -> [Reply] {
         out.split(separator: "\n").compactMap { line in
             let cols = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
             guard cols.count == 3, let id = Int(cols[0]), let epoch = TimeInterval(cols[1]) else {
                 return nil
             }
-            return RecentReply(id: id, time: Date(timeIntervalSince1970: epoch), text: String(cols[2]))
+            return Reply(id: id, time: Date(timeIntervalSince1970: epoch), text: String(cols[2]))
         }
     }
 
@@ -1481,15 +1616,6 @@ final class FloaterModel: ObservableObject {
         muted.toggle()
         runSpeak([wasMuted ? "--unmute" : "--mute"]) { ok in
             ok ? (wasMuted ? "Voice on" : "Voice muted") : "Mute failed"
-        }
-    }
-
-    /// Opens or closes the voice-volume control (right-click or Control-click
-    /// on the speaker button).
-    func toggleVolume() {
-        showingVolume.toggle()
-        if showingVolume {
-            refreshVolume()
         }
     }
 
@@ -1532,9 +1658,6 @@ final class FloaterModel: ObservableObject {
                     self.finish(status: message(ok))
                 }
                 self.refreshMute()
-                if self.showingRecent {
-                    self.refreshRecent()
-                }
             }
         }
     }
@@ -2000,26 +2123,25 @@ final class FloaterModel: ObservableObject {
     }
 }
 
+/// Option B, "Quiet": two round buttons, Talk and a smaller Show, with the
+/// status line under them on a small paper card, and the reply bubble below.
+/// The rare controls are on the bubble, only while they mean something: Stop
+/// while a line plays or Firstmate acts on an offer, the speaker mark while a
+/// line plays or the voice is muted, and Hear again under a reply. Voice volume
+/// and mute are on a right-click of the card; recent replies are on the web page.
 struct FloaterView: View {
     @ObservedObject var model: FloaterModel
     let mover: WindowMover
 
-    private let mainSize: CGFloat = 36
-    private let controlSize: CGFloat = 20
-    private let controlSpacing: CGFloat = 4
-    private let rowSpacing: CGFloat = 6
-    private let arrowWidth: CGFloat = 12
-    /// The status line is as wide as the row of controls above it, so the bubble
-    /// has no empty strip beside them.
-    private var rowWidth: CGFloat {
-        mainSize + rowSpacing + controlSize * 2 + controlSpacing + rowSpacing + arrowWidth
-    }
+    private let talkSize: CGFloat = 36
+    private let showSize: CGFloat = 27
+    private let statusWidth: CGFloat = 112
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
             cluster
-            if let reply = model.caption {
-                captionBubble(reply)
+            if model.bubbleShown {
+                bubble
             }
         }
         .fixedSize()
@@ -2030,42 +2152,62 @@ struct FloaterView: View {
         }
     }
 
+    // MARK: colours
+
+    // The calm paper card: light paper with dark ink, or the reverse in Dark
+    // Mode, so the floater reads as part of the desk rather than as a control panel.
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    private static let paper = adaptive(
+        light: NSColor(srgbRed: 1.0, green: 0.992, blue: 0.973, alpha: 1),
+        dark: NSColor(srgbRed: 0.129, green: 0.137, blue: 0.122, alpha: 1))
+    private static let ink = adaptive(
+        light: NSColor(srgbRed: 0.137, green: 0.129, blue: 0.114, alpha: 1),
+        dark: NSColor(srgbRed: 0.922, green: 0.910, blue: 0.882, alpha: 1))
+    private static let soft = adaptive(
+        light: NSColor(srgbRed: 0.420, green: 0.400, blue: 0.361, alpha: 1),
+        dark: NSColor(srgbRed: 0.635, green: 0.616, blue: 0.573, alpha: 1))
+    private static let line = adaptive(
+        light: NSColor(srgbRed: 0.890, green: 0.867, blue: 0.816, alpha: 1),
+        dark: NSColor(srgbRed: 0.200, green: 0.208, blue: 0.184, alpha: 1))
+    private static let wash = adaptive(
+        light: NSColor(srgbRed: 0.957, green: 0.941, blue: 0.914, alpha: 1),
+        dark: NSColor(srgbRed: 0.173, green: 0.184, blue: 0.165, alpha: 1))
+    private static let blue = Color(red: 0.16, green: 0.43, blue: 0.70)
+    private static let stopRed = Color(red: 0.72, green: 0.25, blue: 0.20)
+    private static let orange = Color(red: 0.90, green: 0.50, blue: 0.10)
+    private static let warnInk = adaptive(
+        light: NSColor(srgbRed: 0.70, green: 0.36, blue: 0.05, alpha: 1),
+        dark: NSColor(srgbRed: 1.0, green: 0.72, blue: 0.35, alpha: 1))
+
+    // MARK: the resting card
+
     private var cluster: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            HStack(spacing: rowSpacing) {
-                mainButton
-                VStack(spacing: controlSpacing) {
-                    HStack(spacing: controlSpacing) {
-                        control("stop.fill", help: "Stop talking", action: model.stopTalking)
-                        control("arrow.counterclockwise", help: "Repeat the last reply", action: model.repeatLast)
-                    }
-                    HStack(spacing: controlSpacing) {
-                        speakerButton
-                        shotButton
-                    }
-                }
-                recentToggle
+        VStack(spacing: 5) {
+            HStack(alignment: .center, spacing: 10) {
+                talkButton
+                showButton
             }
             Text(model.status)
                 .help(model.status)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(keysOffIdle ? Color(red: 1.0, green: 0.72, blue: 0.35) : Color.white)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(keysOffIdle ? Self.warnInk : Self.soft)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
-                .frame(width: rowWidth)
+                .frame(width: statusWidth)
                 .allowsHitTesting(false)
-            if model.showingVolume {
-                volumeControl
-            }
-            if model.showingRecent {
-                recentList
-            }
         }
-        .padding(6)
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.black.opacity(0.55))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Self.paper)
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 1)
@@ -2073,202 +2215,316 @@ struct FloaterView: View {
                         .onEnded { _ in mover.end() }
                 )
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Self.line)
+                .allowsHitTesting(false)
+        )
+        .contextMenu { voiceMenu }
     }
 
-    // The caption's calm card: light paper with dark ink, or the reverse in
-    // Dark Mode, so it reads as Firstmate's words rather than as a control.
-    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-        })
-    }
-
-    private static let captionPaper = adaptive(
-        light: NSColor(srgbRed: 1.0, green: 0.992, blue: 0.973, alpha: 1),
-        dark: NSColor(srgbRed: 0.129, green: 0.137, blue: 0.122, alpha: 1))
-    private static let captionInk = adaptive(
-        light: NSColor(srgbRed: 0.137, green: 0.129, blue: 0.114, alpha: 1),
-        dark: NSColor(srgbRed: 0.922, green: 0.910, blue: 0.882, alpha: 1))
-    private static let captionSoft = adaptive(
-        light: NSColor(srgbRed: 0.420, green: 0.400, blue: 0.361, alpha: 1),
-        dark: NSColor(srgbRed: 0.635, green: 0.616, blue: 0.573, alpha: 1))
-    private static let captionLine = adaptive(
-        light: NSColor(srgbRed: 0.890, green: 0.867, blue: 0.816, alpha: 1),
-        dark: NSColor(srgbRed: 0.200, green: 0.208, blue: 0.184, alpha: 1))
-
-    /// Firstmate's newest reply: two lines, or all of it once expanded. It
-    /// only shows words; clicking it expands or collapses it.
-    private func captionBubble(_ reply: RecentReply) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                if model.muted {
-                    Image(systemName: "speaker.slash.fill")
-                        .font(.system(size: 8))
-                        .help("Voice muted - shown as text only")
-                        .accessibilityLabel("Voice muted")
+    /// The right-click menu: the voice's level beside everything else on the
+    /// Mac (100% is the system volume) and mute. The web page's Settings set
+    /// the same level.
+    private var voiceMenu: some View {
+        Group {
+            Picker("Voice volume", selection: Binding(
+                get: { model.voiceVolume },
+                set: { model.setVoiceVolume($0) }
+            )) {
+                ForEach(volumeChoices, id: \.self) { level in
+                    Text(level == VoiceVolume.standard ? "\(level)% (system volume)" : "\(level)%").tag(level)
                 }
-                Text("Firstmate, \(Self.timeLabel(reply.time))")
-                    .font(.system(size: 10, weight: .medium))
-                Spacer(minLength: 8)
-                captionControl(model.captionExpanded ? "chevron.up" : "chevron.down",
-                               help: model.captionExpanded ? "Show less" : "Show all of it",
-                               action: model.toggleCaptionExpanded)
-                captionControl("xmark", help: "Dismiss", action: model.dismissCaption)
             }
-            .foregroundStyle(Self.captionSoft)
-            Text(reply.text)
-                .font(.system(size: 12))
-                .foregroundStyle(Self.captionInk)
-                .lineLimit(model.captionExpanded ? 14 : 2)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: model.toggleCaptionExpanded)
+            Button(model.muted ? "Unmute voice" : "Mute voice", action: model.toggleMute)
+        }
+    }
+
+    private var volumeChoices: [Int] {
+        VoiceVolume.steps.contains(model.voiceVolume)
+            ? VoiceVolume.steps
+            : (VoiceVolume.steps + [model.voiceVolume]).sorted()
+    }
+
+    private var keysOffIdle: Bool {
+        model.mode == .idle && model.status == "Keys off - click !"
+    }
+
+    private var talkColor: Color {
+        if model.purpose == .dictate && model.mode != .idle {
+            return Color(red: 0.55, green: 0.30, blue: 0.85)
+        }
+        switch model.mode {
+        case .idle: return Self.blue
+        case .starting: return Color(red: 0.85, green: 0.55, blue: 0.20)
+        case .recording: return Color(red: 0.82, green: 0.22, blue: 0.20)
+        case .busy: return Color(red: 0.45, green: 0.45, blue: 0.48)
+        }
+    }
+
+    private var talkIcon: String {
+        if model.purpose == .dictate && model.mode == .recording {
+            return "text.cursor"
+        }
+        switch model.mode {
+        case .idle: return "mic.fill"
+        case .starting: return "mic"
+        case .recording: return "waveform"
+        case .busy: return "hourglass"
+        }
+    }
+
+    private var talkButton: some View {
+        ZStack {
+            Circle().fill(talkColor)
+            Image(systemName: talkIcon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: talkSize, height: talkSize)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in model.pressBegan() }
+                .onEnded { _ in model.pressEnded() }
+        )
+        .onTapGesture(count: 2) {
+            model.toggle()
+        }
+        .help("Talk: hold to talk to Firstmate, or click to start and click again to send (or hold Right Option)")
+        .accessibilityLabel("Talk to Firstmate")
+        .overlay(alignment: .topTrailing) {
+            if !model.keysTrusted {
+                keysOffBadge.offset(x: 4, y: -4)
+            }
+        }
+    }
+
+    /// Show: hold it and speak, and the picture taken as it went down goes with
+    /// the words; tap it and the picture goes alone. Taps stack, and the count
+    /// shows on it; without Screen Recording it shows "!" and asks macOS again.
+    private var showButton: some View {
+        ZStack {
+            Circle().fill(Self.wash)
+            Circle().strokeBorder(Self.line)
+            Image(systemName: "eye")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Self.ink)
+        }
+        .frame(width: showSize, height: showSize)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in model.showPressBegan() }
+                .onEnded { _ in model.showPressEnded() }
+        )
+        .help(model.screenTrusted
+              ? "Show: tap to send Firstmate the screen under the pointer, or hold and speak to send it with your words (or tap Right Shift)"
+              : "Show is off: macOS has not allowed this build Screen Recording. Click to allow it.")
+        .accessibilityLabel("Show Firstmate the screen")
+        .overlay(alignment: .topTrailing) {
+            if !model.screenTrusted {
+                badge(Text("!"), fill: Self.orange)
+                    .offset(x: 4, y: -4)
+                    .allowsHitTesting(false)
+            } else if model.shotCount > 0 {
+                badge(Text("\(model.shotCount)"), fill: Self.blue)
+                    .offset(x: 4, y: -4)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func badge(_ label: Text, fill: Color) -> some View {
+        label
+            .font(.system(size: 8, weight: .heavy))
+            .foregroundStyle(.white)
+            .frame(minWidth: 14, minHeight: 14)
+            .background(Capsule().fill(fill))
+    }
+
+    /// Shown while macOS has not granted this build Accessibility, so the
+    /// hotkeys and dictation paste are off; clicking it asks again.
+    private var keysOffBadge: some View {
+        Button(action: model.fixKeys) {
+            Image(systemName: "exclamationmark")
+                .font(.system(size: 8, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 14, height: 14)
+                .background(Circle().fill(Self.orange))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Hotkeys are off: macOS has not allowed this build Accessibility. Click to allow it.")
+        .accessibilityLabel("Hotkeys off - allow Accessibility")
+    }
+
+    // MARK: the reply bubble
+
+    private var acting: Bool { model.offer?.isActing == true }
+
+    /// Firstmate's newest reply, written for the eye, and any offer under it.
+    /// Clicking the words opens the whole reply; the bubble never acts itself.
+    private var bubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                if model.muted || model.speaking {
+                    smallButton(model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                help: model.muted ? "Voice muted - click to unmute" : "Mute the voice",
+                                tint: model.muted ? Self.orange : Self.soft,
+                                action: model.toggleMute)
+                }
+                Text(model.caption.map { "Firstmate, \(Self.timeLabel($0.time))" } ?? "Firstmate")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Self.soft)
+                Spacer(minLength: 8)
+                if model.speaking || acting {
+                    stopButton
+                }
+                if model.caption != nil {
+                    smallButton(model.captionExpanded ? "chevron.up" : "chevron.down",
+                                help: model.captionExpanded ? "Show less" : "Show all of the reply",
+                                action: model.toggleCaptionExpanded)
+                }
+                smallButton("xmark", help: "Dismiss", action: model.dismissCaption)
+            }
+            if let reply = model.caption {
+                replyText(reply)
+                if !model.muted && !model.speaking {
+                    Button(action: model.hearAgain) {
+                        Label("Hear again", systemImage: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Self.soft)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Speak this reply again")
+                }
+            }
+            if let offer = model.shownOffer {
+                offerBox(offer)
+            }
         }
         .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .frame(width: model.captionExpanded ? 300 : 240, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Self.captionPaper)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Self.captionLine)
-        )
+        .padding(.vertical, 9)
+        .frame(width: model.captionExpanded ? 340 : 260, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.paper))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Self.line))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Firstmate's reply: \(reply.text)")
+        .accessibilityLabel("Firstmate's reply")
     }
 
-    private func captionControl(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+    private func replyText(_ reply: Reply) -> some View {
+        Group {
+            if model.captionExpanded {
+                ScrollView {
+                    Text(Self.markdown(reply.full))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Self.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 300)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(reply.eye)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Self.ink)
+                    .lineLimit(4)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: model.toggleCaptionExpanded)
+                    .help("Click to read the whole reply")
+            }
+        }
+    }
+
+    /// The whole reply with its emphasis, code and links shown, line breaks kept.
+    private static func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+    }
+
+    private func offerBox(_ offer: Offer) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(offerLabel(offer))
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(Self.soft)
+            Text(offer.text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Self.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if offer.state == .open {
+                HStack(spacing: 8) {
+                    Button(action: model.doIt) {
+                        Text("Do it")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Self.blue))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Ask Firstmate to take this step")
+                    Button(action: model.notNow) {
+                        Text("Not now")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Self.ink)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Capsule().strokeBorder(Self.line))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Leave it")
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Self.wash))
+    }
+
+    private func offerLabel(_ offer: Offer) -> String {
+        switch offer.state {
+        case .accepted: return "Asked Firstmate to do this"
+        case .working: return "Firstmate is doing this"
+        case .stopping: return "Asked Firstmate to stop"
+        default: return "Firstmate can do this for you"
+        }
+    }
+
+    private var stopButton: some View {
+        Button(action: model.stopAll) {
+            HStack(spacing: 3) {
+                Image(systemName: "stop.fill").font(.system(size: 7, weight: .bold))
+                Text("Stop").font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Self.stopRed))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(acting ? "Stop: ask Firstmate to stop, and stop the voice" : "Stop the voice")
+        .accessibilityLabel("Stop")
+    }
+
+    private func smallButton(_ symbol: String, help: String, tint: Color? = nil,
+                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 8.5, weight: .bold))
+                .foregroundStyle(tint ?? Self.soft)
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
-    }
-
-    /// Mutes on a click; a right-click or Control-click opens the voice-volume
-    /// control below the row.
-    private var speakerButton: some View {
-        let help = model.muted
-            ? "Voice muted - click to unmute; right-click for voice volume"
-            : "Mute voice; right-click or Control-click for voice volume"
-        return control(
-            model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-            help: help,
-            tint: model.muted ? Color(red: 0.85, green: 0.45, blue: 0.10) : nil,
-            action: model.toggleMute
-        )
-        .overlay {
-            SpeakerClickCatcher(help: help, onMute: model.toggleMute, onVolume: model.toggleVolume)
-        }
-        .accessibilityAction(named: "Voice volume", model.toggleVolume)
-    }
-
-    /// The voice's own level beside everything else on the Mac: 100% is the
-    /// system volume, lower is quieter than other audio, higher is louder.
-    private var volumeControl: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                Image(systemName: "speaker.wave.1.fill")
-                    .font(.system(size: 8))
-                Slider(
-                    value: Binding(
-                        get: { Double(model.voiceVolume) },
-                        set: { model.voiceVolume = VoiceVolume.clamp(Int($0.rounded())) }
-                    ),
-                    in: Double(VoiceVolume.range.lowerBound)...Double(VoiceVolume.range.upperBound),
-                    step: 5
-                ) { editing in
-                    if !editing {
-                        model.setVoiceVolume(model.voiceVolume)
-                    }
-                }
-                .controlSize(.mini)
-                .accessibilityLabel("Voice volume")
-                Text("\(model.voiceVolume)%")
-                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                    .frame(width: 32, alignment: .trailing)
-            }
-            HStack(spacing: 4) {
-                Text("Voice vs system volume")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.white.opacity(0.7))
-                Spacer(minLength: 0)
-                if model.voiceVolume != VoiceVolume.standard {
-                    Button("Reset") { model.setVoiceVolume(VoiceVolume.standard) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 8, weight: .semibold))
-                        .help("Back to the system volume (100%)")
-                }
-            }
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.12)))
-        .frame(width: 180)
-    }
-
-    /// The dropdown arrow to the right of the controls, centred beside them and
-    /// only as tall as one control: opens the recent replies.
-    private var recentToggle: some View {
-        Button(action: model.toggleRecent) {
-            Image(systemName: model.showingRecent ? "chevron.up" : "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: arrowWidth, height: controlSize + controlSpacing)
-                .background(Capsule().fill(model.showingRecent ? Color.white.opacity(0.35) : Color.white.opacity(0.22)))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help(model.showingRecent ? "Hide recent replies" : "Recent replies - click one to hear it again")
-        .accessibilityLabel(model.showingRecent ? "Hide recent replies" : "Show recent replies")
-    }
-
-    private var recentList: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if model.recent.isEmpty {
-                Text("Nothing spoken yet")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 2)
-            }
-            ForEach(model.recent) { reply in
-                Button {
-                    model.replay(reply)
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 7))
-                        Text(Self.timeLabel(reply.time))
-                            .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.75))
-                        Text(reply.text)
-                            .font(.system(size: 9))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.12)))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(reply.text)
-                .accessibilityLabel("Hear again: \(reply.text)")
-            }
-        }
-        .frame(width: 230)
     }
 
     private static let clock: DateFormatter = {
@@ -2286,127 +2542,5 @@ struct FloaterView: View {
     /// Today's replies show the time; older ones the day as well.
     private static func timeLabel(_ time: Date) -> String {
         Calendar.current.isDateInToday(time) ? clock.string(from: time) : dayClock.string(from: time)
-    }
-
-    private var keysOffIdle: Bool {
-        model.mode == .idle && model.status == "Keys off - click !"
-    }
-
-    private var badgeOrange: Color { Color(red: 0.90, green: 0.50, blue: 0.10) }
-
-    /// Takes a screenshot of the display under the pointer. While shots are
-    /// stacking it shows how many; without Screen Recording it shows "!" and
-    /// clicking asks macOS again.
-    private var shotButton: some View {
-        control(
-            "camera.fill",
-            help: model.screenTrusted
-                ? "Screenshot to Firstmate (or tap Right Shift); shots taken close together are sent as one message"
-                : "Screenshots are off: macOS has not allowed this build Screen Recording. Click to allow it.",
-            action: model.shotButton
-        )
-        .overlay(alignment: .topTrailing) {
-            if !model.screenTrusted {
-                badge(Text("!"), fill: badgeOrange)
-                    .offset(x: 4, y: -4)
-                    .allowsHitTesting(false)
-            } else if model.shotCount > 0 {
-                badge(Text("\(model.shotCount)"), fill: Color(red: 0.12, green: 0.45, blue: 0.85))
-                    .offset(x: 4, y: -4)
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private func badge(_ label: Text, fill: Color) -> some View {
-        label
-            .font(.system(size: 8, weight: .heavy))
-            .foregroundStyle(.white)
-            .frame(minWidth: 14, minHeight: 14)
-            .background(Capsule().fill(fill))
-    }
-
-    private var dictateColor: Color { Color(red: 0.55, green: 0.30, blue: 0.85) }
-
-    private var mainButton: some View {
-        ZStack {
-            Circle()
-                .fill(color)
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: mainSize, height: mainSize)
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in model.pressBegan() }
-                .onEnded { _ in model.pressEnded() }
-        )
-        .onTapGesture(count: 2) {
-            model.toggle()
-        }
-        .help("Hold to talk to Firstmate, or click to start and click again to send (or hold Right Option)")
-        .accessibilityLabel("Desk push to talk")
-        .overlay(alignment: .topTrailing) {
-            if !model.keysTrusted {
-                keysOffBadge
-                    .offset(x: 4, y: -4)
-            }
-        }
-    }
-
-    /// Shown while macOS has not granted this build Accessibility, so the
-    /// hotkeys and dictation paste are off; clicking it asks again.
-    private var keysOffBadge: some View {
-        Button(action: model.fixKeys) {
-            Image(systemName: "exclamationmark")
-                .font(.system(size: 8, weight: .heavy))
-                .foregroundStyle(.white)
-                .frame(width: 14, height: 14)
-                .background(Circle().fill(badgeOrange))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help("Hotkeys are off: macOS has not allowed this build Accessibility. Click to allow it.")
-        .accessibilityLabel("Hotkeys off - allow Accessibility")
-    }
-
-    private func control(_ symbol: String, help: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: controlSize, height: controlSize)
-                .background(Circle().fill(tint ?? Color.white.opacity(0.22)))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    private var color: Color {
-        if model.purpose == .dictate && model.mode != .idle {
-            return dictateColor
-        }
-        switch model.mode {
-        case .idle: return Color(red: 0.12, green: 0.45, blue: 0.85)
-        case .starting: return Color(red: 0.85, green: 0.55, blue: 0.20)
-        case .recording: return Color(red: 0.85, green: 0.20, blue: 0.20)
-        case .busy: return Color(red: 0.35, green: 0.35, blue: 0.40)
-        }
-    }
-
-    private var icon: String {
-        if model.purpose == .dictate && model.mode == .recording {
-            return "text.cursor"
-        }
-        switch model.mode {
-        case .idle: return "mic.fill"
-        case .starting: return "mic"
-        case .recording: return "waveform"
-        case .busy: return "hourglass"
-        }
     }
 }

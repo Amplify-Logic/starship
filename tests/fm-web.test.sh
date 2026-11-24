@@ -66,7 +66,8 @@ transcript() {  # <home> [<session>]
 # the action it was handed in act.asks and answers with the home's act.answer;
 # fm-bridge-strip.sh prints the home's strip.fields, or fails without one;
 # fm-peek.sh records what it was asked in peek.asks and prints the home's
-# peek/<job>, or fails without one.
+# peek/<job>, or fails without one; fm-speak.sh records each call in
+# speak.asks and keeps the volume and mute in the home's speak.* files.
 make_root() {  # <home> <desk-voice-output-line>
   local home=$1 root=$1/root
   mkdir -p "$root/bin"
@@ -108,7 +109,22 @@ SH
 printf '%s FM_HOME=%s\n' "$*" "$FM_HOME" >> "$FM_HOME/peek.asks"
 cat "$FM_HOME/peek/$1" 2>/dev/null
 SH
-  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh" "$root/bin/fm-peek.sh"
+  cat > "$root/bin/fm-speak.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_HOME/speak.asks"
+case "$1" in
+  --enabled) [ -e "$FM_HOME/speak.off" ] && echo disabled || echo enabled ;;
+  --volume) if [ "$#" -eq 2 ]; then printf '%s\n' "$2" > "$FM_HOME/speak.volume"; else cat "$FM_HOME/speak.volume" 2>/dev/null || echo 100; fi ;;
+  --muted) [ -e "$FM_HOME/speak.muted" ] && echo muted || echo unmuted ;;
+  --mute) : > "$FM_HOME/speak.muted" ;;
+  --unmute) rm -f "$FM_HOME/speak.muted" ;;
+  --history) printf '7\t1795500000\tThe fix landed. More on screen.\n6\t1795490000\tOlder reply.\n' ;;
+  --caption) [ "$2" = 7 ] && echo 'The fix landed. Shall I merge it?' || echo 'Older reply.' ;;
+  --replay) [ "$2" = 7 ] || exit 1 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh" "$root/bin/fm-peek.sh" "$root/bin/fm-speak.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 if [ "\$*" = suggestion ]; then
@@ -1332,6 +1348,40 @@ test_open_signs_in_once_with_a_link_that_is_not_the_token() {
 
 # The settings script is the page's own, fetched as the browser fetches it and
 # run against a stand-in for the browser's storage.
+# The voice belongs to the home, not the browser: Settings reads and changes it
+# only through bin/fm-speak.sh, behind the same POST guards as a send.
+test_the_voice_in_settings_is_the_homes_through_fm_speak() {
+  local home root port cookie csrf url out
+  home=$(make_home voice)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/voice"
+  out=$(curl -sS --cookie "$cookie" "$url")
+  assert_equals "true 100 false" "$(jq -r '"\(.enabled) \(.volume) \(.muted)"' <<<"$out")" "the voice is read from fm-speak.sh"
+  assert_equals "The fix landed. Shall I merge it?" "$(jq -r '.replies[0].text' <<<"$out")" "a recent reply shows its caption"
+  assert_equals "7 6" "$(jq -r '[.replies[].number] | join(" ")' <<<"$out")" "newest first"
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"volume":60}' "$url")" "no CSRF header"
+  assert_absent "$home/speak.volume" "a refused change reaches nothing"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"volume":60}' "$url")
+  assert_equals "60" "$(cat "$home/speak.volume")" "the level is kept by fm-speak.sh --volume"
+  assert_equals "60" "$(jq -r '.voice.volume' <<<"$out")" "the answer carries the new level"
+  curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"mute":true}' "$url" >/dev/null
+  [ -e "$home/speak.muted" ] || fail "mute did not reach fm-speak.sh --mute"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"replay":7}' "$url")
+  assert_equals "true" "$(jq -r '.ok' <<<"$out")" "a recent reply plays again"
+  assert_grep "--replay 7" "$home/speak.asks" "replay goes through fm-speak.sh --replay"
+  for bad in '{"volume":201}' '{"volume":"60"}' '{"volume":60,"mute":true}' '{"shell":"x"}' 'nope'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  assert_equals "60" "$(cat "$home/speak.volume")" "a refused change keeps the level"
+  : > "$home/speak.off"
+  assert_equals "false" "$(curl -sS --cookie "$cookie" "$url" | jq -r .enabled)" "a home that does not speak says so"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'id="voiceLevel"' "Settings carry the voice level"
+  pass "the voice in Settings is the home's, read and changed only through fm-speak.sh"
+}
+
 test_settings_are_kept_in_the_browser() {
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
   local home out
@@ -1642,6 +1692,7 @@ test_a_restart_waits_for_a_send_under_way
 test_a_failed_restart_keeps_sends_and_buttons_working
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
+test_the_voice_in_settings_is_the_homes_through_fm_speak
 test_colours_are_kept_and_kept_readable
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_the_live_line_says_what_is_happening_in_plain_words
