@@ -21,7 +21,9 @@
 #     composer must never make an idle composer read `pending`, because that
 #     verdict is what skips a steer's doorbell fleet-wide;
 #   - claude's real /model selection dialog, opened on that idle pane, reads
-#     `unknown` both ways, so no injector can type into it.
+#     `unknown` both ways, so no injector can type into it, and
+#     `fm-desk-voice.sh prompt` names it as a choice waiting on a person, and
+#     names nothing on the idle pane once it is closed.
 #
 # Run explicitly with FM_COMPOSER_MATRIX_LIVE=1. No prompt is ever submitted
 # to any harness, so no model tokens are spent. An absent harness is reported
@@ -179,7 +181,7 @@ check_harness_idle_cursorless() {  # <name> <version> <target>
 # injector type into the picker, and `pending` would let a join-the-draft
 # caller do the same, with Enter confirming the highlighted model either way.
 check_claude_selection_dialog() {  # <version> <target>
-  local version=$1 target=$2 screen='' verdict='' cursorless='' i=0 caps
+  local version=$1 target=$2 screen='' verdict='' cursorless='' i=0 caps asked closed
   caps=$(printf 'styled=1\ncursor=0\nidentity=1\nrows=0')
   tmux -L "$SOCKET" send-keys -t "$target" -l '/model' 2>/dev/null || true
   sleep 1
@@ -198,7 +200,22 @@ check_claude_selection_dialog() {  # <version> <target>
   fi
   verdict=$(fm_tmux_composer_state "$target")
   cursorless=$(fm_composer_classify_screen "$caps" "$(fm_tmux_composer_capture "$target")" '' probe-absent)
+  asked=$(printf '%s\n' "$screen" | "$ROOT/bin/fm-desk-voice.sh" prompt --stdin)
   tmux -L "$SOCKET" send-keys -t "$target" Escape 2>/dev/null || true
+  sleep 1
+  closed=$(tmux -L "$SOCKET" capture-pane -p -t "$target" 2>/dev/null | "$ROOT/bin/fm-desk-voice.sh" prompt --stdin)
+  case "$asked" in
+    choice$'\t'?*)
+      if [ -z "$closed" ]; then
+        CHECKED=$((CHECKED + 1))
+        pass "claude ($version): the real /model picker reads as a choice waiting on a person, and the idle pane as none"
+      else
+        FAILED=1
+        printf 'not ok - claude (%s): the closed /model picker still read as a prompt: %s\n' "$version" "$closed" >&2
+      fi ;;
+    *) FAILED=1
+      printf 'not ok - claude (%s): the /model picker did not read as a choice waiting on a person: %s\n' "$version" "${asked:-nothing}" >&2 ;;
+  esac
   if [ "$verdict" = unknown ] && [ "$cursorless" = unknown ]; then
     CHECKED=$((CHECKED + 1))
     pass "claude ($version): the real /model selection dialog classifies unknown, cursor and cursorless"

@@ -2174,6 +2174,59 @@ test_desk_voice_suggestion_reads_claudes_suggested_prompt() {
   pass "fm-desk-voice suggestion: reads Claude's dim suggested prompt, never a draft, a tip or another harness's box"
 }
 
+desk_prompt() {  # <home> -> stdout of fm-desk-voice.sh prompt
+  local home=$1 dir="$1/fixture"
+  (
+    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
+      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" "$DESK" prompt
+  )
+}
+
+# The web page says the primary is waiting for a person, not thinking, while
+# its screen is stopped on a permission prompt, a question or a picker. The
+# screens are Claude Code's own, captured live; reading them types nothing.
+test_desk_voice_prompt_reads_the_question_the_screen_waits_on() {
+  local home out dialogs="$ROOT/tests/fixtures/composer-claude-dialogs" tab=$'\t'
+  home=$(desk_send_fixture prompt) || { desk_send_skip prompt; return 0; }
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  [ -z "$out" ] || fail "a bare chat box waits on no prompt, got '$out'"
+  cp "$dialogs/claude-2.1.283-permission-prompt.ansi" "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "yesno${tab}Do you want to proceed?${tab}Bash command" "a permission prompt asks yes or no"
+  cp "$dialogs/claude-2.1.283-ask-user-question.ansi" "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "choice${tab}Pick a colour?${tab}Colour" "a question with choices"
+  cp "$dialogs/claude-2.1.283-model-picker.ansi" "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "choice${tab}Select model${tab}" "a picker without a question names itself"
+  printf ' Do you trust the files in this folder?\n\n \342\235\257 1. Yes, proceed\n   2. No, exit\n\n Enter to confirm \302\267 Esc to exit\n' > "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "yesno${tab}Do you trust the files in this folder?${tab}" "a trust dialog asks yes or no"
+  printf ' Do you want to proceed?\n \342\235\257 1. Yes\n   2. No\n' > "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "yesno${tab}Do you want to proceed?${tab}" "a prompt without a footer still counts"
+  printf ' rm -rf build\n\n \342\235\257 1. Yes\n   2. No\n\n Esc to cancel\n' > "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "yesno${tab}${tab}" "a dialog without a question or title never borrows the row above its options"
+  { cat "$dialogs/claude-2.1.283-permission-prompt.ansi"
+    printf '\n\342\217\272 Done.\n\n\342\224\200\342\224\200\342\224\200\342\224\200\n\342\235\257\302\240\n\342\224\200\342\224\200\342\224\200\342\224\200\n  ? for shortcuts\n'
+  } > "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  [ -z "$out" ] || fail "an answered prompt above a live chat box waits on nothing, got '$out'"
+  [ -z "$(herdr_calls "$home" pane send-text)$(herdr_calls "$home" pane send-keys)" ] \
+    || fail "reading the prompt must never type into the pane"
+  out=$("$DESK" prompt --stdin < "$dialogs/claude-2.1.283-permission-prompt.ansi") || fail "prompt --stdin failed: $out"
+  assert_equals "$out" "yesno${tab}Do you want to proceed?${tab}Bash command" "a screen on standard input reads the same"
+  out=$("$DESK" prompt --stdin < "$dialogs/claude-2.1.307-external-imports.ansi") || fail "prompt --stdin failed: $out"
+  assert_equals "$out" "yesno${tab}Allow external CLAUDE.md file imports?${tab}" "a dialog with unnumbered options asks yes or no"
+  out=$("$DESK" prompt --stdin < "$dialogs/claude-2.1.283-idle-composer.ansi") || fail "prompt --stdin failed: $out"
+  [ -z "$out" ] || fail "Claude's idle chat box waits on no prompt, got '$out'"
+  desk_send_done "$home"
+  pass "fm-desk-voice prompt: names the yes or no, question or picker the primary's screen waits on, and nothing else"
+}
+
 test_desk_voice_send_goes_past_a_claude_draft() {
   local home out stash typed
   home=$(desk_send_fixture send-draft) || { desk_send_skip send-draft; return 0; }
@@ -3146,6 +3199,7 @@ test_desk_voice_send_never_doubles_an_unconfirmed_submit
 test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_ignores_a_suggested_prompt
 test_desk_voice_suggestion_reads_claudes_suggested_prompt
+test_desk_voice_prompt_reads_the_question_the_screen_waits_on
 test_desk_voice_send_goes_past_a_claude_draft
 test_desk_voice_send_reads_only_the_visible_screen
 test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane
