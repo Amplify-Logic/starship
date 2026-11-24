@@ -57,6 +57,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 ## Controls
 
 At rest the floater is a small paper card that hugs Talk and Show; the status line appears only while there is something to say, on the side toward the middle of the screen (under the buttons in the top half, above them in the bottom half), so Talk and Show never move as it comes and goes.
+Dropped across the middle while the status line shows, the card keeps the status line on its old side until it next goes, so the buttons stay still under the pointer.
 Drag it by the card.
 It stays wherever you put it, even pushed almost wholly off the screen into a corner with only an edge left to grab: neither a reply nor the status line moves it.
 
