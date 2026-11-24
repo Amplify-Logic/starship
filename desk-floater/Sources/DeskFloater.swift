@@ -1113,6 +1113,64 @@ struct Offer: Equatable, Decodable {
     }
 }
 
+/// The reply bubble's switch, and when the bubble stays quiet.
+///
+/// The switch is kept per home in state/desk-voice/bubble-off: present means
+/// off, so a home that never touched it shows the bubble. Off means no bubble
+/// anywhere; the voice is unchanged either way.
+///
+/// The bubble also stays quiet while the captain is already looking at
+/// Starship, where it would only repeat what is on screen: a Starship web
+/// page in front, or Terminal's front tab showing the primary Firstmate's own
+/// chat (FloaterModel.lookingAtStarship).
+enum Bubble {
+    static func switchPath(home: String) -> String {
+        (home as NSString).appendingPathComponent("state/desk-voice/bubble-off")
+    }
+
+    static func isOn(home: String) -> Bool {
+        !FileManager.default.fileExists(atPath: switchPath(home: home))
+    }
+
+    /// Keeps the switch; false when it could not be kept.
+    @discardableResult
+    static func set(_ on: Bool, home: String) -> Bool {
+        let file = switchPath(home: home)
+        let manager = FileManager.default
+        if on {
+            guard manager.fileExists(atPath: file) else { return true }
+            return (try? manager.removeItem(atPath: file)) != nil
+        }
+        let dir = (file as NSString).deletingLastPathComponent
+        guard (try? manager.createDirectory(atPath: dir, withIntermediateDirectories: true)) != nil else {
+            return false
+        }
+        return manager.createFile(atPath: file, contents: Data())
+    }
+
+    /// bin/fm-web.py keeps state/desk-voice/web-front while one of its pages
+    /// is in front, touching it every few seconds; one older than this is
+    /// left over from a browser that went away while focused.
+    static let webFrontFresh: TimeInterval = 15
+
+    static func webFrontPath(home: String) -> String {
+        (home as NSString).appendingPathComponent("state/desk-voice/web-front")
+    }
+
+    /// The marker last touched at <modified> still says a page is in front.
+    static func webInFront(modified: Date?, now: Date) -> Bool {
+        guard let modified else { return false }
+        let age = now.timeIntervalSince(modified)
+        return age < webFrontFresh && age > -webFrontFresh
+    }
+
+    /// The bubble shows only while it is switched on and the captain is not
+    /// looking at Starship.
+    static func allowed(on: Bool, lookingAtStarship: Bool) -> Bool {
+        on && !lookingAtStarship
+    }
+}
+
 @MainActor
 final class FloaterModel: ObservableObject {
     enum Mode {
@@ -1146,6 +1204,12 @@ final class FloaterModel: ObservableObject {
     @Published var offer: Offer?
     /// The offer, in the state it had, that the captain closed the bubble on.
     @Published var dismissedOffer: Offer?
+    /// The reply bubble's switch (Bubble), kept per home.
+    @Published private(set) var bubbleOn: Bool
+    /// The captain is looking at Starship (lookingAtStarship), so the bubble
+    /// stays quiet: a new reply is not shown, and an offer waits until they
+    /// look away.
+    @Published private(set) var lookingAtStarship = false
     @Published var keysTrusted = false {
         didSet {
             if mode == .idle {
@@ -1209,6 +1273,8 @@ final class FloaterModel: ObservableObject {
     private var offerTicks = 0
     private var speakingTimer: Timer?
     private var speakingAsked = false
+    private var screenAsked = false
+    private var screenTicks = 0
 
     // The Show button: held, it is talk with a picture taken as it went down.
     private var showPressAt: Date?
@@ -1220,6 +1286,7 @@ final class FloaterModel: ObservableObject {
         recordingDir = (fmHome as NSString).appendingPathComponent("state/desk-voice/recording")
         historyDir = (fmHome as NSString).appendingPathComponent("state/speak-history")
         offerFile = (fmHome as NSString).appendingPathComponent("state/desk-voice/offer.json")
+        bubbleOn = Bubble.isOn(home: fmHome)
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
@@ -1570,6 +1637,7 @@ final class FloaterModel: ObservableObject {
             MainActor.assumeIsolated {
                 self?.checkHistory()
                 self?.checkOffer()
+                self?.screenTick()
             }
         }
         speakingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -1590,9 +1658,17 @@ final class FloaterModel: ObservableObject {
     }
 
     private func readCaption(initial: Bool) {
+        let front = NSWorkspace.shared.frontmostApplication
+        let seen = captionSeen ?? 0
         Task.detached(priority: .utility) { [repoRoot, fmHome] in
             let out = Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--history"]) ?? ""
             var newest = Self.parseHistory(out).first
+            // A new reply looks at the screen first, so one that arrives
+            // while the captain is on Starship never flashes up.
+            var looking: Bool?
+            if !initial, let found = newest, found.id > seen {
+                looking = Self.lookingAtStarship(repoRoot: repoRoot, fmHome: fmHome, front: front)
+            }
             if !initial, let found = newest {
                 let number = String(found.id)
                 newest = Reply(id: found.id, time: found.time, text: found.text,
@@ -1600,7 +1676,10 @@ final class FloaterModel: ObservableObject {
                                full: Self.kept(Self.speak(repoRoot: repoRoot, fmHome: fmHome, args: ["--full", number])))
             }
             let reply = newest
-            await MainActor.run {
+            await MainActor.run { [looking] in
+                if let looking {
+                    self.lookingAtStarship = looking
+                }
                 self.historyRead(reply, initial: initial)
             }
         }
@@ -1618,6 +1697,11 @@ final class FloaterModel: ObservableObject {
         }
         guard let newest, newest.id > (captionSeen ?? 0) else { return }
         captionSeen = newest.id
+        guard bubbleAllowed else {
+            // Not shown now and never later: the captain read it on Starship,
+            // or switched the bubble off.
+            return
+        }
         caption = newest
         captionExpanded = false
         scheduleCaptionHide()
@@ -1640,7 +1724,81 @@ final class FloaterModel: ObservableObject {
         return offer
     }
 
-    var bubbleShown: Bool { caption != nil || shownOffer != nil }
+    var bubbleShown: Bool { bubbleAllowed && (caption != nil || shownOffer != nil) }
+
+    private var bubbleAllowed: Bool {
+        Bubble.allowed(on: bubbleOn, lookingAtStarship: lookingAtStarship)
+    }
+
+    // MARK: the bubble's switch and the Starship screens
+
+    /// One click turns the whole bubble off or back on, kept across restarts.
+    func toggleBubble() {
+        let on = !bubbleOn
+        bubbleOn = on
+        if !on {
+            dropCaption()
+        }
+        let kept = Bubble.set(on, home: fmHome)
+        if mode == .idle {
+            flash(kept ? (on ? "Bubble on" : "Bubble off") : "Bubble switch not kept")
+        }
+        if on {
+            checkScreen()
+        }
+    }
+
+    /// While the bubble has something to show, looks every few seconds at
+    /// whether the captain is on Starship.
+    private func screenTick() {
+        screenTicks += 1
+        guard screenTicks % 2 == 0, bubbleOn, caption != nil || offer?.isActive == true else { return }
+        checkScreen()
+    }
+
+    /// Asks once now whether the captain is looking at Starship. Looking, an
+    /// unexpanded reply goes for good, while an offer and a reply the captain
+    /// opened in full wait until they look away.
+    func checkScreen() {
+        guard !screenAsked else { return }
+        screenAsked = true
+        let front = NSWorkspace.shared.frontmostApplication
+        Task.detached(priority: .utility) { [repoRoot, fmHome] in
+            let looking = Self.lookingAtStarship(repoRoot: repoRoot, fmHome: fmHome, front: front)
+            await MainActor.run {
+                self.screenAsked = false
+                if self.lookingAtStarship != looking {
+                    self.lookingAtStarship = looking
+                }
+                if looking && !self.captionExpanded {
+                    self.dropCaption()
+                }
+            }
+        }
+    }
+
+    private func dropCaption() {
+        guard caption != nil else { return }
+        captionTurn += 1
+        caption = nil
+        captionExpanded = false
+    }
+
+    /// A Starship web page in front (bin/fm-web.py's web-front marker, still
+    /// fresh), or the frontmost Terminal tab showing the primary's own chat,
+    /// checked as dictation checks it (bin/fm-desk-voice.sh front) and only
+    /// once Automation for Terminal is already allowed; it never asks.
+    nonisolated static func lookingAtStarship(repoRoot: String, fmHome: String,
+                                              front app: NSRunningApplication?) -> Bool {
+        if Bubble.webInFront(modified: modified(Bubble.webFrontPath(home: fmHome)), now: Date()) {
+            return true
+        }
+        guard let app, let tty = FrontTab.ttyIfAllowed(of: app) else { return false }
+        let out = run(bin: (repoRoot as NSString).appendingPathComponent("bin/fm-desk-voice.sh"),
+                      args: ["front", "--front-app", String(app.processIdentifier), "--front-tty", tty],
+                      env: ["FM_HOME": fmHome])
+        return out?.trimmingCharacters(in: .whitespacesAndNewlines) == "in-front"
+    }
 
     /// Something on the bubble still means something, so it stays up.
     private var holdsBubble: Bool { speaking || shownOffer != nil }
@@ -1684,11 +1842,20 @@ final class FloaterModel: ObservableObject {
     }
 
     func readOffer() {
+        let front = NSWorkspace.shared.frontmostApplication
+        let had = offer
         Task.detached(priority: .utility) { [repoRoot, fmHome] in
             let out = Self.run(bin: (repoRoot as NSString).appendingPathComponent("bin/fm-desk-offer.sh"),
                                args: ["status"], env: ["FM_HOME": fmHome])
             let offer = Offer.parse(out)
+            // A new offer looks at the screen first, so it never flashes up
+            // while the captain is on Starship.
+            let looking: Bool? = offer?.isActive == true && offer != had
+                ? Self.lookingAtStarship(repoRoot: repoRoot, fmHome: fmHome, front: front) : nil
             await MainActor.run {
+                if let looking, self.lookingAtStarship != looking {
+                    self.lookingAtStarship = looking
+                }
                 guard self.offer != offer else { return }
                 let held = self.holdsBubble
                 self.offer = offer
@@ -2420,6 +2587,7 @@ struct FloaterView: View {
                 }
             }
             Button(model.muted ? "Unmute voice" : "Mute voice", action: model.toggleMute)
+            Button(model.bubbleOn ? "Turn reply bubble off" : "Turn reply bubble on", action: model.toggleBubble)
         }
     }
 
@@ -2481,6 +2649,30 @@ struct FloaterView: View {
                 keysOffBadge.offset(x: 4, y: -4)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if !model.bubbleOn {
+                bubbleOffBadge.offset(x: -4, y: 4)
+            }
+        }
+    }
+
+    /// Shown while the reply bubble is switched off, blue while an offer
+    /// waits behind it; clicking it turns the bubble back on.
+    private var bubbleOffBadge: some View {
+        let waiting = model.offer?.isActive == true
+        return Button(action: model.toggleBubble) {
+            Image(systemName: "bell.slash")
+                .font(.system(size: 7.5, weight: .bold))
+                .foregroundStyle(waiting ? .white : Self.ink)
+                .frame(width: 15, height: 15)
+                .background(Circle().fill(waiting ? Self.blue : Self.paper))
+                .overlay(Circle().strokeBorder(waiting ? Self.blue : Self.soft, lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(waiting ? "Reply bubble off, and an offer is waiting - click to turn the bubble on"
+                      : "Reply bubble off - click to turn it on")
+        .accessibilityLabel("Reply bubble off - turn it on")
     }
 
     /// Show: hold it and speak, and the picture taken as it went down goes with
@@ -2569,6 +2761,7 @@ struct FloaterView: View {
                                 help: model.captionExpanded ? "Show less" : "Show all of the reply",
                                 action: model.toggleCaptionExpanded)
                 }
+                smallButton("bell.slash", help: "Turn the reply bubble off", action: model.toggleBubble)
                 smallButton("xmark", help: "Dismiss", action: model.dismissCaption)
             }
             if let reply = model.caption {
