@@ -1070,14 +1070,14 @@ test_a_prompt_waiting_on_a_person_reaches_the_page() {
   pass "a prompt waiting on a person reaches the page in place of Thinking and leaves once answered"
 }
 
-# A prompt Claude Code shows at start, before it writes any of the
-# conversation (such as the folder trust question), still reaches the page
-# while the lock holder lives; once it is gone nothing is read.
-test_a_prompt_before_any_conversation_reaches_the_page() {
+# A prompt shown after Starship's startup has taken the session lock but
+# before the first entry of the conversation is written still reaches the
+# page while the lock holder lives; once it is gone nothing is read.
+test_a_prompt_after_startup_before_any_conversation_reaches_the_page() {
   local home out n=0 tab=$'\t'
   home=$(make_home prompt-start)
   rm "$(transcript "$home")"
-  printf 'yesno%sDo you trust the files in this folder?%s\n' "$tab" "$tab" > "$home/prompt"
+  printf 'yesno%sDo you want to proceed?%sBash command\n' "$tab" "$tab" > "$home/prompt"
   serve_home "$home"
   while [ "$n" -lt 30 ]; do
     out=$(conversation "$home")
@@ -1087,10 +1087,10 @@ test_a_prompt_before_any_conversation_reaches_the_page() {
   done
   assert_equals "$(jq -r '.state' <<<"$out")" "offline" "no conversation is written yet"
   assert_equals "$(jq -r '.prompt | [.kind, .question] | join("|")' <<<"$out")" \
-    "yesno|Do you trust the files in this folder?" "the start prompt reaches the page"
+    "yesno|Do you want to proceed?" "the prompt before the first conversation entry reaches the page"
   python3 -c 'import subprocess; p=subprocess.Popen(["true"]); p.wait(); print(p.pid)' > "$home/state/.lock"
   assert_equals "$(jq -r '.prompt' <<<"$(conversation "$home")")" "null" "no prompt once the lock holder is gone"
-  pass "a prompt before any conversation reaches the page while the lock holder lives"
+  pass "a prompt after startup but before any conversation reaches the page while the lock holder lives"
 }
 
 # A suggestion read that was still under way when a turn began belongs to the
@@ -1814,7 +1814,7 @@ test_the_mirror_shows_the_terminal_status_row
 test_watch_this_worker_shows_its_live_screen_read_only
 test_the_suggested_prompt_reaches_the_page_only_while_ready
 test_a_prompt_waiting_on_a_person_reaches_the_page
-test_a_prompt_before_any_conversation_reaches_the_page
+test_a_prompt_after_startup_before_any_conversation_reaches_the_page
 test_the_server_restarts_itself_when_its_code_changes
 test_a_suggestion_read_from_before_a_turn_is_dropped
 test_a_restart_waits_for_a_send_under_way
