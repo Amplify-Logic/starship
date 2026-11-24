@@ -37,6 +37,9 @@ A compaction shows as a divider whose summary you can expand.
 The header says whether the first mate is working, ready, or not running.
 While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run (counted from when the page first saw it working, when the turn began before the part of the conversation the page reads); it goes away when the turn ends.
 That line never shows a command, a path or code: a step description that holds one reads as the generic words for that kind of step instead.
+When the terminal is stopped on a prompt that needs a person, such as a permission yes or no, a trust question, or a question with choices, the header says `Waiting for you` and the live line says `Waiting for your yes or no in the terminal` (or `Waiting for your answer in the terminal`) with the prompt's own question beneath it, instead of `Thinking`.
+The page reads that prompt from the first mate's own terminal screen every second or two through `bin/fm-desk-voice.sh prompt`, which types nothing, so the line clears within a couple of seconds of the answer.
+The page only shows the prompt; answer it in the terminal.
 A message you send while the first mate works, from the page, the terminal or the desk floater, shows at once below that line as a faded bubble marked `Waiting, Firstmate will read it next`.
 When the first mate reads it in, it becomes an ordinary message in the chat, shown once.
 If it is still not read in after two minutes, or the first mate is no longer working, the mark says `Still waiting, Firstmate has not read it yet` and the bubble stays.

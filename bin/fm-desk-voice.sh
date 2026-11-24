@@ -16,6 +16,7 @@
 #   fm-desk-voice.sh pending
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh suggestion
+#   fm-desk-voice.sh prompt [--stdin]
 #   fm-desk-voice.sh --help
 #
 # WHY: the floater is mouth/ears only. Transcripts meant for Firstmate must not
@@ -232,6 +233,15 @@
 # otherwise-empty chat box, the dim text Tab fills in, as one line, and
 # nothing when there is none or the chat cannot be read safely. It reads the
 # pane send would type into, proven the same way, and types nothing. The web page shows it in its own message box.
+#
+# prompt prints the question the primary's screen is stopped on, waiting for a
+# person (a permission yes or no, a trust dialog, a question with choices, a
+# picker), as one line: <kind> TAB <question> TAB <heading>, where kind is yesno
+# or choice and heading is the dialog's title when it has one apart from the
+# question (person_prompt owns the reading). Nothing when the screen shows no such
+# prompt or cannot be read. It reads the pane send would type into, proven the
+# same way, and types nothing; --stdin reads the screen from standard input
+# instead of the pane. The web page shows it in place of Thinking.
 #
 # Drain moves files to state/desk-voice/processed/ and prints each transcript
 # (one JSON object per line with --print, plain text otherwise). The primary
@@ -963,6 +973,90 @@ suggestion() (
   fm_composer_ghost_suggestion "$caps" "$screen" || true
 )
 
+# The prompt <plain-screen> is stopped on, as <kind> TAB <question> TAB
+# <heading>, or nothing. Two signals must agree, so a dialog quoted in the
+# scrollback above a live chat box never counts: the last row that starts with
+# a pointer (❯ › >) is an option, where a visible chat box would otherwise be,
+# and a dialog footer (Esc to cancel, Enter to select or to confirm) follows
+# it. A numbered option may instead be followed by further options alone; an
+# unnumbered one needs that footer as the last row. The question is the row
+# ending in ? nearest above the options, below the dialog's top rule, and the
+# heading the first row under that rule; without a question the heading
+# stands in. It is yesno when one option starts with Yes and another with No.
+person_prompt() {  # <plain-screen>
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    function lead(s) { match(s, /^[ \t]*/); return RLENGTH }
+    function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); gsub(/\t/, " ", s); return s }
+    function label(s) { s = trim(s); sub(/^(❯|›|>|↓|↑)[ \t]*/, "", s); sub(/^[0-9]+\.[ \t]+/, "", s); return trim(s) }
+    { gsub(/\302\240/, " "); row[NR] = $0 }
+    END {
+      opt = "^[ \t]*(❯|›|>|↓|↑)?[ \t]*[0-9]+\\.[ \t]+[^ \t]"
+      ptr = "^[ \t]*(❯|›|>)"
+      last = 0
+      for (i = 1; i <= NR; i++) if (row[i] ~ ptr) last = i
+      if (!last) exit 1
+      numbered = row[last] ~ opt
+      footer = 0; other = 0; tail = ""
+      for (i = last + 1; i <= NR; i++) {
+        if (row[i] !~ /[^ \t\r]/) continue
+        tail = tolower(row[i])
+        if (tail ~ /esc to cancel|enter to select|enter to confirm/) footer = 1
+        else if (row[i] !~ opt && lead(row[i]) < 4) other = 1
+      }
+      if (numbered && !footer && other) exit 1
+      if (!numbered && tail !~ /esc to cancel|enter to select|enter to confirm/) exit 1
+      first = last; n = 0
+      if (numbered) {
+        for (i = last - 1; i >= 1; i--) {
+          if (row[i] ~ opt) { first = i; continue }
+          if (row[i] !~ /[^ \t\r]/ || lead(row[i]) >= 4) continue
+          break
+        }
+        for (i = first; i <= NR; i++) if (row[i] ~ opt) choice[++n] = label(row[i])
+      } else {
+        for (i = last - 1; i >= 1 && row[i] ~ /[^ \t\r]/ && lead(row[i]) > lead(row[last]); i--) first = i
+        for (i = first; i <= NR && row[i] ~ /[^ \t\r]/; i++) choice[++n] = label(row[i])
+      }
+      question = ""; heading = ""; top = 0
+      for (i = first - 1; i >= 1 && i >= first - 15; i--) {
+        if (row[i] ~ /^[ \t]*(─|━|-)(─|━|-)(─|━|-)/) { top = i; break }
+        t = trim(row[i])
+        if (question == "" && t ~ /\?$/ && lead(row[i]) < 4) question = t
+      }
+      if (top) for (i = top + 1; i < first; i++) {
+        t = trim(row[i]); sub(/^☐[ \t]*/, "", t)
+        if (t != "") { heading = t; break }
+      }
+      if (question == heading) heading = ""
+      if (question == "") { question = heading; heading = "" }
+      if (question == "") for (i = first - 1; i >= 1; i--) if (trim(row[i]) != "") { question = trim(row[i]); break }
+      yes = 0; no = 0
+      for (i = 1; i <= n; i++) {
+        if (choice[i] ~ /^Yes([^A-Za-z]|$)/) yes = 1
+        if (choice[i] ~ /^No([^A-Za-z]|$)/) no = 1
+      }
+      kind = (yes && no) ? "yesno" : "choice"
+      printf "%s\t%s\t%s\n", kind, substr(question, 1, 300), substr(heading, 1, 120)
+    }
+  '
+}
+
+# The prompt the primary's screen is stopped on (person_prompt), on stdout;
+# nothing when there is none or the pane is not proven. A read only: it types
+# nothing and takes no lock. --stdin reads the screen from standard input.
+prompt() (
+  local screen
+  if [ "${1-}" = --stdin ] && [ "$#" -eq 1 ]; then
+    screen=$(cat) || return 0
+    person_prompt "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" || true
+    return 0
+  fi
+  [ "$#" -eq 0 ] || refuse "prompt takes no arguments but --stdin"
+  prove_primary_pane || return 0
+  screen=$(screen_rows "$PANE_BACKEND" "$PANE_TARGET" "${FM_PROMPT_CAPTURE_LINES:-40}" 2>/dev/null) || return 0
+  person_prompt "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" || true
+)
+
 # Type <line> into the lock-holding primary's own pane and submit it. Prints
 # "<verdict><TAB><backend><TAB><target>" once the pane is proven to host the
 # primary and show its chat input. Returns 1 when the pane is not proven, or
@@ -1597,6 +1691,7 @@ main() {
     pending) shift; pending "$@" ;;
     drain) shift; drain "$@" ;;
     suggestion) shift; suggestion "$@" ;;
+    prompt) shift; prompt "$@" ;;
     *) refuse "unknown command: $1" ;;
   esac
 }

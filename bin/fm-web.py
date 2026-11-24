@@ -52,6 +52,12 @@ background by `bin/fm-desk-voice.sh suggestion` (suggestion_reader), which types
 nothing; the page shows it in its own empty message box and Tab fills it in.
 The status row under that box is `bin/fm-status-bar.sh --replay --own`.
 
+While the first mate runs, the reading also carries the prompt its screen is
+stopped on waiting for a person (a permission yes or no, a trust dialog, a
+question with choices), read in the background by `bin/fm-desk-voice.sh
+prompt` (prompt_reader), which types nothing; the page shows it in place of
+Thinking, and it clears at the first read after the prompt is answered.
+
 The server restarts itself in place when its own code on disk changes
 (watch_code), so an update reaches a running page; every conversation reading
 carries the code it runs as `build`, and the page reloads on a new one.
@@ -138,6 +144,8 @@ STATUS_ROW_TIMEOUT_SECONDS = 20
 SUGGESTION_TTL_SECONDS = 2.0
 SUGGESTION_TIMEOUT_SECONDS = 20
 SUGGESTION_MAX = 2000
+PROMPT_TTL_SECONDS = 1.5
+PROMPT_TIMEOUT_SECONDS = 20
 # The server's own code: a change on disk restarts it in place (watch_code).
 CODE_PATH = Path(__file__).resolve()
 CODE_CHECK_SECONDS = float(os.environ.get("FM_WEB_CODE_CHECK_SECONDS") or 2.0)
@@ -1608,6 +1616,58 @@ def suggestion_reader(home: Path, root: Path) -> Any:
     return get
 
 
+def read_prompt(home: Path, root: Path) -> Optional[Dict[str, str]]:
+    """The prompt the primary's screen is stopped on, waiting for a person, as
+    {kind, question, heading}, read by bin/fm-desk-voice.sh prompt; None when
+    there is none or it cannot be read."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-desk-voice.sh"), "prompt"],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=PROMPT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = proc.stdout.splitlines() if proc.returncode == 0 else []
+    fields = (lines[0].split("\t") + ["", ""])[:3] if lines else []
+    if not fields or fields[0] not in ("yesno", "choice") or not fields[1].strip():
+        return None
+    return {"kind": fields[0], "question": fields[1].strip(), "heading": fields[2].strip()}
+
+
+def prompt_reader(home: Path, root: Path) -> Any:
+    """The prompt the first mate waits on for every open page, as a function
+    of whether it runs and the conversation's version. It is read in the
+    background, at most every PROMPT_TTL_SECONDS, so a poll never waits on the
+    screen read. A new version drops what was read before it, and a read
+    started before it is discarded, so an answered prompt never lingers."""
+    lock = threading.Lock()
+    held: Dict[str, Any] = {"value": None, "at": float("-inf"), "reading": False, "turn": 0, "key": None}
+
+    def read(turn: int) -> None:
+        value = read_prompt(home, root)
+        with lock:
+            held["reading"] = False
+            if held["turn"] == turn:
+                held.update(value=value, at=time.monotonic())
+
+    def get(running: bool, key: str) -> Optional[Dict[str, str]]:
+        with lock:
+            if key != held["key"] or not running:
+                held.update(key=key, value=None, at=float("-inf"), turn=held["turn"] + 1)
+            if not running:
+                return None
+            if not held["reading"] and time.monotonic() - held["at"] >= PROMPT_TTL_SECONDS:
+                held["reading"] = True
+                threading.Thread(target=read, args=(held["turn"],), daemon=True).start()
+            return held["value"]
+
+    return get
+
+
 class FleetCache:
     """One reading of the projects for every open page, at most every
     MIRROR_TTL_SECONDS, and at once after an action."""
@@ -2185,6 +2245,7 @@ class WebState:
         self.mirror = FleetCache(home, root)
         self.workers = Peeks(home, root)
         self.suggestion = suggestion_reader(home, root)
+        self.prompt = prompt_reader(home, root)
         self.send_lock = threading.Lock()
         self.act_lock = threading.Lock()
 
@@ -2351,12 +2412,13 @@ class WebHandler(BaseHTTPRequestHandler):
             except OSError as exc:
                 payload = {"state": "offline", "items": [], "note": f"cannot read the conversation: {exc}", "version": "error"}
             payload["suggestion"] = STATE.suggestion(payload.get("state") == "idle")
+            payload["prompt"] = STATE.prompt(payload.get("state") in ("busy", "idle"), str(payload.get("version")))
             payload["build"] = BUILD
             since = query.get("since", [""])[0]
             if since and since == payload.get("version"):
                 self._json(200, {"version": since, "unchanged": True, "state": payload.get("state"),
                                  "since": payload.get("since"), "suggestion": payload["suggestion"],
-                                 "build": BUILD})
+                                 "prompt": payload["prompt"], "build": BUILD})
             else:
                 self._json(200, payload)
         elif parsed.path == "/api/mirror":
@@ -2669,6 +2731,11 @@ details.quiet.err summary{color:var(--you)}
 .msg.waiting .wait{margin-top:.25rem;font-size:.78rem;color:var(--ink-2)}
 .live .what{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .live .took{flex:none;font-variant-numeric:tabular-nums}
+.live .ask{display:none}
+.live.asks{flex-wrap:wrap;color:var(--you);font-weight:600}
+.live.asks .dots i{background:var(--you)}
+.live.asks .ask{display:block;flex-basis:100%;white-space:normal;overflow-wrap:anywhere;font-weight:400;color:var(--ink)}
+.state.asks{background:var(--you-bg);color:var(--you)}
 .live .dots{flex:none;display:inline-flex;gap:.2rem}
 .live .dots i{width:.38rem;height:.38rem;border-radius:50%;background:var(--work);opacity:.6;animation:live 1.2s infinite ease-in-out}
 .live .dots i:nth-child(2){animation-delay:.2s}
@@ -3350,6 +3417,16 @@ VIEW_JS = r"""
     return about || 'Taking a step';
   }
 
+  /* What the live line says while the screen waits on a person: plain words
+     for the kind of answer it needs, and the prompt's own question. */
+  function promptWords(prompt) {
+    if (!prompt || !prompt.question) return null;
+    var what = prompt.kind === 'yesno' ? 'Waiting for your yes or no in the terminal'
+      : 'Waiting for your answer in the terminal';
+    var ask = prompt.heading ? prompt.heading + ': ' + prompt.question : prompt.question;
+    return { what: what, ask: ask };
+  }
+
   /* How long the turn has run: 9s, 2m 05s, 1h 03m. */
   function took(ms) {
     var s = Math.max(0, Math.floor((ms || 0) / 1000));
@@ -3526,7 +3603,7 @@ VIEW_JS = r"""
     return out;
   }
 
-  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, took: took, linkLabel: linkLabel,
+  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
               keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
@@ -3549,6 +3626,8 @@ const PLACEHOLDER=input.placeholder;let suggestion='';
 let shown=[],since=null,working=false,seenAt=0;
 /* Messages typed while the first mate works, not read in yet, and its state. */
 let waiting=[],chatState='offline';
+/* The prompt the terminal waits on a person for, or null. */
+let asking=null;
 const KEY_NAMES={Enter:'↵',Escape:'esc'};
 
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;
@@ -3622,11 +3701,14 @@ function render(items){
 }
 function drawLive(){
   const live=$('live');
-  if(!working){if(!live.hidden)live.hidden=true;return;}
+  const ask=V.promptWords(asking);
+  if(!working&&!ask){if(!live.hidden)live.hidden=true;return;}
   const stick=live.hidden&&atBottom();
   const start=Date.parse(since||'');
-  live.querySelector('.what').textContent=V.nowWords(shown);
-  live.querySelector('.took').textContent=V.took(Date.now()-(isNaN(start)?seenAt:start));
+  live.classList.toggle('asks',!!ask);
+  live.querySelector('.what').textContent=ask?ask.what:V.nowWords(shown);
+  live.querySelector('.ask').textContent=ask?ask.ask:'';
+  live.querySelector('.took').textContent=working?V.took(Date.now()-(isNaN(start)?seenAt:start)):'';
   if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
 }
 /* Each waiting message as a faded bubble below the live line; the transcript
@@ -3653,6 +3735,13 @@ function setState(state,started){
   working=state==='busy';since=working?started||null:null;chatState=state;
   stateEl.className='state '+state;
   stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':'Not running';
+  drawAsking();
+}
+/* The header says the first mate waits for a person while the terminal does. */
+function drawAsking(){
+  const ask=chatState!=='offline'&&V.promptWords(asking);
+  stateEl.classList.toggle('asks',!!ask);
+  if(ask)stateEl.querySelector('.label').textContent='Waiting for you';
 }
 async function poll(){
   try{
@@ -3668,11 +3757,12 @@ async function poll(){
         $('note').textContent=data.note||'';
         $('older').hidden=!data.older;
       }
+      asking=data.prompt||null;
       setState(data.state||'offline',data.since);drawLive();drawWaiting();
       suggest(data.suggestion||'');
       if(data.build&&BUILD&&data.build!==BUILD)reloadWhenFree();
     }
-  }catch(e){setState('offline');drawLive();}
+  }catch(e){asking=null;setState('offline');drawLive();}
   setTimeout(poll,document.hidden?6000:1500);
 }
 function suggest(text){
@@ -4539,7 +4629,7 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div>
 <div id="live" class="live" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
-<span class="what" role="status"></span><span class="took" aria-hidden="true"></span></div>
+<span class="what" role="status"></span><span class="took" aria-hidden="true"></span><span class="ask"></span></div>
 <div id="waiting"></div>
 <p id="note" class="note"></p></div></div>
 <div id="compose"><div class="wrap">

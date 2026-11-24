@@ -61,7 +61,8 @@ transcript() {  # <home> [<session>]
 # A root with the real server linked in and stand-ins for what it runs:
 # fm-desk-voice.sh records its arguments, and for suggestion prints the home's
 # suggestion file (each waiting the seconds in send.delay or suggestion.delay,
-# when there is one, after reading); fm-factory.py prints the home's
+# when there is one, after reading), and for prompt the home's prompt file,
+# logging each read in prompt.reads; fm-factory.py prints the home's
 # screen.json for --screen (and fails when there is none) and, for act, records
 # the action it was handed in act.asks and answers with the home's act.answer;
 # fm-bridge-strip.sh prints the home's strip.fields, or fails without one;
@@ -133,6 +134,11 @@ if [ "\$*" = suggestion ]; then
   printf 'suggestion\n' >> "$home/suggestion.reads"
   [ -z "\$delay" ] || sleep "\$delay"
   printf '%s\n' "\$said"
+  exit 0
+fi
+if [ "\$*" = prompt ]; then
+  printf 'prompt\n' >> "$home/prompt.reads"
+  cat "$home/prompt" 2>/dev/null
   exit 0
 fi
 cat > "$home/desk-voice.stdin"
@@ -990,6 +996,61 @@ test_the_suggested_prompt_reaches_the_page_only_while_ready() {
   pass "the suggested prompt reaches the page only while firstmate is ready"
 }
 
+# The prompt the terminal waits on a person for reaches the page in place of
+# Thinking, read through bin/fm-desk-voice.sh prompt, and leaves it within a
+# read or two of being answered; reading it sends nothing.
+test_a_prompt_waiting_on_a_person_reaches_the_page() {
+  local home out n=0 tab=$'\t'
+  home=$(make_home prompt)
+  write_basic_transcript "$(transcript "$home")"
+  serve_home "$home"
+  out=$(conversation "$home")
+  assert_equals "$(jq -r '.state' <<<"$out")" "busy" "a turn is under way"
+  assert_equals "$(jq -r '.prompt' <<<"$out")" "null" "no prompt yet"
+  printf 'yesno%sDo you want to proceed?%sBash command\n' "$tab" "$tab" > "$home/prompt"
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.prompt.kind' <<<"$out")" = yesno ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.prompt | [.kind, .question, .heading] | join("|")' <<<"$out")" \
+    "yesno|Do you want to proceed?|Bash command" "the yes or no reaches the page"
+  out=$(curl -sS --cookie "$(cat "$home/web.test-cookie")" \
+    "http://127.0.0.1:$(cat "$home/web.test-port")/api/conversation?since=$(jq -r '.version' <<<"$out")")
+  assert_equals "$(jq -r '.unchanged' <<<"$out")" "true" "an unchanged reading"
+  assert_equals "$(jq -r '.prompt.question' <<<"$out")" "Do you want to proceed?" "an unchanged reading still carries the prompt"
+  rm "$home/prompt"
+  n=0
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.prompt' <<<"$out")" = null ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.prompt' <<<"$out")" "null" "an answered prompt leaves the page"
+  printf 'choice%sPick a colour?%s\n' "$tab" "$tab" > "$home/prompt"
+  n=0
+  while [ "$n" -lt 30 ]; do
+    out=$(conversation "$home")
+    [ "$(jq -r '.prompt.kind' <<<"$out")" = choice ] && break
+    sleep 0.2
+    n=$((n + 1))
+  done
+  assert_equals "$(jq -r '.prompt.question' <<<"$out")" "Pick a colour?" "a question with choices reaches the page"
+  printf '%s\n' '{"type":"user","uuid":"r9","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"read"}]}}' >> "$(transcript "$home")"
+  rm "$home/prompt"
+  assert_equals "$(jq -r '.prompt' <<<"$(conversation "$home")")" "null" "a new reading drops the prompt read before it at once"
+  printf 'nonsense%sWhat?%s\n' "$tab" "$tab" > "$home/prompt"
+  sleep 2
+  conversation "$home" >/dev/null
+  sleep 0.5
+  assert_equals "$(jq -r '.prompt' <<<"$(conversation "$home")")" "null" "only a yes or no or a choice counts"
+  [ -s "$home/prompt.reads" ] || fail "the prompt was never read"
+  [ ! -e "$home/desk-voice.args" ] || fail "reading the prompt must never send anything"
+  pass "a prompt waiting on a person reaches the page in place of Thinking and leaves once answered"
+}
+
 # A suggestion read that was still under way when a turn began belongs to the
 # turn before, so it never comes back once that new turn ends.
 test_a_suggestion_read_from_before_a_turn_is_dropped() {
@@ -1613,6 +1674,10 @@ console.log([
   V.nowWords(pending('Bash', 'word '.repeat(30), 'x')).length <= 81,
 ].join(' | '));
 console.log([0, 9400, 61000, 3599000, 3780000].map(V.took).join(' | '));
+const said = (p) => { const w = V.promptWords(p); return w ? w.what + ' / ' + w.ask : 'none'; };
+console.log([said(null), said({ kind: 'yesno', question: '' }),
+  said({ kind: 'yesno', question: 'Do you want to proceed?', heading: 'Bash command' }),
+  said({ kind: 'choice', question: 'Pick a colour?', heading: '' })].join(' | '));
 const at = Date.parse('2026-11-23T18:55:13Z'), q = { ts: '2026-11-23T18:55:13Z' };
 console.log([V.waitingWords(q, 'busy', at + 5000), V.waitingWords(q, 'busy', at + V.WAIT_LONG_MS + 1000),
   V.waitingWords(q, 'idle', at + 5000), V.waitingWords(q, 'offline', at + 5000), V.waitingWords({}, 'busy', at)].join(' | '));
@@ -1620,6 +1685,7 @@ JS
 ) || fail "the live line rules did not run: $out"
   assert_equals "$out" 'Thinking | Thinking | Thinking | Show the open pull requests | Running a command | Running a command | Running a command | Reading a file | Changing a file | Searching the files | Waiting on a helper: Look through the web code | Using a connected app | Reading its notes | true
 0s | 9s | 1m 01s | 59m 59s | 1h 03m
+none | none | Waiting for your yes or no in the terminal / Bash command: Do you want to proceed? | Waiting for your answer in the terminal / Pick a colour?
 Waiting, Firstmate will read it next | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Waiting, Firstmate will read it next' "the live line in plain words, how long the turn has run, and what a waiting message says"
   pass "the live line says what is happening in plain words and for how long"
 }
@@ -1686,6 +1752,7 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words
 test_the_mirror_shows_the_terminal_status_row
 test_watch_this_worker_shows_its_live_screen_read_only
 test_the_suggested_prompt_reaches_the_page_only_while_ready
+test_a_prompt_waiting_on_a_person_reaches_the_page
 test_the_server_restarts_itself_when_its_code_changes
 test_a_suggestion_read_from_before_a_turn_is_dropped
 test_a_restart_waits_for_a_send_under_way
