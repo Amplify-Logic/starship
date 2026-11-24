@@ -180,10 +180,13 @@ final class FloaterPanel: NSPanel {
     private let haloPanel: NSPanel
     private var motionSetting: AnyCancellable?
     private var reduceMotionWatch: NSObjectProtocol?
+    /// Places the floater's windows; a drag of the floater ends with `end()`.
+    let mover: WindowMover
 
     @MainActor
     init(model: FloaterModel) {
         let mover = WindowMover()
+        self.mover = mover
         let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
         // WindowMover sizes every window: left to itself a hosting view would
         // grow its window from the top-left corner.
@@ -3427,7 +3430,10 @@ struct FloaterView: View {
         .frame(height: mover.floaterSize.height)
     }
 
-    /// Full motion's one band of light across the paper as it opens.
+    /// Full motion's one band of light across the paper as it opens. It is
+    /// drawn plainly: a .plusLighter blend sent the card's window into an
+    /// update-constraints loop, which crashes the app, whenever the card
+    /// opened beside a floater parked in a corner.
     private func lightSweep(_ rect: CGRect) -> some View {
         let band = max(rect.width * 0.35, 40)
         return LinearGradient(colors: [.clear, .white.opacity(0.28), .clear],
@@ -3437,7 +3443,6 @@ struct FloaterView: View {
             .offset(x: rect.minX - band * 1.3 + (rect.width + band * 2.6) * motion.sweep,
                     y: rect.minY - rect.height * 0.3)
             .mask(alignment: .topLeading) { paperShape(rect) }
-            .blendMode(.plusLighter)
     }
 
     /// The card's shadow, and in full motion its warm glow, drawn around the

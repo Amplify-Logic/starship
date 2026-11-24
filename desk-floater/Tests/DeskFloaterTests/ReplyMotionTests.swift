@@ -326,6 +326,52 @@ final class ReplyMotionTests: XCTestCase {
         XCTAssertEqual(floater.frame, parkedFrame)
     }
 
+    /// The real panel with Full motion, parked mostly off the screen's
+    /// top-left corner as in the live run (floater at -31,877 on a visible
+    /// frame of y 81..949): a reply opens the card beside the floater, wholly
+    /// on screen, and the floater stays where it was parked.
+    @MainActor
+    func testFullMotionParkedInACornerOpensTheRealCardBeside() throws {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            throw XCTSkip("no screen to place windows on")
+        }
+        let visible = screen.visibleFrame
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("df-full-corner-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        // Full, as kept from an earlier pick, so no status line is up.
+        let setting = ReplyMotion.path(home: home)
+        try FileManager.default.createDirectory(atPath: (setting as NSString).deletingLastPathComponent,
+                                                withIntermediateDirectories: true)
+        try "motion=full\nlast=full\n".write(toFile: setting, atomically: true, encoding: .utf8)
+        let model = FloaterModel(repoRoot: "/nonexistent", fmHome: home)
+        XCTAssertEqual(model.motion.style, .full)
+        let panel = FloaterPanel(model: model)
+        defer { NSApp.windows.forEach { $0.orderOut(nil) } }
+        panel.orderFrontRegardless()
+        func turn(_ seconds: TimeInterval) {
+            let end = Date().addingTimeInterval(seconds)
+            repeat {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            } while Date() < end
+        }
+        turn(0.2)
+        let parkedOrigin = NSPoint(x: visible.minX - 31, y: visible.maxY - 72)
+        // Dragged there: the drag moves the floater and ends.
+        panel.setFrameOrigin(parkedOrigin)
+        panel.mover.end()
+        turn(0.2)
+        let parkedFrame = panel.frame
+
+        model.caption = Reply(id: 1, time: Date(), text: "x", eye: "The fix is on its way.", full: "The fix is on its way.")
+        turn(1.5)
+        let card = try XCTUnwrap(NSApp.windows.first { $0 !== panel && $0.isVisible && !$0.ignoresMouseEvents },
+                                 "the arrived card is up and takes its clicks")
+        XCTAssertEqual(panel.frame, parkedFrame, "the reply moved the floater")
+        XCTAssertTrue(visible.contains(card.frame), "\(card.frame) is not wholly on \(visible)")
+        XCTAssertFalse(card.frame.intersects(parkedFrame), "a card around it would leave the screen")
+    }
+
     // MARK: the setting
 
     func testTheSettingReadsItsLinesAndFallsBackToCalm() {
