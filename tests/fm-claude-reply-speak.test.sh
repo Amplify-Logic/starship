@@ -169,6 +169,13 @@ Shall I merge it?"
   assert_contains "$(spoken "$dir")" "on screen." "the voice keeps its pointer"
   assert_equals "Captain, here is what changed." "$(caption_of "$dir")" \
     "a lead that only introduces a list shows that lead, closed, without the voice pointer"
+  dir=$(make_primary_dir "$TMP_ROOT/eye-pointer-lead")
+  run_hook "$dir" "Captain, the details are below.
+
+- three files changed
+- the checks are green"
+  assert_equals "three files changed" "$(caption_of "$dir")" \
+    "a lead that only points at the screen gives way to the first words after it"
   pass "the bubble never carries a screen pointer"
 }
 

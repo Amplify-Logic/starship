@@ -48,7 +48,9 @@
 #     has one: its last sentence ending in "?" outside code and tables, unless
 #     the outcome already holds it. When that leaves nothing, as with a lead
 #     that is a single sentence ending in ":", the caption is the spoken lead
-#     without its pointer. It never carries a voice-only pointer;
+#     without its pointer, or, when that lead only points at the screen ("The
+#     details are below."), the first sentence of the text after it. It never
+#     carries a voice-only pointer;
 #   - the full text: the whole reply as written, after the routine no-news line
 #     is dropped, which the bubble opens to.
 # When the register refuses the line (bin/fm-speak.sh exit 2), the hook asks the
@@ -459,7 +461,30 @@ CAPTION=$(printf '%s\n' "$PARA" | awk -v question="$QUESTION" '
     print out
   }
 ')
-CAPTION=${CAPTION:-$LEAD}
+if [ -z "$CAPTION" ]; then
+  CAPTION=$LEAD
+  if printf '%s\n' "$LEAD" | grep -Eiq 'on screen|see below|(is|are) below'; then
+    AFTER_LEAD=$(printf '%s\n' "$MSG" | awk '
+      /^[[:space:]]*(```|~~~)/ { fence = !fence; if (lead) gap = 1; next }
+      fence { next }
+      /^[[:space:]]*$/ || /^[[:space:]]*[|#]/ || /^[[:space:]]*([-*_][[:space:]]*){3,}$/ { if (lead) gap = 1; next }
+      {
+        if (lead && !gap) next
+        lead = 1
+        if (!gap) next
+        line = $0
+        sub(/^[[:space:]]*>[[:space:]]*/, "", line)
+        sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
+        n = split(line, ws, " ")
+        out = ws[1]
+        for (i = 2; i <= n && ws[i - 1] !~ /[.!?]["\047)\]]*$/; i++) out = out " " ws[i]
+        print out
+        exit
+      }
+    ' | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/(\*\*|__|`)//g')
+    CAPTION=${AFTER_LEAD:-$LEAD}
+  fi
+fi
 EYE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-reply-eye.XXXXXX" 2>/dev/null) || EYE_DIR=
 EYE_ARGS=()
 if [ -n "$EYE_DIR" ]; then
