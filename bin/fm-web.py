@@ -3418,29 +3418,31 @@ VIEW_JS = r"""
   }
 
   /* What the live line says while the screen waits on a person: plain words
-     for the kind of answer it needs, and the prompt's own question and
-     heading when neither holds a path, a file name, a command or code, else
-     the generic words for what the prompt asks to do. */
+     for the kind of answer it needs, then the generic words for the
+     permission its heading names (Edit file, Bash command, Fetch), else its
+     own question and heading when neither holds a path, a file name, a
+     command or code, else plain words that it needs an answer. */
   function plainAsk(text) {
     text = String(text || '').replace(/\s+/g, ' ').trim();
     if (!text) return '';
-    if (!plainAbout(text) || /\w\.[A-Za-z][A-Za-z0-9]{0,7}\b|(^|\s)--?[A-Za-z]/.test(text)) return null;
+    if (!plainAbout(text) || /\w\.[A-Za-z][A-Za-z0-9]{0,7}\b|(^|[^\w.])\.[A-Za-z]|(^|[^\w-])--?[A-Za-z]/.test(text)) return null;
     return text;
   }
-  function askAbout(prompt) {
-    var text = (prompt.heading || '') + ' ' + (prompt.question || '');
-    if (/\b(edit|writ|creat|chang|delet)/i.test(text)) return 'Firstmate wants to change a file';
-    if (/\bread/i.test(text)) return 'Firstmate wants to read a file';
-    if (/\b(bash|command|run|execut)/i.test(text)) return 'Firstmate wants to run a command';
-    if (/\b(fetch|web|url|http)/i.test(text)) return 'Firstmate wants to use the web';
-    return 'Firstmate needs an answer';
+  function askAbout(heading) {
+    heading = String(heading || '');
+    if (/\b(edit|write|create|delete|notebook)\b/i.test(heading)) return 'Firstmate wants to change a file';
+    if (/\bread\b/i.test(heading)) return 'Firstmate wants to read a file';
+    if (/\b(bash|command|shell)\b/i.test(heading)) return 'Firstmate wants to run a command';
+    if (/\b(fetch|web)\b/i.test(heading)) return 'Firstmate wants to use the web';
+    return '';
   }
   function promptWords(prompt) {
     if (!prompt || (prompt.kind !== 'yesno' && prompt.kind !== 'choice')) return null;
     var what = prompt.kind === 'yesno' ? 'Waiting for your yes or no in the terminal'
       : 'Waiting for your answer in the terminal';
     var question = plainAsk(prompt.question), heading = plainAsk(prompt.heading);
-    var ask = !question || heading === null ? askAbout(prompt) : heading ? heading + ': ' + question : question;
+    var ask = askAbout(prompt.heading)
+      || (question && heading !== null ? (heading ? heading + ': ' + question : question) : 'Firstmate needs an answer');
     return { what: what, ask: ask };
   }
 
