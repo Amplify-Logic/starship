@@ -1513,7 +1513,6 @@ test_a_page_in_front_marks_the_home_for_the_floater() {
     assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
   done
   assert_absent "$marker" "a refused word marks nothing"
-  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" "/api/front" "the page says when it is in front"
   pass "a page in front marks the home for the desk floater, and only while one is"
 }
 

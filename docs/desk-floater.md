@@ -98,8 +98,8 @@ The bubble stays quiet while you are already looking at Starship, where it would
 - the Starship web page is in front, on any of its tabs, in any browser ([web.md](web.md)): the page tells its server while it is the focused, visible tab, and the server keeps `state/desk-voice/web-front` while one does, which the floater counts only for 15 seconds after the page last said so;
 - or Terminal is in front showing the primary Firstmate's own chat, checked exactly the way [dictation](#dictating-into-the-firstmate-chat) checks it (`bin/fm-desk-voice.sh front`), only once you have already allowed Automation for Terminal; the floater never asks for it here.
 
-A reply that arrives while you are looking at Starship is never shown, not even after you look away, and a reply already up goes when you turn to Starship, unless you opened it in full.
-An offer waiting for your tap is not lost: it waits behind the quiet bubble and shows as soon as you look away.
+A reply that arrives while you are looking at Starship is never shown, not even after you look away, and a reply already up goes when you turn to Starship.
+A reply you opened in full and an offer waiting for your tap are not lost: they wait behind the quiet bubble and show again as soon as you look away.
 The voice is unchanged either way.
 
 The bubble has a switch of its own: **Turn reply bubble off** in the right-click menu, or the bell mark on the bubble itself, turns it off in one click.
