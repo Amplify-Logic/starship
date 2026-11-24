@@ -129,6 +129,45 @@ final class ReplyMotionTests: XCTestCase {
         XCTAssertEqual(motion.phase, .shown, "the old leave does not finish after the turn")
     }
 
+    /// A reply that lands while the card folds away is what the card holds
+    /// once it turns around, so its next leave folds away that reply's words.
+    @MainActor
+    func testTheTurnedAroundCardHoldsTheNewReply() {
+        let motion = CardMotion()
+        let first = CardContent(caption: Reply(id: 1, time: Date(), text: "x", eye: "One.", full: "One."))
+        let second = CardContent(caption: Reply(id: 2, time: Date(), text: "y", eye: "Two.", full: "Two."))
+        motion.keep(first)
+        motion.show()
+        motion.placed()
+        waitFor(.shown, of: motion)
+        motion.hide()
+        motion.keep(second)
+        XCTAssertEqual(motion.held, first, "the leaving card keeps its own words")
+        motion.show()
+        waitFor(.shown, of: motion)
+        motion.hide()
+        XCTAssertEqual(motion.held, second)
+    }
+
+    /// A reply that lands while the card folds away and stays hidden is held
+    /// when the card next shows.
+    @MainActor
+    func testAReplyThatLandsMidLeaveIsHeldWhenTheCardNextShows() {
+        let motion = CardMotion()
+        let first = CardContent(caption: Reply(id: 1, time: Date(), text: "x", eye: "One.", full: "One."))
+        let second = CardContent(caption: Reply(id: 2, time: Date(), text: "y", eye: "Two.", full: "Two."))
+        motion.keep(first)
+        motion.show()
+        motion.placed()
+        waitFor(.shown, of: motion)
+        motion.hide()
+        motion.keep(second)
+        waitFor(.hidden, of: motion)
+        XCTAssertNil(motion.held)
+        motion.show()
+        XCTAssertEqual(motion.held, second)
+    }
+
     /// With the Mac's Reduce motion on, the card arrives and leaves as a
     /// plain short fade at its final size.
     @MainActor

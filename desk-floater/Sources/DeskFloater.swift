@@ -1463,6 +1463,7 @@ final class CardMotion: ObservableObject {
     @Published var settle: CGFloat = 0
     /// The last card shown, which stays on the paper while it folds away.
     @Published private(set) var held: CardContent?
+    private var latest: CardContent?
     var style: ReplyMotion.Style = .calm
     var reduceMotion = false
     /// Told when the phase changes, so the windows follow it.
@@ -1479,9 +1480,12 @@ final class CardMotion: ObservableObject {
         shown ? show() : hide()
     }
 
-    /// The card shows what it is given until it starts to leave.
+    /// The card shows what it is given until it starts to leave; what comes
+    /// while it leaves is shown once it turns around or shows again.
     func keep(_ content: CardContent) {
-        guard !content.isEmpty, phase != .leaving, content != held else { return }
+        guard !content.isEmpty else { return }
+        latest = content
+        guard phase != .leaving, content != held else { return }
         held = content
     }
 
@@ -1490,6 +1494,7 @@ final class CardMotion: ObservableObject {
         case .arriving, .shown:
             return
         case .hidden:
+            held = latest
             turn += 1
             guard moves else {
                 setAll(1)
@@ -1501,6 +1506,7 @@ final class CardMotion: ObservableObject {
             // The windows are placed for the card first; placed() starts it.
             set(.arriving)
         case .leaving:
+            held = latest
             turn += 1
             set(.arriving)
             start()
