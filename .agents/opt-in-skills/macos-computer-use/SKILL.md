@@ -2,8 +2,8 @@
 name: macos-computer-use
 description: >-
   Agent-only procedure for operating a macOS app's interface on the captain's Mac - reading a window, clicking, typing, choosing a menu item or answering a dialog - or a page in the captain's own browser.
-  Load before any such step, and before briefing a worker to take one.
-  Owns the order of means (app scripting connection first, then accessibility-first Peekaboo, screenshots last), the act-by-element and batch-then-settle loop, the focus and dialog guard, the browser recipe, the per-app recipe cards, and the Peekaboo pin and removal.
+  Load before any such step, before briefing a worker to take one, and when a `Do it:` or `Stop:` line from the desk floater's offer arrives.
+  Owns the order of means (app scripting connection first, then accessibility-first Peekaboo, screenshots last), the act-by-element and batch-then-settle loop, the focus and dialog guard, the browser recipe, the per-app recipe cards, the Peekaboo pin and removal, and how the step a desk floater Do it tap approves is taken.
 user-invocable: false
 metadata:
   internal: true
@@ -134,3 +134,10 @@ Each card gives the commands, what is the captain's to decide, and the known tra
 
 A worker in another project's worktree does not see this skill.
 When a worker's task needs the desktop, name this file and `recipes.md` beside it by absolute path in its instructions and state which dialog kinds, if any, the task allows it to answer.
+
+## 9. Offers on the desk floater
+
+A voice-reply home records a desk floater offer and answers its Do it and Stop lines under the rules in `docs/desk-voice-replies.md`; `bin/fm-desk-offer.sh`'s header owns the record, the states and the lines a tap sends.
+
+- The step a tap approves is taken under sections 1 to 6 as usual, guard included.
+- Passwords, verification codes and privacy prompts stay the captain's whatever a tap says.

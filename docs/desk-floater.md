@@ -8,11 +8,12 @@ On Windows, where Starship runs inside WSL 2, the [Windows desk floater](desk-fl
 
 The floater is mouth and ears only, plus a dictation keyboard you drive yourself.
 It does not spawn workers, merge, edit config, or act as a second Firstmate.
+Its one button that answers an offer, Do it, only sends a line of yours to Firstmate (see [Do it](#do-it)).
 Exactly one fleet brain remains: the primary already running in this home.
 
 ## What you get
 
-- Always-on-top, draggable floating control (SwiftUI): a small talk button with four smaller controls beside it, and a dropdown arrow for recent replies.
+- Always-on-top, draggable floating control (SwiftUI): two round buttons, Talk and a smaller Show, with a status line under them, and nothing else until there is something to show.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
@@ -20,11 +21,12 @@ Exactly one fleet brain remains: the primary already running in this home.
 - Optional speak-back of Firstmate outcome lines through `bin/fm-speak.sh`,
   which speaks through macOS `say` when `config/speak` names a `voice` and
   through Deepgram Aura otherwise, each the fallback for the other.
-- Stop, Repeat and Mute controls for that spoken voice, a voice-volume level of its own, and a list of the recent replies to hear any of them again.
-- Firstmate's newest reply in a small caption beside the floater, whether the voice is muted or not (see [Reply caption](#reply-caption)).
+- Firstmate's newest reply in a bubble under the floater, written for the eye, whether the voice is muted or not, with Stop, mute and Hear again on it only while they mean something (see [Reply bubble](#reply-bubble)).
+- A Do it button on that bubble when Firstmate offers to take an easy-to-undo step on your screen (see [Do it](#do-it)).
+- A voice-volume level of its own and mute on a right-click of the floater, and both, with the recent replies to hear again, in the web page's Settings ([web.md](web.md#settings)).
 - A "Look here" line on every talk message naming the app and window in front, so Firstmate knows what "this" or "here" means (see [The Front line](#the-front-line)).
 - A dictation mode that types what you say into whatever text box has the cursor, and sends it when that text box is the Firstmate chat.
-- Quick screenshots sent to Firstmate on their own or together with a voice message (see [Screenshots](#screenshots)).
+- Show: the screen sent to Firstmate on its own, or held while you speak to go with your words (see [Screenshots](#screenshots)).
 
 ## Enablement
 
@@ -49,38 +51,63 @@ Exactly one fleet brain remains: the primary already running in this home.
    Grant microphone permission when macOS asks.
    macOS also asks for the Accessibility and Screen Recording permissions (see [Permissions](#permissions)); the buttons work without Accessibility, the hotkeys and typing into other apps do not, and screenshots need Screen Recording.
 
-4. Hold the button (or click to toggle), speak, release.
+4. Hold Talk (or click to toggle), speak, release.
    The transcript is typed into the primary Firstmate chat and submitted, or saved to the mailbox when that chat cannot be reached.
 
 ## Controls
 
-Drag the floater by its dark backing plate or the status line under the buttons.
+At rest the floater is a small paper card: Talk, Show and the status line.
+Drag it by the card or the status line.
 
 | Control | What it does |
 | --- | --- |
-| Large round button | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. |
-| Stop (square) | Stops the reply being spoken now, and drops any reply queued to be spoken after it. Runs `bin/fm-speak.sh --stop`. |
-| Repeat (circular arrow) | Speaks the last spoken reply again. Runs `bin/fm-speak.sh --repeat`; the status line says "Nothing to repeat" when nothing has been spoken yet, and "Voice muted" (without repeating) while the voice is muted. |
-| Recent replies (dropdown arrow, right edge) | Opens a list of the last 10 replies, spoken or kept as text while muted, newest first, each with its time and the start of its text; hover over one to read all of it. Click a reply to hear it again. Stop and Mute work on it as on Repeat, and while muted a click stays silent and the status line says "Voice muted". Click the arrow again to close the list. Runs `bin/fm-speak.sh --history` and `--replay <number>`. |
-| Mute (speaker) | Toggles voice off and on. While muted the icon is a crossed-out speaker on an orange circle, every reply stays text-only and still shows in the caption and the recent list, and a reply playing at the moment you mute stops. Runs `bin/fm-speak.sh --mute` / `--unmute`; the setting is per home and survives restarting the floater. |
-| Voice volume (right-click or Control-click the speaker) | Opens a slider below the controls that sets how loud the voice is compared with everything else on the Mac: 100% is the system volume, lower is quieter than other audio, and up to 200% is louder. The Mac's own volume is never changed, the new level applies from the next spoken line, and Reset returns to 100%. Right-click or Control-click again to close it. Runs `bin/fm-speak.sh --volume` / `--volume <percent>`; the level is per home and survives restarting the floater. |
-| Camera (bottom right of the small controls) | Takes a screenshot for Firstmate. See [Screenshots](#screenshots). A number on it counts the shots waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking it asks again. |
+| Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
+| Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
+| Status line | One line under the buttons saying what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
+| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else) and Mute or Unmute. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
 
-Repeat and the recent list play a reply as soon as you click, from the audio kept when it was first spoken, rather than waiting for Deepgram to make it again.
-A reply with no kept audio, such as one spoken by macOS `say`, is spoken again the ordinary way.
-The last 10 replies and their audio are kept in this home's private `state/`, readable only by your own account on the Mac; older ones are removed as new ones arrive.
+Everything else appears on the reply bubble while it means something, below.
+The recent replies are on the web page's Settings, each with Hear again ([web.md](web.md#settings)).
+Muting affects voice only: every reply still shows in the bubble, a reply playing at the moment you mute stops, and Firstmate's text replies stay the authoritative ones.
+`bin/fm-speak.sh`'s header owns how stop, replay, the reply history, mute and the voice volume behave.
 
-Muting affects voice only.
-Firstmate's text replies stay the authoritative ones, and nothing about how Firstmate handles your transcripts changes.
-`bin/fm-speak.sh`'s header owns how stop, repeat, the reply history, mute and the voice volume behave.
+### Reply bubble
 
-### Reply caption
+When Firstmate's reply arrives, it shows in a calm card under the floater: "Firstmate" with the time, then a few lines written for the eye.
+The bubble's words are not the spoken line.
+The voice says the outcome and, when there is more, points at the screen ("There's a question for you on screen."); the bubble is on the screen, so it shows the outcome in one or two short sentences and then the actual ask, the question itself, and never a pointer to the screen.
+Click the words or the arrow to read the whole reply as it was written; an expanded bubble stays until you collapse it or click the cross.
 
-When Firstmate's spoken lead for a reply arrives, it shows in a calm card under the floater for about 15 seconds: "Firstmate" with the time, and the first two lines of the reply.
-It shows the same way while the voice is muted, with a small crossed-out speaker beside the time, so muted becomes a quiet text mode rather than silence.
-Click the reply or its arrow to read all of it; an expanded caption stays until you collapse it or click the cross to dismiss it.
-The caption shows the newest entry of the reply history that `bin/fm-speak.sh --history` lists, the same lead the voice speaks; replies kept before the floater started are never shown as new.
-It only shows words: it never acts, clicks or decides anything.
+The bubble's controls appear only while they mean something:
+
+- **Stop**, while a line is being spoken or Firstmate is acting on a Do it you tapped. It cuts the spoken line and drops any queued after it (`bin/fm-speak.sh --stop`), and while Firstmate acts it also sends Firstmate a line asking it to stop.
+- **The speaker mark**, while a line is being spoken (click to mute) or while the voice is muted, as a crossed-out speaker in orange (click to unmute), so a muted voice always has a visible way back.
+- **Hear again**, under a reply while the voice is on and quiet; it speaks that reply again, from the audio kept when it was first spoken when there is some.
+
+The bubble shows for about 15 seconds, and stays up for as long as a line is being spoken, an offer waits for your tap, or Firstmate is acting on one.
+It shows the same way while the voice is muted.
+Replies kept before the floater started are never shown as new.
+The last 10 replies, with their audio and their words for the eye, are kept in this home's private `state/`, readable only by your own account on the Mac; older ones are removed as new ones arrive.
+
+The words for the eye come from the Stop hook that speaks Claude's reply (`bin/fm-claude-reply-speak.sh`, whose header owns the rule): the outcome is the first one or two sentences of the reply's opening paragraph, at most about 45 words, without any sentence that points at the screen, and the ask is the reply's last question.
+They are kept with the spoken line in the reply history, as its caption and its whole written reply, and read back with `bin/fm-speak.sh --caption` and `--full`; a reply with none, such as a line Firstmate spoke itself, shows its spoken line.
+
+### Do it
+
+When Firstmate offers to take a step on your screen, the bubble shows one line saying what will happen, with **Do it** and **Not now**.
+A Do it tap approves only a step that is easy to undo: changing a setting, opening a window, exporting a file.
+Anything that sends, buys, books, deletes or submits still waits for your yes in the chat or on the approvals page, as before.
+
+The floater itself never clicks or acts.
+Do it sends one short line of yours into the Firstmate chat, `Do it: <what will happen> (floater offer <id>)`, through the same path as a talk message, and Firstmate takes the step under its own screen rules.
+Because it travels as a message, a chat showing a question, a permission prompt or a picker gets nothing: the line goes to the mailbox and Firstmate is rung, so a tap can never answer a dialog.
+The line names its offer, so a late tap cannot approve a newer, different one, and an offer nobody answered expires once a newer reply arrives, or after 30 minutes.
+A tap Firstmate has not taken up within 30 minutes expires too, so the bubble does not stay up for work that never started.
+Not now closes the offer and sends nothing.
+While Firstmate works the bubble says so and shows Stop, which sends `Stop: <what will happen> (floater offer <id>)`.
+
+The offer is a small record of its own beside the reply, because the spoken line can never ask you to decide; the voice says what Firstmate found, and the bubble carries the offer.
+`bin/fm-desk-offer.sh`'s header owns the record, its states and the lines a tap sends; Firstmate records offers and answers taps under the rules in [desk voice replies](desk-voice-replies.md), only in a home with the `macos-computer-use` skill switched on (`.agents/opt-in-skills/macos-computer-use/SKILL.md`).
 
 You can talk while a reply is being spoken.
 The reply keeps playing, and it stays out of your message: the floater records with macOS voice processing, which removes the Mac's own playback from the microphone.
@@ -95,7 +122,7 @@ After you release, it keeps listening for a moment, so a last word still being s
 
 | Key | What it does |
 | --- | --- |
-| Right Option, held | Walkie-talkie: talks to Firstmate for as long as it is held, exactly like holding the large button. Releasing sends. A brief brush of the key (under about a third of a second) sends nothing. |
+| Right Option, held | Walkie-talkie: talks to Firstmate for as long as it is held, exactly like holding Talk, whatever app is in front. Releasing sends it to the Firstmate chat. A brief brush of the key (under about a third of a second) sends nothing. |
 | Right Command, tapped | Starts dictation; tap it again to finish and type the text, or send it when the cursor is in the Firstmate chat. |
 | Right Shift, tapped while you are not typing | Takes a screenshot of the display under the mouse pointer. See [Screenshots](#screenshots). |
 
@@ -103,7 +130,7 @@ Only the right-hand keys are watched, so the left Option, Command and Shift keys
 Right Shift follows the same tap rules as Right Command: held with a letter to type a capital, or held longer than half a second, it is an ordinary Shift press and takes no screenshot.
 It also takes no screenshot while you are typing, so a Shift brushed on the way to a capital, a question mark or Return is ignored: a tap within a second and a half of your last key, or followed by a key within half a second, counts as typing.
 A tap that stands takes its screenshot half a second after you let go, and two taps within that half second take one screenshot.
-While macOS has secure typing on, such as in a password field or a terminal with Secure Keyboard Entry, the floater cannot see your keys, so Right Shift takes no screenshot then; use the Camera control.
+While macOS has secure typing on, such as in a password field or a terminal with Secure Keyboard Entry, the floater cannot see your keys, so Right Shift takes no screenshot then; use Show.
 A lone Right Shift press that takes no screenshot says why on the status line for a few seconds: `Shot skipped - typing` (too close to a key), `Shot skipped - held` (longer than half a second), or `Shot skipped - secure` (secure typing is on, shown once until secure typing turns off; `held` is not shown then, so capitals typed in a secure field, held or not, do not repeat a message); hover the status line to read a message cut short.
 Shift used with a letter, another modifier or a click is an ordinary Shift press and shows nothing.
 A hotkey used as part of a shortcut is ignored: pressing a letter or clicking the mouse within the first third of a second of holding Right Option (to type a special character, or Option-click) cancels that capture without sending anything, and Right Command pressed with another key or a click, or held longer than half a second, is an ordinary Command press.
@@ -116,7 +143,7 @@ Dictation types what you say into whatever text box has the cursor: this termina
 
 1. Put the cursor where the text should go.
 2. Tap Right Command.
-   The large button turns purple and the status line reads "Dictating…" while it listens.
+   Talk turns purple and the status line reads "Dictating…" while it listens.
 3. Speak, then tap Right Command again.
    The audio is transcribed through the same Deepgram path, and the text is pasted where the cursor is.
    When the cursor is in the Firstmate chat, the text is sent instead (see [Dictating into the Firstmate chat](#dictating-into-the-firstmate-chat)).
@@ -144,9 +171,10 @@ Asking Terminal needs the Automation permission (see [Permissions](#permissions)
 
 ## Screenshots
 
-Tap Right Shift, or click the Camera control, to take a screenshot of the whole display under the mouse pointer.
+Tap Right Shift, or tap Show, to take a screenshot of the whole display under the mouse pointer.
+Hold Show and speak instead, and the picture is taken as you press and goes with your words, as a talk message would; a quick tap opens no message, so the picture goes on its own.
 Take several in a row, moving the pointer to another display in between if you like: they stack, and about three seconds after the last one they are sent to Firstmate together as one message, with nothing more to press.
-The camera shows how many are stacked, the status line reads "2 shots stacked", then "Sent" once they are delivered.
+Show counts how many are stacked, the status line reads "2 shots stacked", then "Sent" once they are delivered.
 A capture that fails reads `Shot failed - ` and the capture's own reason, such as `screen capture failed`.
 
 The message names each image by its full path, for example `Screenshots: /…/state/desk-voice/shots/<time>-<id>.png /…/<time>-<id>.png`, so Firstmate can open them.
@@ -154,7 +182,7 @@ A message with screenshots, with or without words, travels the same way as a voi
 
 Screenshots combine with talk-to-Firstmate:
 
-- Shots taken while Right Option is held, or while the large button is recording, go with that voice message.
+- Shots taken while Right Option is held, or while Talk or Show is recording, go with that voice message.
 - Shots still stacking when you start talking wait and go with the voice message too.
 - Shots taken after you finish talking, while the message is still being transcribed, join it; the message then waits until three seconds after the last shot.
 - Talking again while a message waits for its shots ("Adding shots…" on the status line) adds the new words after the first ones, and the wait starts over from the end of that talk.
@@ -178,11 +206,11 @@ Nothing is sent anywhere but to this home's Firstmate.
 | Automation (Terminal) | Sending dictation typed into the Firstmate chat | Asked the first time you dictate with Terminal in front. Grant it in System Settings, Privacy & Security, Automation, by switching on Terminal under DeskFloater. |
 
 The floater checks the permission every few seconds and turns the hotkeys on as soon as it is granted, with no restart.
-Until then the hotkeys and the paste are off: an orange "!" badge sits on the talk button, the status line reads "Keys off - click !" in orange, and the on-screen buttons work as normal.
+Until then the hotkeys and the paste are off: an orange "!" badge sits on Talk, the status line reads "Keys off - click !" in orange, and the on-screen buttons work as normal.
 Clicking the badge asks macOS again and opens the Accessibility settings.
 
-Screen Recording works the same way, with its own orange "!" on the Camera control.
-Until it is granted, screenshots are off and the Camera control and Right Shift take none; clicking the Camera control asks macOS again and opens the Screen Recording settings.
+Screen Recording works the same way, with its own orange "!" on Show.
+Until it is granted, screenshots are off and Show and Right Shift take none; clicking Show asks macOS again and opens the Screen Recording settings.
 The Screen Recording list may not show DeskFloater, because the app lives in the hidden `desk-floater/.build` folder: click +, press Cmd+Shift+. to show hidden folders, and pick `DeskFloater.app` there.
 macOS may only notice a new Screen Recording grant after the floater restarts, so after granting the permissions relaunch it with `bin/fm-desk-floater.sh` rather than choosing "Quit & Reopen" when macOS offers it (see [Quit & Reopen](#quit--reopen)).
 
@@ -359,7 +387,8 @@ STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this 
 
 - Always-on open mic / wake word.
 - Sending dictated text anywhere but the text box that has the cursor.
-- Watching the screen continuously, or computer use: a screenshot is only taken when you ask for one.
+- Watching the screen continuously: a screenshot is only taken when you ask for one.
+- Acting on the screen itself: the floater only carries your Do it tap to Firstmate, which acts under its own screen rules.
 - Choosing a window or region: a screenshot is always the whole display under the pointer.
 - Replacing glasses voice or the ElevenLabs glasses path.
 - Building inside the OpenAI Codex app.
@@ -369,8 +398,9 @@ STT model default: `nova-3` (`DEEPGRAM_STT_MODEL`, from the environment or this 
 | Script | Role |
 | --- | --- |
 | `bin/fm-desk-floater.sh` | Build/launch the floating control; the controls, hotkeys, dictation and screenshot stacking live in `desk-floater/Sources/DeskFloater.swift` |
+| `bin/fm-desk-offer.sh` | The Do it offer beside a reply: Firstmate's offer / working / done, the floater's status and its taps |
 | `bin/fm-desk-voice.sh` | Send into the primary chat, screenshot capture, mailbox deliver / pending / drain, saved recordings: keep / recordings / retry, and the chat's suggested next prompt for the web page: suggestion |
 | `bin/fm-web.sh` | The localhost page that mirrors the terminal workspace, whose chat sends through `bin/fm-desk-voice.sh send` ([web.md](web.md)) |
 | `bin/fm-deepgram-stt.sh` | Audio file → transcript, with a bounded, retried request |
 | `bin/fm-deepgram-tts.sh` | Text → Deepgram Aura audio |
-| `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--repeat`, `--history`, `--replay`, `--mute`, `--unmute`, `--muted` and `--volume` |
+| `bin/fm-speak.sh` | Captain-facing speak-out (a named `voice` selects `say`, else Deepgram Aura; each the other's fallback), plus `--stop`, `--speaking`, `--repeat`, `--history`, `--replay`, `--caption`, `--full`, `--mute`, `--unmute`, `--muted` and `--volume` |

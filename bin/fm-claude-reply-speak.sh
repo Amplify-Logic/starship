@@ -38,6 +38,21 @@
 #     dropped anything. The desk budget (docs/examples/desk-speak-register.toml)
 #     is 78 words, and the lead is cut back further so that it and the pointer
 #     fit, because past the budget the register drops the pointer sentence.
+# What it shows: the desk floater's bubble sits on the screen, so it gets words
+# written for the eye rather than the spoken line, handed to bin/fm-speak.sh with
+# every spoken attempt as --caption-file and --full-file (its REPLY CAPTIONS):
+#   - the caption: the outcome, the first one or two sentences of the same lead
+#     paragraph, at most 45 words and kept whole, without any sentence that
+#     points at the screen ("on screen", "see below", "is below", "are below")
+#     or a closing sentence ending in ":", then the actual ask when the reply
+#     has one: its last sentence ending in "?" outside code and tables, unless
+#     the outcome already holds it. When that leaves nothing, as with a lead
+#     that is a single sentence ending in ":", the caption is the spoken lead
+#     without its pointer, or, when that lead only points at the screen ("The
+#     details are below."), the first sentence of the text after it. It never
+#     carries a voice-only pointer;
+#   - the full text: the whole reply as written, after the routine no-news line
+#     is dropped, which the bubble opens to.
 # When the register refuses the line (bin/fm-speak.sh exit 2), the hook asks the
 # register (bin/fm-speak.sh --dry-run) about each lead sentence on its own and
 # speaks every sentence it accepts, in order, plus the pointer, or plus "More on
@@ -398,6 +413,92 @@ case "$LEAD" in
 esac
 LINE=$LEAD${POINTER:+ $POINTER}
 
+# --- the bubble's words for the eye (What it shows, above) -------------------
+QUESTION=$(printf '%s\n' "$MSG" | awk '
+  function end_para(   n, i, start, ws, out) {
+    if (para == "") return
+    n = split(para, ws, " ")
+    if (ws[n] ~ /\?["\047)\]]*$/) {
+      start = 1
+      for (i = 1; i < n; i++) if (ws[i] ~ /[.!?]["\047)\]]*$/ && ws[i + 1] ~ /^["\047(\[]?[A-Z0-9]/) start = i + 1
+      out = ws[start]
+      for (i = start + 1; i <= n; i++) out = out " " ws[i]
+      question = out
+    }
+    para = ""
+  }
+  /^[[:space:]]*(```|~~~)/ { fence = !fence; end_para(); next }
+  fence { next }
+  /^[[:space:]]*$/ || /^[[:space:]]*[|#]/ || /^[[:space:]]*([-*_][[:space:]]*){3,}$/ { end_para(); next }
+  {
+    line = $0
+    sub(/^[[:space:]]*>[[:space:]]*/, "", line)
+    if (line ~ /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/) end_para()
+    sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
+    para = para line " "
+  }
+  END { end_para(); print question }
+' | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/(\*\*|__|`)//g')
+CAPTION=$(printf '%s\n' "$PARA" | awk -v question="$QUESTION" '
+  function closed(word) { return word ~ /[.!?]["\047)\]]*$/ }
+  { for (i = 1; i <= NF; i++) w[++total] = $i }
+  END {
+    count = 0
+    for (i = 1; i <= total; i++) {
+      if (i == total || (closed(w[i]) && w[i + 1] ~ /^["\047(\[]?[A-Z0-9]/)) end_at[++count] = i
+    }
+    out = ""; used = 0; kept = 0
+    for (s = 1; s <= count && kept < 2; s++) {
+      sentence = ""
+      for (i = (s == 1 ? 1 : end_at[s - 1] + 1); i <= end_at[s]; i++) sentence = sentence (sentence == "" ? "" : " ") w[i]
+      if (tolower(sentence) ~ /on screen|see below|(is|are) below/ || sentence ~ /:$/) continue
+      n = end_at[s] - (s == 1 ? 0 : end_at[s - 1])
+      if (kept > 0 && used + n > 45) break
+      out = out (out == "" ? "" : " ") sentence
+      used += n; kept++
+    }
+    if (question != "" && index(out, question) == 0) out = out (out == "" ? "" : " ") question
+    print out
+  }
+')
+if [ -z "$CAPTION" ]; then
+  CAPTION=$LEAD
+  if printf '%s\n' "$LEAD" | grep -Eiq 'on screen|see below|(is|are) below'; then
+    AFTER_LEAD=$(printf '%s\n' "$MSG" | awk '
+      function flush() { if (out != "") { print out; out = ""; exit } }
+      /^[[:space:]]*(```|~~~)/ { flush(); fence = !fence; if (lead) gap = 1; next }
+      fence { next }
+      /^[[:space:]]*$/ || /^[[:space:]]*[|#]/ || /^[[:space:]]*([-*_][[:space:]]*){3,}$/ { flush(); if (lead) gap = 1; next }
+      {
+        line = $0
+        sub(/^[[:space:]]*>[[:space:]]*/, "", line)
+        if (line ~ /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/) { flush(); if (lead) gap = 1 }
+        if (!lead) { lead = 1; next }
+        if (!gap) next
+        sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
+        n = split(line, ws, " ")
+        for (i = 1; i <= n; i++) {
+          out = out (out == "" ? "" : " ") ws[i]
+          if (ws[i] ~ /[.!?]["\047)\]]*$/) flush()
+        }
+      }
+      END { if (out != "") print out }
+    ' | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g; s/(\*\*|__|`)//g')
+    CAPTION=${AFTER_LEAD:-$LEAD}
+  fi
+fi
+EYE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-reply-eye.XXXXXX" 2>/dev/null) || EYE_DIR=
+EYE_ARGS=()
+if [ -n "$EYE_DIR" ]; then
+  trap 'rm -rf "$EYE_DIR"' EXIT
+  printf '%s\n' "$MSG" > "$EYE_DIR/full"
+  EYE_ARGS=(--full-file "$EYE_DIR/full")
+  if [ -n "$CAPTION" ]; then
+    printf '%s\n' "$CAPTION" > "$EYE_DIR/caption"
+    EYE_ARGS=(--caption-file "$EYE_DIR/caption" --full-file "$EYE_DIR/full")
+  fi
+fi
+
 # --- speak only while this Stop is still the latest ---------------------------
 still_latest() {
   [ "$(cat "$STOP_TOKEN_FILE" 2>/dev/null || true)" = "$MY_TOKEN" ]
@@ -415,7 +516,7 @@ still_latest || exit 0
 REFUSED_DECISION=0
 speak_line() {  # <line>; returns bin/fm-speak.sh's exit status
   local err rc=0
-  err=$("$SPEAK" "$1" 2>&1 >/dev/null </dev/null) || rc=$?
+  err=$("$SPEAK" ${EYE_ARGS[@]+"${EYE_ARGS[@]}"} "$1" 2>&1 >/dev/null </dev/null) || rc=$?
   if [ "$rc" -eq 2 ] && [ "$ASKS_CAPTAIN" = 1 ] \
     && printf '%s\n' "$err" | grep -Eq '^refused:.*(decide|spoken yes)'; then
     REFUSED_DECISION=1
