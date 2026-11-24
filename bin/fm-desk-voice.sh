@@ -237,8 +237,9 @@
 # prompt prints the question the primary's screen is stopped on, waiting for a
 # person (a permission yes or no, a trust dialog, a question with choices, a
 # picker), as one line: <kind> TAB <question> TAB <heading>, where kind is yesno
-# or choice and heading is the dialog's title when it has one apart from the
-# question (person_prompt owns the reading). Nothing when the screen shows no such
+# or choice, question is empty when the dialog shows none, and heading is the
+# dialog's title when it has one apart from the question (person_prompt owns
+# the reading). Nothing when the screen shows no such
 # prompt or cannot be read. It reads the pane send would type into, proven the
 # same way, and types nothing; --stdin reads the screen from standard input
 # instead of the pane. The web page shows it in place of Thinking.
@@ -982,7 +983,8 @@ suggestion() (
 # unnumbered one needs that footer as the last row. The question is the row
 # ending in ? nearest above the options, below the dialog's top rule, and the
 # heading the first row under that rule; without a question the heading
-# stands in. It is yesno when one option starts with Yes and another with No.
+# stands in, and without either the question is empty. It is yesno when one
+# option starts with Yes and another with No.
 person_prompt() {  # <plain-screen>
   printf '%s\n' "$1" | LC_ALL=C awk '
     function lead(s) { match(s, /^[ \t]*/); return RLENGTH }
@@ -1029,7 +1031,6 @@ person_prompt() {  # <plain-screen>
       }
       if (question == heading) heading = ""
       if (question == "") { question = heading; heading = "" }
-      if (question == "") for (i = first - 1; i >= 1; i--) if (trim(row[i]) != "") { question = trim(row[i]); break }
       yes = 0; no = 0
       for (i = 1; i <= n; i++) {
         if (choice[i] ~ /^Yes([^A-Za-z]|$)/) yes = 1

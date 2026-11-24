@@ -1633,7 +1633,7 @@ def read_prompt(home: Path, root: Path) -> Optional[Dict[str, str]]:
         return None
     lines = proc.stdout.splitlines() if proc.returncode == 0 else []
     fields = (lines[0].split("\t") + ["", ""])[:3] if lines else []
-    if not fields or fields[0] not in ("yesno", "choice") or not fields[1].strip():
+    if not fields or fields[0] not in ("yesno", "choice"):
         return None
     return {"kind": fields[0], "question": fields[1].strip(), "heading": fields[2].strip()}
 
@@ -3418,12 +3418,29 @@ VIEW_JS = r"""
   }
 
   /* What the live line says while the screen waits on a person: plain words
-     for the kind of answer it needs, and the prompt's own question. */
+     for the kind of answer it needs, and the prompt's own question and
+     heading when neither holds a path, a file name, a command or code, else
+     the generic words for what the prompt asks to do. */
+  function plainAsk(text) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    if (!plainAbout(text) || /\w\.[A-Za-z][A-Za-z0-9]{0,7}\b|(^|\s)--?[A-Za-z]/.test(text)) return null;
+    return text;
+  }
+  function askAbout(prompt) {
+    var text = (prompt.heading || '') + ' ' + (prompt.question || '');
+    if (/\b(edit|writ|creat|chang|delet)/i.test(text)) return 'Firstmate wants to change a file';
+    if (/\bread/i.test(text)) return 'Firstmate wants to read a file';
+    if (/\b(bash|command|run|execut)/i.test(text)) return 'Firstmate wants to run a command';
+    if (/\b(fetch|web|url|http)/i.test(text)) return 'Firstmate wants to use the web';
+    return 'Firstmate needs an answer';
+  }
   function promptWords(prompt) {
-    if (!prompt || !prompt.question) return null;
+    if (!prompt || (prompt.kind !== 'yesno' && prompt.kind !== 'choice')) return null;
     var what = prompt.kind === 'yesno' ? 'Waiting for your yes or no in the terminal'
       : 'Waiting for your answer in the terminal';
-    var ask = prompt.heading ? prompt.heading + ': ' + prompt.question : prompt.question;
+    var question = plainAsk(prompt.question), heading = plainAsk(prompt.heading);
+    var ask = !question || heading === null ? askAbout(prompt) : heading ? heading + ': ' + question : question;
     return { what: what, ask: ask };
   }
 

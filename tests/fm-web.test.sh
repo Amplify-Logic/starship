@@ -1677,7 +1677,13 @@ console.log([0, 9400, 61000, 3599000, 3780000].map(V.took).join(' | '));
 const said = (p) => { const w = V.promptWords(p); return w ? w.what + ' / ' + w.ask : 'none'; };
 console.log([said(null), said({ kind: 'yesno', question: '' }),
   said({ kind: 'yesno', question: 'Do you want to proceed?', heading: 'Bash command' }),
-  said({ kind: 'choice', question: 'Pick a colour?', heading: '' })].join(' | '));
+  said({ kind: 'choice', question: 'Pick a colour?', heading: '' }),
+  said({ kind: 'yesno', question: 'Do you want to make this edit to /home/demo/notes.md?', heading: 'Edit file' }),
+  said({ kind: 'yesno', question: 'Do you want to create notes.md?', heading: '' }),
+  said({ kind: 'yesno', question: 'Do you want to proceed?', heading: 'rm -rf build' }),
+  said({ kind: 'yesno', question: 'Run `make deploy` now?', heading: 'Bash command' }),
+  said({ kind: 'choice', question: '', heading: '' }),
+  said({ kind: 'other', question: 'Pick one?', heading: '' })].join(' | '));
 const at = Date.parse('2026-11-23T18:55:13Z'), q = { ts: '2026-11-23T18:55:13Z' };
 console.log([V.waitingWords(q, 'busy', at + 5000), V.waitingWords(q, 'busy', at + V.WAIT_LONG_MS + 1000),
   V.waitingWords(q, 'idle', at + 5000), V.waitingWords(q, 'offline', at + 5000), V.waitingWords({}, 'busy', at)].join(' | '));
@@ -1685,7 +1691,7 @@ JS
 ) || fail "the live line rules did not run: $out"
   assert_equals "$out" 'Thinking | Thinking | Thinking | Show the open pull requests | Running a command | Running a command | Running a command | Reading a file | Changing a file | Searching the files | Waiting on a helper: Look through the web code | Using a connected app | Reading its notes | true
 0s | 9s | 1m 01s | 59m 59s | 1h 03m
-none | none | Waiting for your yes or no in the terminal / Bash command: Do you want to proceed? | Waiting for your answer in the terminal / Pick a colour?
+none | Waiting for your yes or no in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Bash command: Do you want to proceed? | Waiting for your answer in the terminal / Pick a colour? | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate wants to change a file | Waiting for your yes or no in the terminal / Firstmate needs an answer | Waiting for your yes or no in the terminal / Firstmate wants to run a command | Waiting for your answer in the terminal / Firstmate needs an answer | none
 Waiting, Firstmate will read it next | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Still waiting, Firstmate has not read it yet | Waiting, Firstmate will read it next' "the live line in plain words, how long the turn has run, and what a waiting message says"
   pass "the live line says what is happening in plain words and for how long"
 }

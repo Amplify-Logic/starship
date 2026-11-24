@@ -2207,6 +2207,9 @@ test_desk_voice_prompt_reads_the_question_the_screen_waits_on() {
   printf ' Do you want to proceed?\n \342\235\257 1. Yes\n   2. No\n' > "$home/fixture/modal"
   out=$(desk_prompt "$home") || fail "prompt failed: $out"
   assert_equals "$out" "yesno${tab}Do you want to proceed?${tab}" "a prompt without a footer still counts"
+  printf ' rm -rf build\n\n \342\235\257 1. Yes\n   2. No\n\n Esc to cancel\n' > "$home/fixture/modal"
+  out=$(desk_prompt "$home") || fail "prompt failed: $out"
+  assert_equals "$out" "yesno${tab}${tab}" "a dialog without a question or title never borrows the row above its options"
   { cat "$dialogs/claude-2.1.283-permission-prompt.ansi"
     printf '\n\342\217\272 Done.\n\n\342\224\200\342\224\200\342\224\200\342\224\200\n\342\235\257\302\240\n\342\224\200\342\224\200\342\224\200\342\224\200\n  ? for shortcuts\n'
   } > "$home/fixture/modal"
