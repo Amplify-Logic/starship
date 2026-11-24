@@ -293,13 +293,21 @@ enum FloaterLayout {
 
 /// Moves the floater with the pointer while its card is dragged, resizes it as
 /// the status line comes and goes, and places the reply bubble beside it. The
-/// floater is never moved to fit the screen: it stays where it was put.
-final class WindowMover {
-    weak var window: NSWindow?
+/// floater is never moved to fit the screen: it stays where it was put. The
+/// card lays its buttons against the anchored corner, so they stay still on
+/// screen while the status line grows the card away from them.
+final class WindowMover: ObservableObject {
+    weak var window: NSWindow? {
+        didSet {
+            if let window {
+                _ = settle(window.frame)
+            }
+        }
+    }
     weak var bubble: NSWindow?
     private var startOrigin: NSPoint?
     private var startMouse: NSPoint?
-    private var anchor: FloaterLayout.Anchor?
+    @Published private(set) var anchor: FloaterLayout.Anchor?
     private var fitted: NSRect?
     private var bubbleSize: CGSize = .zero
 
@@ -318,10 +326,7 @@ final class WindowMover {
     func fit(_ size: CGSize) {
         guard let window, size.width > 0, size.height > 0 else { return }
         let frame = window.frame
-        let corner = (frame == fitted ? anchor : nil)
-            ?? FloaterLayout.anchor(for: frame, on: visibleFrame(for: frame) ?? frame)
-        anchor = corner
-        let rect = corner.frame(size)
+        let rect = settle(frame).frame(size)
         if rect != frame {
             window.setFrame(rect, display: true)
             window.invalidateShadow()
@@ -339,6 +344,22 @@ final class WindowMover {
     func end() {
         startOrigin = nil
         startMouse = nil
+        if let window {
+            _ = settle(window.frame)
+        }
+    }
+
+    /// The corner the card keeps still, taken afresh once the floater has been
+    /// put somewhere new, so the card lays its buttons out against it before
+    /// the status line next comes or goes.
+    private func settle(_ frame: NSRect) -> FloaterLayout.Anchor {
+        if frame == fitted, let anchor {
+            return anchor
+        }
+        let next = FloaterLayout.anchor(for: frame, on: visibleFrame(for: frame) ?? frame)
+        anchor = next
+        fitted = frame
+        return next
     }
 
     private func placeBubble() {
@@ -2259,7 +2280,7 @@ struct FloaterView: View {
     }
 
     @ObservedObject var model: FloaterModel
-    let mover: WindowMover
+    @ObservedObject var mover: WindowMover
     var part: Part = .card
 
     private let talkSize: CGFloat = 36
@@ -2326,27 +2347,27 @@ struct FloaterView: View {
 
     // MARK: the resting card
 
+    /// Talk and Show sit against the corner the card keeps still, and the
+    /// status line opens on the far side of them, so the buttons never move
+    /// under the pointer as it comes and goes.
     private var cluster: some View {
-        VStack(spacing: 5) {
+        let growsLeft = mover.anchor?.growsLeft ?? true
+        let growsDown = mover.anchor?.growsDown ?? true
+        return VStack(alignment: growsLeft ? .trailing : .leading, spacing: 5) {
+            if model.statusShown && !growsDown {
+                statusLine
+            }
             HStack(alignment: .center, spacing: 10) {
                 talkButton
                 showButton
             }
-            if model.statusShown {
-                Text(model.status)
-                    .help(model.status)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(keysOffIdle ? Self.warnInk : Self.soft)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .truncationMode(.tail)
-                    .frame(width: statusWidth)
-                    .allowsHitTesting(false)
+            if model.statusShown && growsDown {
+                statusLine
             }
         }
         .padding(.horizontal, 8)
-        .padding(.top, 8)
-        .padding(.bottom, model.statusShown ? 6 : 8)
+        .padding(growsDown ? .top : .bottom, 8)
+        .padding(growsDown ? .bottom : .top, model.statusShown ? 6 : 8)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Self.paper)
@@ -2363,6 +2384,18 @@ struct FloaterView: View {
                 .allowsHitTesting(false)
         )
         .contextMenu { voiceMenu }
+    }
+
+    private var statusLine: some View {
+        Text(model.status)
+            .help(model.status)
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(keysOffIdle ? Self.warnInk : Self.soft)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .truncationMode(.tail)
+            .frame(width: statusWidth)
+            .allowsHitTesting(false)
     }
 
     /// The right-click menu: the voice's level beside everything else on the

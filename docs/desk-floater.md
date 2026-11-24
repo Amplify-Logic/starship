@@ -13,7 +13,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## What you get
 
-- Always-on-top, draggable floating control (SwiftUI): two round buttons, Talk and a smaller Show, with a status line under them only while there is something to say, and nothing else until there is something to show.
+- Always-on-top, draggable floating control (SwiftUI): two round buttons, Talk and a smaller Show, with a status line beside them only while there is something to say, and nothing else until there is something to show.
 - Push-to-talk (hold or click-to-toggle), or hold Right Option anywhere. Not always-listening. No wake word.
 - Speech-to-text via Deepgram (`bin/fm-deepgram-stt.sh`).
 - Transcripts typed straight into the primary Firstmate chat and submitted, with a durable mailbox under the home (`state/desk-voice/inbox/`) as the fallback.
@@ -56,7 +56,7 @@ Exactly one fleet brain remains: the primary already running in this home.
 
 ## Controls
 
-At rest the floater is a small paper card that hugs Talk and Show; the status line appears under them only while there is something to say.
+At rest the floater is a small paper card that hugs Talk and Show; the status line appears only while there is something to say, on the side toward the middle of the screen (under the buttons in the top half, above them in the bottom half), so Talk and Show never move as it comes and goes.
 Drag it by the card.
 It stays wherever you put it, even pushed almost wholly off the screen into a corner with only an edge left to grab: neither a reply nor the status line moves it.
 
@@ -64,7 +64,7 @@ It stays wherever you put it, even pushed almost wholly off the screen into a co
 | --- | --- |
 | Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
 | Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
-| Status line | One line under the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
+| Status line | One line beside the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
 | Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else) and Mute or Unmute. The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
 
 Everything else appears on the reply bubble while it means something, below.

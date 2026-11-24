@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import DeskFloater
 
@@ -128,5 +129,83 @@ final class FloaterLayoutTests: XCTestCase {
         XCTAssertEqual(floater.frame, parkedFrame)
         bubbleWindow.orderOut(nil)
         floater.orderOut(nil)
+    }
+
+    /// The real card in a real window, parked in each quarter of the screen:
+    /// Talk keeps its centre on screen, and Show beside it, while the status line comes
+    /// for recording, says Sent, and goes again at rest, so a second click to
+    /// stop lands where the first one did.
+    @MainActor
+    func testTalkAndShowStayPutAsTheStatusLineComesAndGoes() throws {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            throw XCTSkip("no screen to place windows on")
+        }
+        let visible = screen.visibleFrame
+        let corners = [
+            ("top right", NSPoint(x: visible.maxX - 200, y: visible.maxY - 100)),
+            ("top left", NSPoint(x: visible.minX + 100, y: visible.maxY - 100)),
+            ("bottom left", NSPoint(x: visible.minX + 100, y: visible.minY + 50)),
+            ("bottom right", NSPoint(x: visible.maxX - 200, y: visible.minY + 50)),
+        ]
+        let model = FloaterModel(repoRoot: "/nonexistent", fmHome: "/nonexistent")
+        model.keysTrusted = true
+        model.screenTrusted = true
+        for (place, origin) in corners {
+            model.mode = .idle
+            model.status = FloaterModel.restingStatus
+            let mover = WindowMover()
+            let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
+            hosting.sizingOptions = []
+            let window = NSWindow(contentRect: NSRect(origin: origin, size: CGSize(width: 89, height: 52)),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = hosting
+            mover.window = window
+
+            /// Where Talk is on screen: the middle of its coloured circle,
+            /// the only saturated paint on the card, found in the card's
+            /// rendered pixels and placed by the window's frame.
+            func talkCentre() -> NSPoint? {
+                for _ in 0..<2 {
+                    hosting.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                }
+                guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
+                hosting.cacheDisplay(in: hosting.bounds, to: rep)
+                guard rep.bitsPerSample == 8, rep.samplesPerPixel == 4, let data = rep.bitmapData else { return nil }
+                let alphaFirst = rep.bitmapFormat.contains(.alphaFirst)
+                let scale = CGFloat(rep.pixelsWide) / hosting.bounds.width
+                var sumX: CGFloat = 0, sumY: CGFloat = 0, count: CGFloat = 0
+                for py in 0..<rep.pixelsHigh {
+                    for px in 0..<rep.pixelsWide {
+                        let pixel = data + py * rep.bytesPerRow + px * 4
+                        let alpha = alphaFirst ? pixel[0] : pixel[3]
+                        let rgb = alphaFirst ? [pixel[1], pixel[2], pixel[3]] : [pixel[0], pixel[1], pixel[2]]
+                        let high = CGFloat(rgb.max()!), low = CGFloat(rgb.min()!)
+                        guard alpha > 230, high > 0, (high - low) / high > 0.5 else { continue }
+                        sumX += CGFloat(px)
+                        sumY += CGFloat(py)
+                        count += 1
+                    }
+                }
+                guard count > 0 else { return nil }
+                let frame = window.frame
+                return NSPoint(x: frame.minX + (sumX / count + 0.5) / scale,
+                               y: frame.maxY - (sumY / count + 0.5) / scale)
+            }
+
+            let resting = try XCTUnwrap(talkCentre(), "\(place): Talk is on the card")
+            XCTAssertEqual(window.frame.size, CGSize(width: 89, height: 52), "\(place): the card hugs the buttons")
+            for (mode, status) in [(FloaterModel.Mode.recording, "Listening"), (.idle, "Sent"),
+                                   (.idle, FloaterModel.restingStatus)] {
+                model.mode = mode
+                model.status = status
+                let now = try XCTUnwrap(talkCentre(), "\(place), \(status): Talk is on the card")
+                XCTAssertEqual(window.frame.height > 52, status != FloaterModel.restingStatus,
+                               "\(place), \(status): the status line shows only while there is something to say")
+                XCTAssertEqual(now.x, resting.x, accuracy: 0.5, "\(place), \(status): Talk moved sideways")
+                XCTAssertEqual(now.y, resting.y, accuracy: 0.5, "\(place), \(status): Talk moved up or down")
+            }
+            window.orderOut(nil)
+        }
     }
 }
