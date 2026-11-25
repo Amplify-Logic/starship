@@ -46,6 +46,14 @@ primary's own chat only when that is safe and otherwise uses the durable
 mailbox. The words go on standard input, never as one argument, so a long
 paste is not refused by the 128 KiB single-argument limit on Linux.
 
+A local second mate with the direct line on (docs/direct-line.md) is a second
+chat on the page: every conversation reading carries `mates`, each one that
+`bin/fm-direct-line.sh list` shows local and enabled (Crew, read at
+most every MATES_TTL_SECONDS), and GET /api/conversation?mate=<id> reads that
+mate's own transcript the same way. A send naming "mate" goes only through
+`bin/fm-direct-line.sh send` (direct_line_send); a mate the list does not show
+is never read or sent to.
+
 While the first mate is ready, the conversation reading also carries the
 suggested next prompt Claude shows in its empty chat box, read in the
 background by `bin/fm-desk-voice.sh suggestion` (suggestion_reader), which types
@@ -146,6 +154,12 @@ SEND_BODY_MAX = 24 * 1024 * 1024
 SEND_IMAGES_MAX = 8
 SEND_TEXT_MAX = 200000
 SEND_TIMEOUT_SECONDS = 90
+# A direct-line send waits up to 120 seconds to type, 60 to finish, and 60 to
+# close a held call (bin/fm-direct-line.sh); this bounds it with room to spare.
+DIRECT_SEND_TIMEOUT_SECONDS = 300
+DIRECT_TEXT_MAX = 8000
+MATES_TTL_SECONDS = 10.0
+MATES_TIMEOUT_SECONDS = 20
 SCREEN_SCHEMA = "fm-factory-screen.v1"
 MIRROR_TTL_SECONDS = 2.0
 MIRROR_TIMEOUT_SECONDS = 150
@@ -1218,6 +1232,114 @@ class TranscriptCache:
         return value
 
 
+# --- the direct line: the local second mates the owner may talk to ----------
+
+MATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def mate_label(mate_id: str) -> str:
+    """The switch's words for a mate: its registry name, title-cased, plus "mate"."""
+    return f"{re.sub(r'[-_.]+', ' ', mate_id).strip().title()} mate"
+
+
+def direct_line_call(home: Path, root: Path, args: List[str], timeout: float) -> subprocess.CompletedProcess:
+    """One bin/fm-direct-line.sh call for this home (FM_HOME set explicitly)."""
+    env = dict(os.environ)
+    env["FM_HOME"] = str(home)
+    return subprocess.run([str(root / "bin" / "fm-direct-line.sh")] + args, env=env, capture_output=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
+
+
+class Crew:
+    """The local second mates with the direct line enabled, and each one's chat.
+
+    `bin/fm-direct-line.sh list` is the only resolver: it applies the same
+    assertions `send` does, so a mate shows here only while a send to it would
+    be accepted. The list is read at most once every MATES_TTL_SECONDS; a mate's
+    conversation is read from the home the list names with the page's own
+    transcript reading (TranscriptCache), never linking files, which only the
+    first mate's reading serves.
+    """
+
+    def __init__(self, home: Path, root: Path) -> None:
+        self.home = home
+        self.root = root
+        self.lock = threading.Lock()
+        self.read_at: Optional[float] = None
+        self.mates: List[Dict[str, str]] = []
+        self.caches: Dict[str, TranscriptCache] = {}
+
+    def list(self) -> List[Dict[str, str]]:
+        with self.lock:
+            if self.read_at is not None and time.monotonic() - self.read_at < MATES_TTL_SECONDS:
+                return list(self.mates)
+        mates: List[Dict[str, str]] = []
+        try:
+            proc = direct_line_call(self.home, self.root, ["list"], MATES_TIMEOUT_SECONDS)
+            rows = json.loads(proc.stdout).get("mates", []) if proc.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+            rows = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or row.get("direct_line") is not True or row.get("remote") is not False:
+                continue
+            mate_id, mate_home = row.get("id"), row.get("home")
+            if isinstance(mate_id, str) and MATE_ID_RE.match(mate_id) and isinstance(mate_home, str) \
+                    and mate_home.startswith("/"):
+                mates.append({"id": mate_id, "label": mate_label(mate_id), "home": mate_home})
+        with self.lock:
+            self.mates, self.read_at = mates, time.monotonic()
+            return list(mates)
+
+    def public(self) -> List[Dict[str, str]]:
+        """What the page's switch shows: each mate's id and label."""
+        return [{"id": m["id"], "label": m["label"]} for m in self.list()]
+
+    def cache(self, mate_id: str) -> Optional[TranscriptCache]:
+        found = next((m for m in self.list() if m["id"] == mate_id), None)
+        if found is None:
+            return None
+        with self.lock:
+            cache = self.caches.get(mate_id)
+            if cache is None or str(cache.home) != found["home"]:
+                cache = self.caches[mate_id] = TranscriptCache(Path(found["home"]))
+            return cache
+
+    def picture(self, pid: str) -> Optional[Tuple[bytes, str]]:
+        with self.lock:
+            caches = list(self.caches.values())
+        for cache in caches:
+            found = cache.picture(pid)
+            if found is not None:
+                return found
+        return None
+
+
+def direct_line_send(home: Path, root: Path, mate: Dict[str, str], text: str, images: List[Path]) -> Dict[str, str]:
+    """Hand the message to `bin/fm-direct-line.sh send`, the only way to a mate."""
+    argv = ["send", mate["id"], "--client-id", f"web-{secrets.token_hex(8)}"]
+    for image in images:
+        argv.extend(["--image", str(image)])
+    argv.extend(["--", text])
+    proc = direct_line_call(home, root, argv, DIRECT_SEND_TIMEOUT_SECONDS)
+    try:
+        record = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        record = {}
+    state = record.get("state") if isinstance(record, dict) else None
+    name = mate["label"]
+    if proc.returncode in (0, 3) and state == "typed":
+        return {"outcome": "typed", "detail": f"Typed into {name}'s chat."}
+    if proc.returncode in (0, 3) and state == "typed-unconfirmed":
+        return {"outcome": "typed-unconfirmed", "detail": f"Typed into {name}'s chat; the send was not confirmed."}
+    if proc.returncode in (0, 3) and state == "mailbox":
+        return {"outcome": "mailbox", "detail": f"{name}'s chat was busy, so it went to its mailbox."}
+    if proc.returncode == 4:
+        return {"outcome": "typed-unconfirmed", "detail": f"Still reaching {name}; it should show in the chat shortly."}
+    detail = (record.get("detail") if isinstance(record, dict) else None) \
+        or ((proc.stderr or "").strip().splitlines()[-1:] or ["the message could not be delivered"])[0]
+    return {"outcome": "failed", "detail": str(detail).removeprefix("fm-direct-line: ")}
+
+
 # --- the mirror: the Factory pane's screen and the bridge strip's fields ------
 
 # The page's own words for the pane's and the strip's jargon. Every other word
@@ -1979,7 +2101,8 @@ def voice_change(home: Path, root: Path, body: bytes) -> Tuple[int, Dict[str, An
     return 200, {"ok": True, "said": said, "voice": voice_state(home, root)}
 
 
-def decode_send_body(body: bytes) -> Tuple[str, List[bytes]]:
+def decode_send_body(body: bytes) -> Tuple[str, List[bytes], str]:
+    """The message's words, its pictures, and the mate it is for ("" for the first mate)."""
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -2005,7 +2128,12 @@ def decode_send_body(body: bytes) -> Tuple[str, List[bytes]]:
             raise ValueError("an image could not be read") from exc
     if not text.strip() and not images:
         raise ValueError("nothing to send")
-    return text.strip(), images
+    mate = payload.get("mate") or ""
+    if not isinstance(mate, str) or (mate and not MATE_ID_RE.match(mate)):
+        raise ValueError("that is not a mate this page knows")
+    if mate and len(text.strip()) > DIRECT_TEXT_MAX:
+        raise ValueError(f"the message is too long for a mate: at most {DIRECT_TEXT_MAX:,} characters")
+    return text.strip(), images, mate
 
 
 # --- the ship mark and the app icon ---------------------------------------
@@ -2310,6 +2438,7 @@ class WebState:
         self.cookie_value = derive(token, "cookie")
         self.csrf = derive(token, "csrf")
         self.transcript = TranscriptCache(home, link_files=True)
+        self.mates = Crew(home, root)
         self.mirror = FleetCache(home, root)
         self.workers = Peeks(home, root)
         self.suggestion = suggestion_reader(home, root)
@@ -2470,13 +2599,15 @@ class WebHandler(BaseHTTPRequestHandler):
             self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
         elif parsed.path.startswith("/api/picture/"):
             pid = parsed.path[len("/api/picture/"):]
-            found = STATE.transcript.picture(pid) if PICTURE_ID_RE.match(pid) else None
+            found = (STATE.transcript.picture(pid) or STATE.mates.picture(pid)) if PICTURE_ID_RE.match(pid) else None
             if found is None:
                 self._text(404, "not found")
             else:
                 self._send(200, found[0], found[1], cache="private, max-age=86400")
         elif parsed.path.startswith(FILE_HREF):
             self._file(unquote(parsed.path[len(FILE_HREF):]))
+        elif parsed.path == "/api/conversation" and query.get("mate", [""])[0]:
+            self._mate_conversation(query.get("mate", [""])[0], query.get("since", [""])[0])
         elif parsed.path == "/api/conversation":
             try:
                 payload = STATE.transcript.get()
@@ -2486,11 +2617,12 @@ class WebHandler(BaseHTTPRequestHandler):
             payload["prompt"] = STATE.prompt(payload.get("state") in ("busy", "idle") or lock_pid_alive(STATE.home) is True,
                                              str(payload.get("version")))
             payload["build"] = BUILD
+            payload["mates"] = STATE.mates.public()
             since = query.get("since", [""])[0]
             if since and since == payload.get("version"):
                 self._json(200, {"version": since, "unchanged": True, "state": payload.get("state"),
                                  "since": payload.get("since"), "suggestion": payload["suggestion"],
-                                 "prompt": payload["prompt"], "build": BUILD})
+                                 "prompt": payload["prompt"], "build": BUILD, "mates": payload["mates"]})
             else:
                 self._json(200, payload)
         elif parsed.path == "/api/mirror":
@@ -2510,6 +2642,30 @@ class WebHandler(BaseHTTPRequestHandler):
             self._json(200, voice_state(STATE.home, STATE.root))
         else:
             self._text(404, "not found")
+
+    def _mate_conversation(self, mate: str, since: str) -> None:
+        """A direct-line mate's own conversation, read the way the first mate's is.
+        A mate the direct line does not list now reads as gone, with the list,
+        so the page can fall back to the first mate."""
+        mates = STATE.mates.public()
+        cache = STATE.mates.cache(mate) if MATE_ID_RE.match(mate) else None
+        if cache is None:
+            self._json(200, {"mate": mate, "gone": True, "state": "offline", "items": [], "waiting": [],
+                             "note": "That mate has no direct line now.", "version": f"gone:{mate}",
+                             "build": BUILD, "mates": mates, "suggestion": "", "prompt": None})
+            return
+        try:
+            payload = cache.get()
+        except OSError as exc:
+            payload = {"state": "offline", "items": [], "waiting": [], "note": f"cannot read the conversation: {exc}",
+                       "version": "error"}
+        payload["version"] = f"{mate}:{payload.get('version')}"
+        common = {"mate": mate, "build": BUILD, "mates": mates, "suggestion": "", "prompt": None}
+        if since and since == payload["version"]:
+            self._json(200, dict(common, version=since, unchanged=True, state=payload.get("state"),
+                                 since=payload.get("since")))
+        else:
+            self._json(200, dict(payload, **common))
 
     def _worker(self, job: str) -> None:
         """Watch this worker: the worker's screen as plain lines, read-only.
@@ -2589,14 +2745,22 @@ class WebHandler(BaseHTTPRequestHandler):
             self._act(body)
             return
         try:
-            text, blobs = decode_send_body(body)
+            text, blobs, mate = decode_send_body(body)
+            to_mate = next((m for m in STATE.mates.list() if m["id"] == mate), None) if mate else None
+            if mate and to_mate is None:
+                raise ValueError("that mate has no direct line now")
             images = [save_image(STATE.home, blob) for blob in blobs]
         except ValueError as exc:
             self._json(400, {"outcome": "failed", "detail": str(exc)})
             return
+        # One send at a time, to whichever mate: a restart waits on this lock
+        # (watch_code), so no send under way loses its answer.
         with STATE.send_lock:
             try:
-                result = desk_voice_send(STATE.home, STATE.root, text, images)
+                if to_mate is not None:
+                    result = direct_line_send(STATE.home, STATE.root, to_mate, text, images)
+                else:
+                    result = desk_voice_send(STATE.home, STATE.root, text, images)
             except (OSError, subprocess.SubprocessError) as exc:
                 result = {"outcome": "failed", "detail": str(exc)}
             self._json(200 if result["outcome"] != "failed" else 502, result)
@@ -2974,6 +3138,11 @@ details.news.settled .more b{font-weight:600}
 .quiet-facs .w{color:var(--ink-2)}
 .steer-note{margin-left:auto;font-size:.8rem;color:var(--here);font-weight:600}
 .seg{display:flex;border:1px solid var(--line);border-radius:.45rem;overflow:hidden;background:var(--surface)}
+/* Who the chat talks to, in place of the pane's title, once a mate has the direct line. */
+.mate-switch[hidden]{display:none}
+.mate-switch{align-self:center}
+.mate-switch button{padding:.2rem .7rem;font-size:.875rem;white-space:nowrap}
+.has-mates .pane-head h2{display:none}
 .seg button{border:0;background:none;padding:.1rem .56rem;font-size:.8rem;color:var(--ink-2)}
 .seg button[aria-pressed="true"]{background:var(--here-bg);color:var(--ink);font-weight:600}
 .job{margin-top:.45rem;border-radius:.625rem;background:var(--surface-2);padding:.5rem .7rem}
@@ -3852,12 +4021,53 @@ function drawAsking(){
   stateEl.classList.toggle('asks',!!ask);
   if(ask)stateEl.querySelector('.label').textContent='Waiting for you';
 }
+/* Who the chat talks to: '' is the first mate, else a local second mate with
+   the direct line on, which the server lists with every reading. The choice
+   is kept in this browser; a mate no longer listed shows the first mate. */
+const MATE_KEY='fm-web-mate';
+let wanted='';try{wanted=window.localStorage.getItem(MATE_KEY)||'';}catch(e){}
+let mates=[],matesKey='',talkTo=wanted,pollTimer=0,polling=false;
+function mateName(){const m=mates.find(x=>x.id===talkTo);return m?m.label:'First mate';}
+function placeholder(){return talkTo?'Message '+mateName():PLACEHOLDER;}
+function drawMates(list){
+  if(!Array.isArray(list))return;
+  const key=JSON.stringify(list);
+  if(key!==matesKey){
+    matesKey=key;mates=list;
+    const box=$('mateSwitch');
+    box.replaceChildren.apply(box,mates.length?[{id:'',label:'First mate'}].concat(mates).map(m=>{
+      const b=el('button','',m.label);b.type='button';b.dataset.mate=m.id;return b;}):[]);
+    box.hidden=!mates.length;$('chatPane').classList.toggle('has-mates',!!mates.length);
+  }
+  const next=mates.some(m=>m.id===wanted)?wanted:'';
+  if(next!==talkTo)switchTo(next);else markMates();
+}
+function markMates(){
+  $('mateSwitch').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.mate===talkTo?'true':'false'));
+  input.placeholder=suggestion||placeholder();
+}
+function switchTo(id){
+  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';
+  render(shown);renderWaiting();$('note').textContent='';$('older').hidden=true;
+  result.className='';result.textContent='';input.classList.remove('suggested');
+  setState('offline');stateEl.querySelector('.label').textContent='Connecting';drawLive();markMates();
+  if(!polling){clearTimeout(pollTimer);pollTimer=setTimeout(poll,0);}
+}
+$('mateSwitch').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b||b.dataset.mate===talkTo)return;
+  wanted=b.dataset.mate;
+  try{if(wanted)window.localStorage.setItem(MATE_KEY,wanted);else window.localStorage.removeItem(MATE_KEY);}catch(e){}
+  switchTo(wanted);input.focus();
+});
 async function poll(){
+  clearTimeout(pollTimer);polling=true;
+  const asked=talkTo;
   try{
-    const r=await fetch('/api/conversation?since='+encodeURIComponent(version),{credentials:'same-origin'});
+    const r=await fetch('/api/conversation?since='+encodeURIComponent(version)+(asked?'&mate='+encodeURIComponent(asked):''),
+      {credentials:'same-origin'});
     if(r.ok){
       const data=await r.json();
-      if(!data.unchanged){
+      if(asked===talkTo&&!data.unchanged){
         version=data.version||'';
         shown=data.items||[];
         render(shown);
@@ -3866,17 +4076,21 @@ async function poll(){
         $('note').textContent=data.note||'';
         $('older').hidden=!data.older;
       }
-      asking=data.prompt||null;
-      setState(data.state||'offline',data.since);drawLive();drawWaiting();
-      suggest(data.suggestion||'');
+      if(asked===talkTo){
+        asking=data.prompt||null;
+        setState(data.state||'offline',data.since);drawLive();drawWaiting();
+        suggest(data.suggestion||'');
+      }
       if(data.build&&BUILD&&data.build!==BUILD)reloadWhenFree();
+      drawMates(data.mates);
     }
-  }catch(e){asking=null;setState('offline');drawLive();}
-  setTimeout(poll,document.hidden?6000:1500);
+  }catch(e){if(asked===talkTo){asking=null;setState('offline');drawLive();}}
+  polling=false;
+  pollTimer=setTimeout(poll,asked!==talkTo?0:document.hidden?6000:1500);
 }
 function suggest(text){
   suggestion=text;
-  input.placeholder=text||PLACEHOLDER;
+  input.placeholder=text||placeholder();
   input.classList.toggle('suggested',!!text);
 }
 /* The server now runs newer code (a Starship update restarted it): load the
@@ -3900,7 +4114,8 @@ async function send(){
   sending=true;sendBtn.disabled=true;result.className='';result.textContent='Sending…';
   try{
     const r=await fetch('/api/send',{method:'POST',credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({text:text,images:images})});
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},
+      body:JSON.stringify(talkTo?{text:text,images:images,mate:talkTo}:{text:text,images:images})});
     let data={};try{data=await r.json();}catch(e){}
     if(r.ok){input.value='';images=[];drawThumbs();autosize();result.textContent=data.detail||'Sent.';}
     else{result.className='failed';result.textContent=data.detail||('Not sent ('+r.status+')');}
@@ -4755,6 +4970,7 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 <main class="main" id="home" data-side="projects">
 <section class="pane" id="chatPane" aria-label="Firstmate">
 <div class="pane-head"><h2>Firstmate</h2>
+<div class="seg mate-switch" id="mateSwitch" role="group" aria-label="Who you talk to" hidden></div>
 <span id="state" class="state offline"><span class="label">Connecting</span></span></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
