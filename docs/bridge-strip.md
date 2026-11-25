@@ -111,7 +111,7 @@ A strip covers the width of the pane it was opened above, because Herdr has no s
 
 On a narrow pane it drops words before lamps: the wordmark loses its letter spacing, the lamp words shorten to `decision` or `decisions` and `to merge`, then only the numbers remain.
 A low battery and the red alert are never dropped while anything else is shown.
-The most urgent call and the night shift only use the columns left over, so they never change how the rest of the row narrows: the call first, cut short with `...` before it is left out, then the night shift when it fits whole.
+The most urgent call and the night shift only use the columns left over, so they never change how the rest of the row narrows: the call first, cut short with `...` before it is left out, and cut further to leave room for `+ Factories` while the Factory pane is kept hidden, as long as the call keeps 12 columns; then the night shift when it fits whole.
 
 ## Verification
 
