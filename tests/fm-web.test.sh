@@ -1543,7 +1543,7 @@ S.save(storage, { text: 3, style: 'lively', theme: 'dark', motion: 'less', keys:
 out.push('next visit: ' + JSON.stringify(S.load(storage)));
 const el = page();
 S.apply(el, S.load(storage));
-out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(el.style.props) + ' ' + JSON.stringify(el.attrs));
+out.push('on the page: ' + el.style.fontSize + ' ' + JSON.stringify(['--wrap', '--split', '--bg'].map(k => el.style.props[k])) + ' ' + JSON.stringify(el.attrs));
 S.save(storage, { text: 99, style: 'neon', theme: 'dark', motion: 'less', keys: 'maybe', split: 5 });
 out.push('a bad value: ' + JSON.stringify(S.load(storage)));
 kept[S.KEY] = '{not json';
@@ -1554,13 +1554,13 @@ out.push('chat width: ' + S.TEXT_NAMES.map((name, text) => { const p = page(); S
 console.log(out.join('\n'));
 JS
 ) || fail "the settings script did not run: $out"
-  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
-after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"colours":"default","custom":null}
-next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"colours":"default","custom":null}
-on the page: 120% {"--wrap":"48rem","--split":"0.4"} {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide","data-colours":"default"}
-a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"colours":"default","custom":null}
-unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
-no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null} 0
+  assert_equals "$out" 'first visit: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"paper","custom":null}
+after the first version: {"text":2,"style":"lively","theme":"dark","motion":"less","keys":"show","split":0.55,"colours":"paper","custom":null}
+next visit: {"text":3,"style":"lively","theme":"dark","motion":"less","keys":"hide","split":0.4,"colours":"paper","custom":null}
+on the page: 120% ["48rem","0.4","#1f1c18"] {"data-style":"lively","data-theme":"dark","data-motion":"less","data-keys":"hide","data-colours":"paper"}
+a bad value: {"text":2,"style":"calm","theme":"dark","motion":"less","keys":"show","split":0.75,"colours":"paper","custom":null}
+unreadable: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"paper","custom":null}
+no storage: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"paper","custom":null} 0
 sizes: 80 90 100 120 145 | Smaller Small Normal Large Largest | starts on Normal
 chat width: Smaller 60rem, Small 53.33rem, Normal 48rem, Large 48rem, Largest 48rem' "the settings a browser keeps and what they put on the page"
   pass "settings start on normal text in the middle, keep the look from the first version, the key hints and the panel size, drop a size kept for a panel that is gone, and smaller text widens the chat"
@@ -1568,7 +1568,7 @@ chat width: Smaller 60rem, Small 53.33rem, Normal 48rem, Large 48rem, Largest 48
 
 # The colour schemes: the settings script, fetched as the browser fetches it,
 # puts a scheme's light or dark on the page, keeps custom colours for each
-# apart, takes them all off for Default, and never shows text too faint to read.
+# apart, starts on Paper, takes them all off for Plain, and never shows text too faint to read.
 test_colours_are_kept_and_kept_readable() {
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
   local home out
@@ -1590,8 +1590,12 @@ S.apply(el, S.load(storage), true);
 out.push('slate, auto, dark computer: ' + wears(el) + ' ' + el.style.props['color-scheme']);
 S.apply(el, S.save(storage, { colours: 'slate', theme: 'light' }), true);
 out.push('slate, light chosen, dark computer: ' + wears(el));
-S.apply(el, S.save(storage, { colours: 'default' }), true);
-out.push('back to default: ' + JSON.stringify(el.style.props));
+S.apply(el, S.save(storage, { colours: 'plain' }), true);
+out.push('plain: ' + JSON.stringify(el.style.props));
+S.apply(el, S.load(null), false);
+out.push('a first visit: ' + wears(el) + ' ' + el.attrs['data-colours']);
+kept[S.KEY] = JSON.stringify({ text: 3, colours: 'default' });
+out.push('kept from before Paper was the default: ' + S.load(storage).colours + ', text ' + S.load(storage).text);
 const custom = { light: { accent: '#AA3300', bg: '#fff8e0', ink: '#202020' }, dark: null };
 S.apply(el, S.save(storage, { colours: 'custom', custom }), false);
 out.push('custom in light: ' + wears(el) + ' kept ' + JSON.stringify(S.load(storage).custom));
@@ -1627,10 +1631,12 @@ JS
   assert_equals "$out" 'slate, auto, light computer: #e6e8ee #4a5ba8 #22252e slate
 slate, auto, dark computer: #14161c #a3b1f0 #e6e8ef dark
 slate, light chosen, dark computer: #e6e8ee #4a5ba8 #22252e
-back to default: {"--wrap":"48rem","--split":"0.55"}
+plain: {"--wrap":"48rem","--split":"0.55"}
+a first visit: #f4ecdc #2f5f7a #2b2620 paper
+kept from before Paper was the default: paper, text 3
 custom in light: #fff8e0 #aa3300 #202020 kept {"light":{"accent":"#aa3300","bg":"#fff8e0","ink":"#202020"},"dark":null}
 custom in dark, none picked there: - - -
-bad colours: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"default","custom":null}
+bad colours: {"text":2,"style":"calm","theme":"auto","motion":"auto","keys":"show","split":0.55,"colours":"paper","custom":null}
 faint picks: nudged ink,accent, text #727272, accent #80761e
 faint picks now read at least: true
 wcag: black on white 21, #777777 on white 4.48, #767676 on white 4.54, AA 4.5
@@ -1644,7 +1650,7 @@ own colours: {"accent":"#47707f","bg":"#ece8e1","ink":"#2a2a28"}, scheme put bac
   assert_contains "$out" 'type="color" id="pickBg"' "a background picker"
   assert_contains "$out" 'type="color" id="pickInk"' "a text picker"
   assert_contains "$out" '>Back to default<' "and one way back"
-  pass "a colour scheme wears its own light and dark, custom colours are kept for each apart, Default takes them all off, and text too faint to read is moved to the nearest readable shade"
+  pass "a colour scheme wears its own light and dark, custom colours are kept for each apart, a first visit starts on Paper, Plain takes them all off, and text too faint to read is moved to the nearest readable shade"
 }
 
 # The page's rules, fetched as the browser fetches them and run without a page:

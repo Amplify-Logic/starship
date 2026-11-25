@@ -682,6 +682,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/house-style.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/jev-guards.md",
       "audience": "maintainer-architecture"
     },

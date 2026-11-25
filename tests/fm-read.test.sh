@@ -137,6 +137,10 @@ assert_contains "$(cat "$out")" '<h1 id="explicit-heading">Explicit heading</h1>
 [ ! -e "$LOG" ] || fail "--no-open launched Lavish"
 pass "explicit paths render headings and --no-open does not launch"
 
+page=$(cat "$out")
+assert_contains "$page" "$(cat "$ROOT/assets/house-style/paper.css")" "a report page did not wear the house style pack"
+pass "a report page wears the paper house style"
+
 edge_out=$(cd "$TMP_ROOT" && FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_LAVISH_BIN="$FAKEBIN/lavish-axi" FM_READ_TEST_LOG="$LOG" \
   "$READ" --no-open edge.md)

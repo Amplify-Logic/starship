@@ -1180,6 +1180,32 @@ test_scout_brief_asks_for_a_page_beside_its_report() {
   pass "fm-brief.sh: a scout writes a page presenting its report, and a ship brief is unchanged"
 }
 
+# Every home's briefs carry the house-style writing rule, so no home pastes it in.
+test_briefs_carry_the_house_style_writing_rule() {
+  local home scout ship local_ship rule
+  home="$TMP_ROOT/house-style-home"
+  mkdir -p "$home/data"
+  rule="for a person, as \`$ROOT/docs/house-style.md\` sets out: open with a short plain-words summary they can take in within about a minute"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" style-look sample --scout >/dev/null 2>&1 || fail "scout scaffold failed"
+  scout="$home/data/style-look/brief.md"
+  assert_grep "Write it $rule" "$scout" "scout brief did not carry the writing rule"
+  assert_grep "list any decisions as a short numbered list with a recommendation for each" "$scout" \
+    "scout brief did not ask for decisions with a recommendation each"
+  assert_grep "pasting \`$ROOT/assets/house-style/paper.css\` into it" "$scout" "scout page was not built on the style pack"
+  [ -f "$ROOT/docs/house-style.md" ] && [ -f "$ROOT/assets/house-style/paper.css" ] && [ -f "$ROOT/assets/house-style/template.html" ] \
+    || fail "a brief named a house-style file that does not exist"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" style-fix sample --mode no-mistakes >/dev/null 2>&1 || fail "ship scaffold failed"
+  ship="$home/data/style-fix/brief.md"
+  assert_grep "Whenever you write PR text yourself, write it $rule" "$ship" "ship brief did not carry the writing rule for PR text"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" style-local sample --mode local-only >/dev/null 2>&1 || fail "local-only scaffold failed"
+  local_ship="$home/data/style-local/brief.md"
+  assert_no_grep "write PR text yourself" "$local_ship" "a local-only brief, which opens no PR, asked for PR text"
+  pass "fm-brief.sh: scout and PR-opening ship briefs carry the house-style writing rule"
+}
+
 # A scout brief offers the Lavish review loop for every compatible board version,
 # including older builds that use the legacy reply path.
 test_scout_lavish_line_follows_presentation_floor() {
@@ -1947,6 +1973,7 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
 test_scout_brief_asks_for_a_page_beside_its_report
+test_briefs_carry_the_house_style_writing_rule
 test_scout_lavish_line_follows_presentation_floor
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns

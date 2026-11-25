@@ -1,5 +1,8 @@
 # Starship: what it must never become
 
+Simplicity and readability are founding principles: as simple as the job allows, and written so anyone understands it on the first read.
+They hold in every home, not as one person's preference ([house-style.md](house-style.md)).
+
 1. Something that acts outward without your word.
    No sending, posting, paying or merging a failing change unless you said so.
 2. A dark factory.
@@ -17,3 +20,4 @@
    As complex as it needs to be, but simple enough that it works.
 8. Something you have to learn to understand.
    It talks in outcomes, not internals.
+   Every report and finding opens in plain words you can take in within a minute.

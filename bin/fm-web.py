@@ -3198,9 +3198,10 @@ SETTINGS_JS = r"""
   /* Where each divider sits, as the share the first panel takes, and how far it may go. */
   var SPLITS = { split: [0.25, 0.75] };
   /* The ready-made colour schemes, each an accent, a background and a text
-     colour for light and for dark. Default is the page's own colours, with
-     nothing put over them; Custom is the person's own three, kept for light
-     and for dark apart. */
+     colour for light and for dark. Paper, Starship's house style
+     (docs/house-style.md), is the default; Plain is the page's own colours,
+     with nothing put over them; Custom is the person's own three, kept for
+     light and for dark apart. */
   var SCHEMES = {
     sea: { name: 'Sea', light: { accent: '#1f6a85', bg: '#e3edf0', ink: '#15303a' },
            dark: { accent: '#7fc8e0', bg: '#0f1d23', ink: '#e2eef2' } },
@@ -3213,13 +3214,13 @@ SETTINGS_JS = r"""
     paper: { name: 'Paper', light: { accent: '#2f5f7a', bg: '#f4ecdc', ink: '#2b2620' },
              dark: { accent: '#8fb8cf', bg: '#1f1c18', ink: '#ece3d1' } }
   };
-  var COLOURS = ['default'].concat(Object.keys(SCHEMES), ['custom']);
+  var COLOURS = ['plain'].concat(Object.keys(SCHEMES), ['custom']);
   var PICKS = ['accent', 'bg', 'ink'];
   /* Text, and the accent, must reach this contrast on every background they
      sit on (the usual 4.5 to 1 for readable text). */
   var READABLE = 4.5;
   var DEFAULTS = { text: 2, style: 'calm', theme: 'auto', motion: 'auto', keys: 'show', split: 0.55,
-                   colours: 'default', custom: null };
+                   colours: 'paper', custom: null };
   var CHOICES = { style: ['calm', 'lively'], theme: ['auto', 'light', 'dark'], motion: ['auto', 'less'],
                   keys: ['show', 'hide'], colours: COLOURS };
 
@@ -4527,14 +4528,14 @@ function systemDark(){return !!(dim&&dim.matches);}
 function put(next){return FS.apply(document.documentElement,next,systemDark());}
 /* Colours: one button per scheme, painted in the light or dark the page shows now. */
 {const box=$('schemes');
-  ['default'].concat(Object.keys(FS.SCHEMES),['custom']).forEach(name=>{
+  ['plain'].concat(Object.keys(FS.SCHEMES),['custom']).forEach(name=>{
     const b=el('button');b.type='button';b.dataset.set='colours';b.dataset.value=name;
     const sw=el('span','sw'+(name==='custom'?' own':''));sw.setAttribute('aria-hidden','true');
     if(name!=='custom')for(let i=0;i<3;i++)sw.appendChild(el('i'));
-    add(b,sw,el('span','',name==='default'?'Default':name==='custom'?'Custom':FS.SCHEMES[name].name));
+    add(b,sw,el('span','',name==='plain'?'Plain':name==='custom'?'Custom':FS.SCHEMES[name].name));
     box.appendChild(b);});}
 const PICKERS={accent:'pickAccent',bg:'pickBg',ink:'pickInk'};
-/* The page's own colours, for Default's swatch and for a picker with nothing kept yet to start from. */
+/* The page's own colours, for Plain's swatch and for a picker with nothing kept yet to start from. */
 function own(){return FS.own(document.documentElement).picks||{accent:'#47707f',bg:'#ece8e1',ink:'#2a2a28'};}
 function mode(){return FS.isDark(settings,systemDark())?'dark':'light';}
 function colourNote(nudged){
@@ -4546,7 +4547,7 @@ function colourNote(nudged){
 function drawColours(){
   const dark=mode()==='dark';
   document.querySelectorAll('#schemes button').forEach(b=>{
-    const picks=b.dataset.value==='default'?own():FS.SCHEMES[b.dataset.value]?FS.SCHEMES[b.dataset.value][mode()]:null;
+    const picks=b.dataset.value==='plain'?own():FS.SCHEMES[b.dataset.value]?FS.SCHEMES[b.dataset.value][mode()]:null;
     if(!picks)return;const is=b.querySelectorAll('.sw i');
     ['bg','ink','accent'].forEach((k,i)=>{is[i].style.background=picks[k];});});
   const custom=settings.colours==='custom';$('pickers').hidden=!custom;
@@ -4589,7 +4590,7 @@ function pick(input,keep){
 }
 Object.keys(PICKERS).forEach(k=>{const input=$(PICKERS[k]);
   input.addEventListener('input',()=>pick(input,false));input.addEventListener('change',()=>pick(input,true));});
-$('colourReset').addEventListener('click',()=>{$('colourNote').textContent='';changeAll({colours:'default',custom:null});});
+$('colourReset').addEventListener('click',()=>{$('colourNote').textContent='';changeAll({colours:FS.DEFAULTS.colours,custom:null});});
 if(dim&&dim.addEventListener)dim.addEventListener('change',()=>{settings=put(settings);drawSettings();});
 /* ---- voice: the home's, through /api/voice ---- */
 function drawVoice(v){

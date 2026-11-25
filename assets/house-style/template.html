@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open calls</title>
+<!-- Starship house style. Paste paper.css in here so the page stands alone. -->
+<link rel="stylesheet" href="paper.css">
+</head>
+<body>
+<main class="page">
+<header>
+  <p class="kicker">Starship &middot; for a date</p>
+  <h1>The open calls, for YOU and TEAM</h1>
+  <p class="lede">Three questions are open. One blocks the next release, so it comes first. The other two can wait a week.</p>
+  <button class="theme-toggle" type="button" id="themeToggle">Switch to light paper</button>
+</header>
+
+<ol class="rows" aria-label="The calls in order">
+  <li><span class="num">1</span><a href="#one">The first question, in plain words <span class="blocks">&middot; blocks the release</span></a><span class="who">You</span></li>
+  <li><span class="num">2</span><a href="#two">The second question</a><span class="who">Team</span></li>
+  <li><span class="num">3</span><a href="#three">The third question</a><span class="who">Both</span></li>
+</ol>
+
+<hr class="rule">
+
+<section id="one">
+  <h2><span class="num">1</span> The first question, in plain words</h2>
+  <h3>Why it matters</h3>
+  <p class="why">One or two short sentences on what happens if nobody decides.</p>
+  <div class="recommend"><p><strong>We suggest the first option.</strong> One sentence on why.</p></div>
+  <details>
+    <summary>How we know</summary>
+    <p>Evidence, tables and detail go here, below the summary.</p>
+  </details>
+</section>
+
+<section id="two">
+  <h2><span class="num">2</span> The second question</h2>
+  <p>A short paragraph.</p>
+</section>
+
+<section id="three">
+  <h2><span class="num">3</span> The third question</h2>
+  <p>A short paragraph.</p>
+</section>
+
+<h2>What we chose</h2>
+<ul class="choices">
+  <li>1. The first question: <span class="open">still open</span></li>
+  <li>2. The second question: <span class="open">still open</span></li>
+  <li>3. The third question: <span class="open">still open</span></li>
+</ul>
+</main>
+<script>
+(function () {
+  var root = document.documentElement;
+  var toggle = document.getElementById("themeToggle");
+  function dark() {
+    var set = root.getAttribute("data-theme");
+    if (set) return set === "dark";
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function label() { toggle.textContent = dark() ? "Switch to light paper" : "Switch to dark paper"; }
+  label();
+  toggle.addEventListener("click", function () {
+    root.setAttribute("data-theme", dark() ? "light" : "dark");
+    label();
+  });
+})();
+</script>
+</body>
+</html>

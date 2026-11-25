@@ -270,21 +270,14 @@ function render(markdown) {
   return renderBlocks(markdown, new Set());
 }
 
-const css = `
-:root{--ink:#f2efe9;--dim:#a9a394;--line:#2b2f3a;--bg:#0e1116;--card:#161a22;--accent:#7aa7ff}
-@media (prefers-color-scheme:light){:root{--ink:#1a1c20;--dim:#5d6470;--line:#e2dfd8;--bg:#fbfaf7;--card:#fff;--accent:#2f5fd0}}
-:root[data-theme="dark"]{--ink:#f2efe9;--dim:#a9a394;--line:#2b2f3a;--bg:#0e1116;--card:#161a22;--accent:#7aa7ff}
-:root[data-theme="light"]{--ink:#1a1c20;--dim:#5d6470;--line:#e2dfd8;--bg:#fbfaf7;--card:#fff;--accent:#2f5fd0}
-*{box-sizing:border-box}html{overflow-x:hidden}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;overflow-wrap:anywhere}
-main{max-width:820px;margin:0 auto;padding:52px 24px 110px;min-width:0}h1,h2,h3,h4,h5,h6{line-height:1.34;padding-bottom:4px}
-h1{font-size:2.3rem;letter-spacing:-.4px;margin:0 0 22px}h2{font-size:1.5rem;margin:46px 0 12px;letter-spacing:-.2px;border-bottom:1px solid var(--line);padding-top:6px}
-h3{font-size:1.14rem;margin:30px 0 8px}h4,h5,h6{font-size:1rem;margin:22px 0 6px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
-p,li{max-width:74ch}p{margin:0 0 15px}ul,ol{padding-left:22px;margin:0 0 15px}li{margin-bottom:7px}li>ul,li>ol{margin:7px 0 0}strong{font-weight:680}a{color:var(--accent)}
-hr{border:0;border-top:1px solid var(--line);margin:40px 0}blockquote{margin:16px 0;padding:2px 0 2px 18px;border-left:3px solid var(--accent);color:var(--dim)}
-code{background:rgba(127,127,127,.16);padding:1px 6px;border-radius:5px;font-size:.87em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
-pre{max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:15px 17px;overflow-x:auto;margin:16px 0;line-height:1.55}pre code{background:none;padding:0;font-size:.85rem;word-break:normal}
-.tw{max-width:100%;overflow-x:auto;margin:18px 0;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:420px;font-size:.95rem}
-th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--line);vertical-align:top}th{background:rgba(127,127,127,.09);font-size:.79rem;text-transform:uppercase;letter-spacing:.5px;color:var(--dim)}tr:last-child td{border-bottom:0}img{max-width:100%;height:auto}
+// The page wears Starship's house style (docs/house-style.md): the paper
+// pack's own stylesheet, plus the few rules a rendered report needs beyond it.
+const PAPER_CSS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets", "house-style", "paper.css");
+const reportCss = `
+main{max-width:44rem;margin:0 auto;padding:2.5rem 16px 4rem;min-width:0}
+h1{margin:0 0 1.2rem}h2{padding-bottom:4px;border-bottom:1px solid var(--rule)}h4,h5,h6{font-size:1rem;margin:1.2rem 0 .4rem;color:var(--ink-soft)}
+ul,ol{padding-left:1.4rem;margin:0 0 .8rem}li{margin-bottom:.35rem}li>ul,li>ol{margin:.35rem 0 0}strong{font-weight:600}
+.tw{max-width:100%;overflow-x:auto;margin:1.1rem 0}table{min-width:420px}
 `;
 export { render };
 
@@ -307,7 +300,7 @@ function main(...args) {
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
     const digest = crypto.createHash("sha256").update(sources.join("\n")).digest("hex").slice(0, 10);
     const title = escapeHtml(label.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()));
-    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${css}</style></head><body><main>\n${body}\n</main></body></html>\n`;
+    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${fs.readFileSync(PAPER_CSS, "utf8")}${reportCss}</style></head><body><main>\n${body}\n</main></body></html>\n`;
     const outputDir = path.resolve(outputDirArg);
     const output = path.join(outputDir, `read-${slug}-${digest}.html`);
     fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
