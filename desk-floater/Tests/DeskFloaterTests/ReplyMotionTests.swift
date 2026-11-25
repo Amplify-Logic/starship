@@ -457,13 +457,24 @@ extension ReplyMotionTests {
 /// The floater's three windows (Talk and Show, the reply card, and the
 /// card's halo) each hold their SwiftUI view inside a plain content view.
 ///
-/// A hosting view that is itself a window's content view recomputes the
-/// window's size limits from inside AppKit's constraint pass
-/// (NSHostingView.updateWindowContentSizeExtremaIfNecessary, which returns at
-/// once for any other view). When a reply arrived or the status line changed,
-/// that recomputation found the window resized and asked for another pass,
-/// and AppKit stops the app once a window has had more passes in a row than
-/// it has views: two here. Every crash report ended there.
+/// This test checks the arrangement the fix depends on. It does not
+/// reproduce the crash, and no test here can: a live on-screen run of the
+/// real floater views took 63 replies on the old code, 21 on an earlier
+/// attempt and 56 on this fix without any crash, and a hidden virtual display
+/// run took 28 replies on each build without one. A behavioural test would
+/// pass on the old code too, so it would prove nothing.
+///
+/// The evidence for the cause: five crash reports from 24 and 25 Nov, each an
+/// exception from +[NSApplication _crashOnException:] inside
+/// _NSViewUpdateConstraints, thrown from NSHostingView.updateConstraints ->
+/// updateWindowContentSizeExtremaIfNecessary -> updateGraph ->
+/// setProposedSize -> requestUpdate -> setNeedsUpdateConstraints.
+/// updateWindowContentSizeExtremaIfNecessary returns at once unless the
+/// hosting view is its window's content view, so with each hosting view
+/// inside a plain content view that path cannot run.
+///
+/// The field check is that no new DeskFloater crash reports appear over the
+/// next days.
 extension ReplyMotionTests {
     @MainActor
     func testNoWindowHasAHostingViewAsItsContentView() throws {
