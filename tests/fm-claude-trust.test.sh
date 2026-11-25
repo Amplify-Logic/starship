@@ -649,6 +649,8 @@ test_refused_spawn_leaves_no_task_state() {
   assert_contains "$out" "workspace trust" "the spawn did not report the trust refusal"
   [ ! -e "$home/state/$id.busy-state" ] \
     || fail "a refused spawn stranded a busy record nothing can clear"
+  [ ! -e "$home/state/$id.inbox" ] \
+    || fail "a refused spawn stranded an empty task inbox"
   [ ! -e "$home/state/$id.busy-gen" ] \
     || fail "a refused spawn stranded a busy generation nothing can clear"
   [ ! -e "/tmp/fm-$id" ] \
@@ -665,6 +667,63 @@ claude_launch_doorbell() {  # <launch command>
     eval "set -- $command"
     printf '%s' "${!#}"
   )
+}
+
+# assert_launch_add_dirs_trusted <launch log> <store> <count>: every --add-dir
+# the launch really passes is registered, since Claude gates each of them.
+assert_launch_add_dirs_trusted() {
+  local command dir n=0
+  command=$(fm_test_launch_command "$(cat "$1")")
+  while IFS= read -r dir; do
+    n=$((n + 1))
+    assert_trusted "$2" "$dir" "the launch passes --add-dir $dir without registering its trust"
+  done < <(
+    eval "set -- $command"
+    while [ "$#" -gt 1 ]; do
+      [ "$1" != --add-dir ] || printf '%s\n' "$2"
+      shift
+    done
+  )
+  [ "$n" = "$3" ] || fail "expected $3 --add-dir directories on the launch, found $n"
+}
+
+test_add_dirs_get_their_own_trust_only_entries() {
+  local rec out channel
+  rec=$(make_case add-dirs)
+  read_case "$rec"
+  channel="$CASE_DIR/home/state/operational-inbox"
+  mkdir -p "$channel" "$CASE_DIR/home/data/task one"
+  fm_git_init_commit "$CASE_DIR/home"
+  printf '{"projects":{"%s":{"hasTrustDialogAccepted":false,"hasClaudeMdExternalIncludesApproved":false,"hasClaudeMdExternalIncludesWarningShown":true}}}' \
+    "$channel" > "$CONFIG/.claude.json"
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" \
+    --add-dir "$channel" --add-dir "$CASE_DIR/home/data/task one" 2>&1)
+  expect_code 0 $? "task-channel add-dirs must be trusted: $out"
+  assert_trusted "$CONFIG/.claude.json" "$WT" "the worktree was not trusted beside its add-dirs"
+  assert_trusted "$CONFIG/.claude.json" "$channel" "the add-dir was not trusted"
+  assert_trusted "$CONFIG/.claude.json" "$CASE_DIR/home/data/task one" "the second add-dir was not trusted"
+  assert_not_trusted "$CONFIG/.claude.json" "$CASE_DIR/home" "the add-dirs' whole repository was trusted"
+  assert_store_value "$CONFIG/.claude.json" false "an add-dir's imports decline was flipped" \
+    projects "$channel" hasClaudeMdExternalIncludesApproved
+  pass "fm-claude-trust.sh: each add-dir gets its own trust-only entry"
+}
+
+test_out_of_scope_add_dirs_are_refused() {
+  local rec out dir
+  rec=$(make_case add-dir-refusals)
+  read_case "$rec"
+  mkdir -p "$CASE_DIR/user-home/sub"
+  for dir in / /etc "$CASE_DIR/missing" "$CASE_DIR/user-home" "$CASE_DIR" "$CONFIG" "$WT" "$PROJ"; do
+    # Root owns /etc, which would make the ownership row vacuous.
+    [ "$dir" != /etc ] || [ "$(id -u)" != 0 ] || continue
+    out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CASE_DIR/user-home" "$TRUST" "$WT" "$PROJ" --add-dir "$dir" 2>&1)
+    expect_code 1 $? "add-dir $dir must be refused: $out"
+    assert_contains "$out" "add-dir" "the refusal did not name the add-dir"
+    assert_absent "$CONFIG/.claude.json" "a refused add-dir left a registration behind"
+  done
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" --add-dir 2>&1)
+  expect_code 2 $? "an add-dir flag with no value must be a usage error: $out"
+  pass "fm-claude-trust.sh: refuses add-dirs wider than a task channel"
 }
 
 # A spawn over a standing project-entry decline still launches, and the note
@@ -720,6 +779,9 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   assert_trusted "$config/.claude.json" "$wt" \
     "the claude spawn did not pre-register trust for its worktree"
   assert_present "$launch_log" "the claude spawn sent no launch command"
+  assert_launch_add_dirs_trusted "$launch_log" "$config/.claude.json" 4
+  assert_not_trusted "$config/.claude.json" "$(cd "$home" && pwd -P)" \
+    "the claude spawn trusted the whole home instead of its add-dirs"
   assert_grep 'claude --dangerously-skip-permissions' "$launch_log" \
     "the launch command was not the claude worker launch"
   launch=$(cat "$launch_log")
@@ -752,6 +814,7 @@ test_secondmate_standalone_clone_home_is_trusted() {
   assert_trusted "$case_dir/claude-config/.claude.json" "$home" \
     "the claude secondmate spawn did not pre-register trust for its standalone-clone home"
   assert_present "$case_dir/launch.log" "the claude secondmate spawn sent no launch command"
+  assert_launch_add_dirs_trusted "$case_dir/launch.log" "$case_dir/claude-config/.claude.json" 1
   assert_grep 'claude --dangerously-skip-permissions' "$case_dir/launch.log" \
     "the launch command was not the claude secondmate launch"
   launch=$(cat "$case_dir/launch.log")
@@ -924,6 +987,8 @@ test_symlinked_store_to_an_owned_target_is_accepted
 test_corrupt_store_fails_closed
 test_missing_node_is_refused
 test_scope_refusal_stays_fail_closed_without_node
+test_add_dirs_get_their_own_trust_only_entries
+test_out_of_scope_add_dirs_are_refused
 test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief
 test_claude_spawn_passes_the_standing_decline_note_through
 test_refused_spawn_leaves_no_task_state
