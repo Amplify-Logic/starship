@@ -165,7 +165,8 @@
 #   you <words>: <what>     pending handoff to firstmate
 #   dig <words>             pending investigation by firstmate
 #   add <words>             a new line of the captain's own, at the end of
-#                           his Today list; on a row, `add` alone puts that row there
+#                           his Today list; on a row, `add` alone puts that row there;
+#                           `add <words> first` makes it and puts it at the top
 #   first <words>, <words> first
 #                           that Today line (else that open line) to the top
 #                           of the Today list; on a row, `first` alone
