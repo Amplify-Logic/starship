@@ -12,7 +12,9 @@
 # NO model call, opens no network connection and reads no source system. Each
 # render first runs `bin/fm-todo.sh sync`, which folds the channel ledger, the
 # morning sidecar and the captain-held backlog into data/todo, and then writes
-# .lavish/today-<YYYY-MM-DD>.html from those item records alone. bin/fm-todo.sh
+# two pages from those item records alone: the calm front page
+# .lavish/today-<YYYY-MM-DD>.html and the back room beside it,
+# today-<YYYY-MM-DD>-all.html, each linking to the other. bin/fm-todo.sh
 # owns the item record, identity, verification, reopening and page commands.
 # Running it twice over unchanged records at the same minute produces the same
 # bytes, which is what lets each channel intake pass refresh the page.
@@ -22,7 +24,31 @@
 # `daily-todo-freshness` contract - the verification half stays with the
 # orchestrator that records each re-read with `fm-todo.sh verify`.
 #
-# PAGE SHAPE. One "Needs you now" list of every open decision, approval and
+# THE FRONT PAGE. A header with the day and one "All checked at <time>" line
+# (the latest sweep or intake pass today), then at most these, each a short
+# list of one-line rows that open the same note box on a click:
+#   - Needs you now: at most three lines, shown only when one qualifies. A line
+#     rises only when it was re-checked at its source today and is a partner-
+#     or customer-facing outage (a machine down), a deadline or meeting ending
+#     later today, or a partner or customer awaiting the captain's reply for
+#     more than one working day; in that order, then the oldest, earliest end
+#     or longest wait first. A colleague ask never rises.
+#   - Today: the captain's own list, numbered, in his order (bin/fm-todo.sh
+#     owns the Today list), with one box to queue "add X" or "X first".
+#   - Partners waiting on you, then Colleagues asking you: the other open
+#     asks re-checked in the last day, oldest first, ten at most between them.
+#   - Later this week: up to five asks ending after today and within the week.
+# Then one line counting what is left out (more waiting, lines not re-checked
+# in the last day, and Firstmate's own questions - held decisions and tooling
+# approvals, which are asked in chat), and "N closed today, M more in the back
+# room" with its link; a line that went quiet (bin/fm-todo.sh) is not counted
+# as closed there. A row carries no badge, icon or read time: only its title,
+# one context line, its link, its ask date and a flag when it was not
+# re-checked in the last day. A line on the Today list is never shown twice.
+#
+# THE BACK ROOM keeps everything, in the shape below, with a link back.
+#
+# PAGE SHAPE (the back room). One "Needs you now" list of every open decision, approval and
 # reply, in action order: first a live problem (class outage), then a partner-
 # or customer-facing ask awaiting the captain (`partner_first`), then any other
 # partner- or customer-facing ask (even one also due today), then a hard
@@ -299,21 +325,29 @@ $(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-addon.sh" hooks todo-page 2>/dev/null || tr
 EOF
 }
 
+# render_page <epoch> <day> <morning> <sidecar> <front|all> <the other page's file name> [sections]
 render_page() {
-  local epoch=$1 day=$2 morning=$3 sidecar=$4 sections
+  local epoch=$1 day=$2 morning=$3 sidecar=$4 mode=$5 other=$6 sections=${7:-} title='Today'
   [ -f "$HEAD_TEMPLATE" ] && [ ! -L "$HEAD_TEMPLATE" ] \
     || die "house-style head template is missing: $HEAD_TEMPLATE"
   [ -f "$FOOT_TEMPLATE" ] && [ ! -L "$FOOT_TEMPLATE" ] \
     || die "house-style foot template is missing: $FOOT_TEMPLATE"
-  awk -v title="Today - $(local_fmt "$epoch" '%A %-d %B %Y')" \
+  [ "$mode" = front ] || title='Back room'
+  awk -v title="$title - $(local_fmt "$epoch" '%A %-d %B %Y')" \
     '{ gsub(/\{\{TITLE\}\}/, title); print }' "$HEAD_TEMPLATE"
-  printf '<header><div><div class="kicker">Starship</div><h1>Today</h1></div>\n'
-  printf '<div class="meta">%s<br>Page rebuilt from the to-do records at <span class="mono">%s</span>.<br>Each line carries its own last check.</div></header>\n' \
-    "$(local_fmt "$epoch" '%A %-d %B %Y')" "$(local_fmt "$epoch" '%H:%M %Z')"
-  sections=$(addon_sections "$epoch" "$day")
+  if [ "$mode" != front ]; then
+    printf '<header><div><div class="kicker">Starship - <a href="%s">back to Today</a></div><h1>Back room</h1></div>\n' "$other"
+    printf '<div class="meta">%s<br>Page rebuilt from the to-do records at <span class="mono">%s</span>.<br>Each line carries its own last check.</div></header>\n' \
+      "$(local_fmt "$epoch" '%A %-d %B %Y')" "$(local_fmt "$epoch" '%H:%M %Z')"
+  fi
   python3 "$SCRIPT_DIR/fm-todo-compose.py" "$STORE" "$morning" "$day" "$epoch" "$CFG_TIMEZONE" \
-    "$FM_HOME" "$sidecar" "$INTAKE_DIR" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$sections" "$CFG_HELD_NEED_YOU" || return 1
-  cat "$FOOT_TEMPLATE"
+    "$FM_HOME" "$sidecar" "$INTAKE_DIR" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$sections" "$CFG_HELD_NEED_YOU" \
+    "$mode" "$other" || return 1
+  if [ "$mode" = front ]; then
+    printf '</div></body></html>\n'
+  else
+    cat "$FOOT_TEMPLATE"
+  fi
 }
 
 page_path() {
@@ -344,7 +378,7 @@ resolve_day() {
 }
 
 render_cmd() {
-  local out='' morning='' day='' if_exists=false epoch body sidecar
+  local out='' morning='' day='' if_exists=false epoch body room back sidecar
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --out) [ "$#" -ge 2 ] || die '--out requires a value'; out=$2; shift 2 ;;
@@ -392,7 +426,13 @@ render_cmd() {
   # sidecar changes neither the store nor the page.
   FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" sync --morning-json "$sidecar" >/dev/null \
     || die "item sync failed; existing page preserved"
-  body=$(render_page "$epoch" "$day" "$morning" "$sidecar") || die "composition failed; existing page preserved"
+  back="${out%.html}-all.html"
+  # Both pages are composed before either is written, so a failure keeps both.
+  body=$(render_page "$epoch" "$day" "$morning" "$sidecar" front "${back##*/}") \
+    || die "composition failed; existing page preserved"
+  room=$(render_page "$epoch" "$day" "$morning" "$sidecar" all "${out##*/}" "$(addon_sections "$epoch" "$day")") \
+    || die "composition failed; existing page preserved"
+  write_atomic "$back" "$room" || die "cannot write the back room: $back"
   write_atomic "$out" "$body" || die "cannot write the page: $out"
   printf 'TODO_RENDER: %s rendered at %s\n' "$out" "$(local_fmt "$epoch" '%H:%M %Z')"
 }

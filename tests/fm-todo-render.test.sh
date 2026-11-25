@@ -92,7 +92,7 @@ render_at() {
 }
 
 page_of() {
-  printf '%s/.lavish/today-2026-09-10.html\n' "$1"
+  printf '%s/.lavish/today-2026-09-10-all.html\n' "$1"
 }
 
 # The rendered order of a set of titles, one per line, as the page presents
@@ -411,7 +411,7 @@ test_house_style_comes_from_the_tracked_templates() {
     'the severity pill is missing from the outage row'
   assert_contains "$(cat "$page")" 'could not be confirmed from any source available here' \
     'the provenance legend is missing'
-  assert_contains "$(cat "$page")" '<title>Today - Thursday 10 September 2026</title>' \
+  assert_contains "$(cat "$page")" '<title>Back room - Thursday 10 September 2026</title>' \
     'the page title was not filled in'
 
   # A missing template is refused, never silently rendered unstyled.

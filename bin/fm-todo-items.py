@@ -29,6 +29,9 @@ RETIRED_TTL = 30 * 86400
 RECHECK_WORKING_DAYS = 3
 RECHECK_FLOOR = 5
 DEFAULT_PASSES_PER_DAY = 16
+# A line nobody is waiting on leaves the front page after this many days with
+# no new message from the other side; a new one brings it back.
+QUIET_DAYS = 14
 ABOUT_KEY = re.compile(r'^[a-z0-9][a-z0-9._-]*:\S+$')
 # The home's own `name regex` lines (config/todo-about), read once per run.
 ABOUT_PATTERNS = []
@@ -127,6 +130,26 @@ class Store:
         """A morning sweep (`sweeps`) or an intake pass (`passes`); both bound freshness."""
         kept = sorted(set(self.sweeps(name) + [int(epoch)]))[-60:]
         (self.root / name).write_text(''.join(f'{e}\n' for e in kept))
+
+    def today(self):
+        """The captain's own Today list: item ids in his order."""
+        path = self.root / 'today.json'
+        if not path.is_file() or path.is_symlink():
+            return []
+        try:
+            order = json.loads(path.read_text()).get('order')
+        except (ValueError, AttributeError):
+            raise Refusal('data/todo/today.json is not a readable Today list; fix or remove it first')
+        return [i for i in order or [] if isinstance(i, str)]
+
+    def save_today(self, order):
+        if order == self.today():
+            return
+        fd, tmp = tempfile.mkstemp(dir=self.root, prefix='.today.')
+        with os.fdopen(fd, 'w') as fh:
+            fh.write(json.dumps({'order': order}, indent=1) + '\n')
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.root / 'today.json')
 
     def journal(self, entry):
         with open(self.root / 'journal', 'a') as fh:
@@ -446,6 +469,12 @@ def own_change(rec, o):
     return change
 
 
+def blank(iid, now):
+    return {'id': iid, 'aliases': [], 'slots': {}, 'first_seen': now, 'state': 'open', 'owner': '',
+            'snoozed_until': '', 'pending': {}, 'verification': {}, 'closure': {}, 'handover': '', 'note': '',
+            'rev': '', 'kind': ''}
+
+
 def fold(store, items, observations, now, backlog_seen, ledger_seen):
     """Apply observation CHANGES to items, so repeated syncs of the same inputs are no-ops."""
     index = {a: r['id'] for r in items.values() for a in r['aliases']}
@@ -463,9 +492,7 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
         fresh = iid is None
         if fresh:
             iid = 't-' + digest(o['aliases'][0])[:12]
-            items[iid] = {'id': iid, 'aliases': [], 'slots': {}, 'first_seen': now, 'state': 'open',
-                          'owner': '', 'snoozed_until': '', 'pending': {}, 'verification': {}, 'closure': {},
-                          'handover': '', 'note': '', 'rev': '', 'kind': ''}
+            items[iid] = blank(iid, now)
         rec = items[iid]
         for alias in o['aliases']:
             if alias not in rec['aliases']:
@@ -475,6 +502,12 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
         before = rec['slots'].get(o['slot'])
         rec['slots'][o['slot']] = dict({k: v for k, v in o.items() if k not in ('aliases', 'verified')})
         present(rec)
+        # The last time the other side said something: a new source's own ask
+        # time, or now when a source's revision moves. A re-read is not one.
+        if before is None:
+            rec['active_at'] = max(number(rec.get('active_at')), number(o.get('asked_at')) or now)
+        elif o['rev'] and before.get('rev', '') != o['rev']:
+            rec['active_at'] = now
         if before is None:
             # A first sighting sets the state only for a brand-new item; a new
             # alias of a closed item is not a reason to reopen it.
@@ -536,6 +569,22 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
     return items
 
 
+def quiet(store, items, today, now):
+    """Close each open line nobody is waiting on that had no new message for QUIET_DAYS.
+
+    Never a line on the captain's Today list, one he marked, a partner- or
+    customer-facing line (someone outside is waiting on it), a held decision
+    or one whose end time is still ahead. Its source's next change reopens it like any other closed line.
+    """
+    for rec in items.values():
+        last = number(rec.get('active_at')) or number(rec.get('asked_at')) or number(rec.get('first_seen'))
+        if (rec['state'] != 'open' or rec['id'] in today or not last or now - last < QUIET_DAYS * 86400
+                or rec.get('owner') or rec.get('pending') or (rec.get('snoozed_until') or '') > local_day(now)
+                or rec.get('partner_first') or rec.get('partner') or held(rec['aliases']) or number(rec.get('ends_at')) > now):
+            continue
+        transition(store, rec, now, 'closed', 'quiet', 'superseded', f'no new message since {when(last)}')
+
+
 def expire(store, items, now):
     """Close each open item whose known end time has passed, once per end time.
 
@@ -579,10 +628,16 @@ def parse_when(text, now):
 
 def parse_line(line, targeted, now):
     """(verb, words, extra), or None for a line with no leading verb."""
-    match = re.match(r'^\s*(drop|done|park|mine|you|dig)\b\s*(.*)$', line, re.I | re.S)
+    match = re.match(r'^\s*(drop|done|park|mine|you|dig|add|first)\b\s*(.*)$', line, re.I | re.S)
     if not match:
-        return None
+        # "X first" is how the captain says it as often as "first X"; on a row
+        # the row already names X, so there it stays an ordinary note.
+        match = None if targeted else re.match(r'^\s*(.*\S)\s+first\s*$', line, re.I | re.S)
+        return ('first', match.group(1).strip(), {}) if match else None
     verb, rest = match.group(1).lower(), match.group(2).strip()
+    if verb in ('add', 'first') and targeted and rest:
+        # On a row, "add" or "first" alone moves that row; more words are a note.
+        return None
     extra = {}
     if verb == 'park':
         split = re.match(r'^(.*?)\s*\b(?:til|till|until)\b\s*(.+)$', rest, re.I)
@@ -614,17 +669,106 @@ def match_item(items, words):
     raise Refusal(f'"{words}" matches {len(hits)} items: ' + ', '.join(r['id'] for r in hits[:6]))
 
 
+def own_item(store, items, text, now):
+    """A new line the captain put on his own list, with no source but his word."""
+    text = ' '.join(text.split())
+    if not text:
+        raise Refusal('add needs the words of the line to put on the Today list')
+    same = [r for r in items.values() if r['state'] != 'closed' and r.get('title') == text
+            and any(a.startswith('you:') for a in r['aliases'])]
+    if same:
+        return same[0]
+    ref = 'you:' + digest(text, now)[:12]
+    rec = blank('t-' + digest(ref)[:12], now)
+    rec['aliases'] = [ref]
+    rec['slots'][ref] = {'slot': ref, 'rev': digest(text)[:10], 'title': text, 'link': '', 'class': 'obligation',
+                         'kind': 'decision', 'label': 'captain', 'state': 'open', 'asked_at': now}
+    rec['active_at'] = now
+    present(rec)
+    items[rec['id']] = rec
+    store.journal({'at': now, 'item': rec['id'], 'added': text, 'actor': 'captain', 'rev': rec['rev']})
+    store.save(rec)
+    return rec
+
+
+def place(store, iid, position, now):
+    """Put one item on the Today list at a 1-based position (0: the end); True when that moved it."""
+    order = store.today()
+    before = list(order)
+    if iid in order:
+        order.remove(iid)
+    at = len(order) if position <= 0 else min(position - 1, len(order))
+    order.insert(at, iid)
+    if order == before:
+        return False
+    store.save_today(order)
+    store.journal({'at': now, 'item': iid, 'today': at + 1, 'actor': 'captain'})
+    return True
+
+
+def match_today(store, items, words):
+    """The one Today line the words name, else the one open line they name."""
+    needle = words.lower()
+    hits = [items[i] for i in store.today() if i in items and needle
+            and needle in (items[i].get('title', '') + ' ' + items[i].get('ask', '')).lower()]
+    return hits[0] if len(hits) == 1 else match_item(items, words)
+
+
+def today(store, items, args, now):
+    """`today list|add|move|remove`: the captain's own ordered list."""
+    sub, rest = (args.lines[0] if args.lines else 'list'), ' '.join(args.lines[1:]).strip()
+    if sub == 'list':
+        for n, iid in enumerate((i for i in store.today() if i in items), 1):
+            print('\t'.join([str(n), iid, items[iid]['state'], items[iid].get('title', '')]))
+        return 0
+    if sub == 'add':
+        rec = items[rest] if rest in items else own_item(store, items, rest, now)
+        # Adding a line already on the list again keeps its place.
+        moved = (args.position > 0 or rec['id'] not in store.today()) and place(store, rec['id'], args.position, now)
+    elif sub in ('move', 'remove'):
+        rec = one(items, rest)
+        if rec['id'] not in store.today():
+            raise Refusal(f'{rec["id"]} is not on the Today list')
+        if sub == 'move':
+            if args.position <= 0:
+                raise Refusal('today move needs --position N, 1 for the top')
+            moved = place(store, rec['id'], args.position, now)
+        else:
+            store.save_today([i for i in store.today() if i != rec['id']])
+            store.journal({'at': now, 'item': rec['id'], 'today': 0, 'actor': 'captain'})
+            moved = True
+    else:
+        raise Refusal(f'today takes list, add, move or remove, not {sub}')
+    where = store.today().index(rec['id']) + 1 if rec['id'] in store.today() else 0
+    print(f'TODO_TODAY: {sub} {rec["id"]} ' + (f'at {where}' if where else 'off the list')
+          + ('' if moved else ' (already)') + f' {rec.get("title", "")}')
+    return 0
+
+
 def apply_command(store, items, line, target, shown_rev, now):
     parsed = parse_line(line, bool(target), now)
     if parsed is None:
         return f'not-a-command {line.strip()}'
     verb, words, extra = parsed
-    rec = one(items, target) if target else match_item(items, words)
+    if verb == 'add':
+        # Untargeted, "add X" is a new line of the captain's own, never a match.
+        rec = one(items, target) if target else own_item(store, items, words, now)
+    elif verb == 'first':
+        rec = one(items, target) if target else match_today(store, items, words)
+    else:
+        rec = one(items, target) if target else match_item(items, words)
     if shown_rev and shown_rev != rec['rev']:
         raise Refusal(f'the page showed revision {shown_rev} but {rec["id"]} is now {rec["rev"]}; refresh the page first')
     refs = ' '.join(a for a in rec['aliases'] if not a.startswith('ledger:'))
     tail = f' :: {extra["what"]}' if 'what' in extra else (f' until {extra["until"]}' if 'until' in extra else '')
     result = f'{verb} {rec["id"]} [{refs}] {rec["title"]}{tail}'
+    if verb in ('add', 'first'):
+        if rec['state'] == 'closed':
+            raise Refusal(f'{rec["id"]} is closed; reopen it before putting it on the Today list')
+        if verb == 'add' and rec['id'] in store.today():
+            return 'already ' + result
+        moved = place(store, rec['id'], 1 if verb == 'first' else 0, now)
+        return result if moved else 'already ' + result
     if verb in ('done', 'drop'):
         if rec['state'] == 'closed':
             return 'already ' + result
@@ -668,6 +812,12 @@ def sync(args, store, now):
     observations += held or []
     items = fold(store, store.load(), observations, now, held is not None, ledger is not None)
     expire(store, items, now)
+    # Today keeps its order into the next day; a line closed before today leaves it.
+    start = day_epoch(local_day(now))
+    order = [i for i in store.today() if i in items and not (
+        items[i]['state'] == 'closed' and number((items[i].get('closure') or {}).get('at')) < start)]
+    quiet(store, items, set(order), now)
+    store.save_today(order)
     started = number(doc.get('sweep_started')) if doc else 0
     if started and started <= now and local_day(started) == local_day(now):
         store.add_sweep(started)
@@ -690,8 +840,9 @@ def prunable(rec, now):
 
 
 # Aliases that name no external source to re-read: the store's own ledger key,
-# a Firstmate-held decision, a Firstmate-internal morning line.
-NOT_A_SOURCE = re.compile(r'^(?:ledger|firstmate-backlog|firstmate):')
+# a Firstmate-held decision, a Firstmate-internal morning line, a line the
+# captain put on his own Today list.
+NOT_A_SOURCE = re.compile(r'^(?:ledger|firstmate-backlog|firstmate|you):')
 
 
 def source_refs(rec):
@@ -842,6 +993,7 @@ def main():
     parser.add_argument('--pass', dest='pass_', action='store_true')
     parser.add_argument('--clear', action='store_true')
     parser.add_argument('--passes-per-day', type=int, default=0)
+    parser.add_argument('--position', type=int, default=0)
     parser.add_argument('--about', action='append', default=[])
     parser.add_argument('--about-patterns', default='')
     args = parser.parse_intermixed_args()
@@ -862,6 +1014,8 @@ def main():
                 return recheck(args, items, now)
             if args.command == 'find':
                 return find(args, items)
+            if args.command == 'today':
+                return today(store, items, args, now)
             if args.command == 'command':
                 lines = args.lines or [l for l in sys.stdin.read().splitlines() if l.strip()]
                 failed = False

@@ -14,6 +14,8 @@
 #   fm-todo.sh ack --item ID
 #   fm-todo.sh command [--item ID [--rev REV] [--at EPOCH]] [LINE ...]   (lines on stdin when none given)
 #   fm-todo.sh mark --item ID --name NAME (--text TEXT | --clear)
+#   fm-todo.sh today [list] | today add (ID | TEXT) [--position N]
+#              | today move ID --position N | today remove ID
 #   fm-todo.sh list [--state open|waiting|closed]
 #   fm-todo.sh --help
 #
@@ -33,8 +35,10 @@
 # `closure` {reason fulfilled|dismissed|superseded|resolved|released, actor,
 # evidence, at}, `owner`, `snoozed_until`, `pending` handoff, `marks` (the
 # lines an add-on put on the row, below), `source_change` (the change an
-# add-on made at the source, below), `verification` {at, how, rev} and `rev`,
-# the item's meaningful revision over its slots.
+# add-on made at the source, below), `verification` {at, how, rev}, `rev`,
+# the item's meaningful revision over its slots, and `active_at`, the last
+# time the other side said something: a new source's ask time, or the sync
+# that saw a source's revision move (a re-read with no change is not one).
 # data/todo/journal is an append-only line per transition or command effect.
 # One lock serializes sync and every write. Sync deletes one kind of record
 # and no other: a routine item or team update the intake retired, thirty days
@@ -121,6 +125,26 @@
 # it was marked. An unreadable ledger or backlog is not an absence and closes
 # nothing.
 #
+# QUIET LINES LEAVE. A sync closes an open line with no new message from the
+# other side for 14 days (its `active_at`, else its ask time), as superseded
+# by actor `quiet`, unless nobody can call it unattended: a line on the Today
+# list, one the captain marked (mine, a park not yet lapsed, a pending
+# you/dig), a partner- or customer-facing line (someone outside is waiting on
+# it), a held decision, or one whose end time is still ahead. Like any closed line, it
+# comes back when its source changes again.
+#
+# THE TODAY LIST. data/todo/today.json holds the captain's own list, item ids
+# in his order. Only he puts things there, directly or through firstmate on
+# his word, and it keeps its order until he changes it: an unfinished line
+# carries over to the next day, and a line closed before today leaves it on
+# the next sync. `today add TEXT` makes a new line of his own (source `you`,
+# never re-checked at a source, never a duplicate of an open line with the
+# same words); `today add ID` puts an existing item on the list. --position N
+# is 1-based, default the end. `today move ID --position N` reorders,
+# `today remove ID` takes it off the list without closing it, and `today` or
+# `today list` prints position, id, state and title, tab-separated. Each
+# change prints one `TODO_TODAY:` line.
+#
 # TIME-BOUND ASKS EXPIRE. An item a morning action gave an `ends_at` closes on
 # the first sync after that time, as superseded by actor `auto-expiry` with
 # the end time as evidence, so it moves to the page's closed fold. An item
@@ -138,6 +162,11 @@
 #   mine <words>            owner=captain; tracked, not surfaced
 #   you <words>: <what>     pending handoff to firstmate
 #   dig <words>             pending investigation by firstmate
+#   add <words>             a new line of the captain's own, at the end of
+#                           his Today list; on a row, `add` alone puts that row there
+#   first <words>, <words> first
+#                           that Today line (else that open line) to the top
+#                           of the Today list; on a row, `first` alone
 # Prefer --item with the row's id and --rev with the revision the page showed
 # (both are in the page's queued note); a stale --rev is refused so an old page
 # cannot act on a changed ask. Pass --at with the epoch the queued note gives
@@ -273,7 +302,7 @@ esac
 cmd=$1
 shift
 case "$cmd" in
-  sync|sweep-start|recheck|find|verify|close|hand-over|reopen|ack|command|mark|list) ;;
+  sync|sweep-start|recheck|find|verify|close|hand-over|reopen|ack|command|mark|list|today) ;;
   *) die "unknown command: $cmd" ;;
 esac
 
@@ -286,7 +315,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --morning-json) [ "$#" -ge 2 ] || die '--morning-json requires a value'; morning=$2; shift 2 ;;
     --pass|--clear) args+=("$1"); shift ;;
-    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text|--to|--note|--source-change|--passes-per-day|--about)
+    --item|--how|--evidence|--at|--since|--state|--rev|--actor|--reason|--name|--text|--to|--note|--source-change|--passes-per-day|--about|--position)
       [ "$#" -ge 2 ] || die "$1 requires a value"
       case "$1" in
         --item) item=$2 ;;

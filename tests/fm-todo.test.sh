@@ -77,6 +77,17 @@
 #   - A helpdesk add-on's waiting, reassign and close ticket verbs run on that
 #     contract alone: its own ticket changes never reopen the row, and a later
 #     partner reply does.
+#   - The Today list keeps the captain's order through add, first, move and
+#     done, never lists his own lines for a source re-check, and carries its
+#     unfinished lines over to the next day in the same order.
+#   - A line nobody waits on closes as quiet after 14 days with no new message,
+#     never a customer-facing or Today line, is not counted as closed on the
+#     front page, and comes back when its source changes.
+#   - The front page shows at most three "Needs you now" lines picked by the
+#     rules (a customer machine down, then due today, then the longest partner
+#     wait past one working day), the Today list, partners then colleagues
+#     waiting, later this week, one count line each for unchecked lines and
+#     held questions, and a link to the back room, which keeps every line.
 # shellcheck disable=SC2016
 set -u
 
@@ -126,7 +137,7 @@ render_at() {
 }
 
 page() {
-  cat "$1/.lavish/today-$2.html"
+  cat "$1/.lavish/today-$2-all.html"
 }
 
 # The id, state or revision of the one item whose title contains $2.
@@ -1530,6 +1541,120 @@ test_every_line_has_an_ask_date() {
   pass 'an ask no source dated keeps the time the store first saw it'
 }
 
+# The titles one front-page section shows, in order, read from the written page.
+front_section() {  # <page file> <heading>
+  sed -n "/<h2>$2<\/h2>/,/<\/[ou]l>/p" "$1" | grep -o 'class="who">[^<]*' | sed 's/^class="who">//'
+}
+
+test_the_today_list_keeps_the_captains_order() {
+  local h out id front
+  h="$TMP_ROOT/today-list"
+  new_home "$h"
+  todo_at "$h" "$T_0900" today add 'Send the drafts' >/dev/null
+  todo_at "$h" "$T_0900" today add 'Call the supplier' >/dev/null
+  todo_at "$h" "$T_0900" command 'add Review the guide' >/dev/null
+  out=$(todo_at "$h" "$T_0900" command 'guide first')
+  assert_contains "$out" 'TODO_CMD: first ' '"X first" did not move the line'
+  out=$(todo_at "$h" "$T_0900" today add 'Call the supplier')
+  assert_contains "$out" '(already)' 'adding a line already on the list again was not harmless'
+  assert_equals 'Review the guide|Send the drafts|Call the supplier|' \
+    "$(todo_at "$h" "$T_0900" today list | cut -f4 | tr '\n' '|')" 'the list is not in the order the captain gave'
+  id=$(field_of "$h" 'Send the drafts' 1)
+  todo_at "$h" "$T_0900" today move "$id" --position 1 >/dev/null
+  todo_at "$h" "$T_0900" command 'done supplier' >/dev/null
+  assert_equals '' "$(todo_at "$h" "$T_0900" recheck | grep 'recheck:')" 'a line of the captain own was listed for a source re-check'
+
+  render_at "$h" "$T_1000"
+  front="$h/.lavish/today-2026-09-10.html"
+  assert_equals 'Send the drafts|Review the guide|' "$(front_section "$front" Today | tr '\n' '|')" \
+    'the front page does not show the Today list in his order, without the done line'
+
+  # Unfinished lines carry over to the next day in the same order; the done one leaves.
+  render_at "$h" "$T_NEXT_1000"
+  assert_equals 'Send the drafts|Review the guide|' \
+    "$(todo_at "$h" "$T_NEXT_1000" today list | cut -f4 | tr '\n' '|')" 'the list did not carry over in order'
+  assert_equals 'Send the drafts|Review the guide|' \
+    "$(front_section "$h/.lavish/today-2026-09-11.html" Today | tr '\n' '|')" 'the next day page lost the order'
+  pass 'the Today list keeps the captain order through add, first, move and done, and carries over to the next day'
+}
+
+test_quiet_lines_leave_after_14_days_and_come_back() {
+  local h id later
+  h="$TMP_ROOT/quiet"
+  new_home "$h"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-colleague --digest a --class obligation \
+    --title 'colleague question' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-partner --digest a --class obligation --partner \
+    --title 'customer question' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-listed --digest a --class obligation \
+    --title 'question on my list' >/dev/null
+  render_at "$h" "$T_1000"
+  todo_at "$h" "$T_1000" today add "$(field_of "$h" 'question on my list' 1)" >/dev/null
+
+  later=$((T_1000 + 13 * 86400))
+  render_at "$h" "$later"
+  assert_equals open "$(field_of "$h" 'colleague question' 2)" 'a line went quiet before 14 days'
+
+  later=$((T_1000 + 15 * 86400))
+  render_at "$h" "$later"
+  id=$(field_of "$h" 'colleague question' 1)
+  assert_equals closed "$(field_of "$h" 'colleague question' 2)" 'a line nobody waits on stayed after 14 quiet days'
+  assert_equals quiet "$(jq -r '.closure.actor' "$h/data/todo/items/$id.json")" 'the quiet close is not labelled as such'
+  assert_equals open "$(field_of "$h" 'customer question' 2)" 'a customer-facing line went quiet'
+  assert_equals open "$(field_of "$h" 'question on my list' 2)" 'a line on the Today list went quiet'
+  assert_contains "$(cat "$h/.lavish/today-2026-09-25.html")" '0 closed today' 'a quiet line counted as closed on the front page'
+
+  # The other side writes again: the line comes back.
+  intake_at "$h" "$((later + 600))" observe --source C_BRIEF --ref q-colleague --digest b --class obligation \
+    --title 'colleague question' >/dev/null
+  render_at "$h" "$((later + 1200))"
+  assert_equals open "$(field_of "$h" 'colleague question' 2)" 'a quiet line did not come back when its source changed'
+  pass 'a line nobody waits on leaves after 14 quiet days, never a customer or Today line, and comes back on a new message'
+}
+
+test_the_front_page_is_calm() {
+  local h t front room
+  h="$TMP_ROOT/front"
+  new_home "$h"
+  t=$T_0900
+  sidecar "$h" 2026-09-10 \
+'{"key":"k-down","source":"helpdesk","ref":"down","class":"outage","title":"Machine down at a customer","partner":true,"updated":'"$t"'},'\
+'{"key":"k-colleague-down","source":"chat","ref":"cdown","class":"outage","title":"Office tap down","updated":'"$t"'},'\
+'{"key":"k-call","source":"calendar","ref":"call","class":"deadline","title":"Supplier call","ends_at":"2026-09-10T17:00:00+02:00","updated":'"$t"'},'\
+'{"key":"k-p7","source":"helpdesk","ref":"p7","class":"obligation","kind":"reply","title":"Partner seven days","partner_awaiting":true,"awaiting_since":'"$((t - 7 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-p6","source":"helpdesk","ref":"p6","class":"obligation","kind":"reply","title":"Partner six days","partner_awaiting":true,"awaiting_since":'"$((t - 6 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-p1","source":"helpdesk","ref":"p1","class":"obligation","kind":"reply","title":"Partner one day","partner_awaiting":true,"awaiting_since":'"$((t - 86400))"',"updated":'"$t"'},'\
+'{"key":"k-ask","source":"chat","ref":"ask","class":"urgent","title":"Colleague asks for codes","asked_at":'"$((t - 10 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-fri","source":"calendar","ref":"fri","class":"deadline","title":"Friday review","ends_at":"2026-09-11T11:00:00+02:00","updated":'"$t"'}'
+  intake_at "$h" "$((t - 2 * 86400))" observe --source C_BRIEF --ref stale --digest a --class obligation \
+    --title 'Unchecked colleague line' >/dev/null
+  printf -- '- [ ] fm-q1 - Pick a model for the reports (hold-kind: captain) (hold: which one) (since: 2026-09-01)\n' \
+    >"$h/backlog.md"
+  render_at "$h" "$T_1000"
+  front="$h/.lavish/today-2026-09-10.html"
+  room="$h/.lavish/today-2026-09-10-all.html"
+
+  assert_equals 'Machine down at a customer|Supplier call|Partner seven days|' \
+    "$(front_section "$front" 'Needs you now' | tr '\n' '|')" \
+    'Needs you now is not the three lines the rules pick, machine down, then due today, then the longest partner wait'
+  assert_equals 'Partner six days|Partner one day|' \
+    "$(front_section "$front" 'Partners waiting on you' | tr '\n' '|')" 'the partners waiting are wrong'
+  assert_equals 'Colleague asks for codes|Office tap down|' \
+    "$(front_section "$front" 'Colleagues asking you' | tr '\n' '|')" 'a colleague ask rose above the list or went missing'
+  assert_equals 'Friday review|' "$(front_section "$front" 'Later this week' | tr '\n' '|')" 'later this week is wrong'
+  assert_contains "$(cat "$front")" '1 not re-checked in the last day' 'an unchecked line was not counted on one line'
+  assert_not_contains "$(cat "$front")" 'Unchecked colleague line' 'an unchecked line rendered as a row'
+  assert_contains "$(cat "$front")" '1 question from Firstmate, asked in chat' 'the held question is not one count line'
+  assert_not_contains "$(cat "$front")" 'Pick a model' 'a held question rendered as a row on the front page'
+  assert_contains "$(cat "$front")" 'href="today-2026-09-10-all.html"' 'the front page has no link to the back room'
+  assert_contains "$(cat "$room")" 'Unchecked colleague line' 'the back room lost a line'
+  assert_contains "$(cat "$room")" 'Partner seven days' 'the back room lost a line'
+  pass 'the front page shows at most three lines by the rules, the list, partners then colleagues, and counts the rest'
+}
+
+test_the_today_list_keeps_the_captains_order
+test_quiet_lines_leave_after_14_days_and_come_back
+test_the_front_page_is_calm
 test_done_on_a_held_decision_files_a_reconcile_request
 test_the_recheck_rolls_through_every_line_in_three_working_days
 test_lines_a_pass_could_not_read_do_not_hold_the_share

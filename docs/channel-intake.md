@@ -168,7 +168,7 @@ Nothing is lost in either case - the items stay notifiable and re-render once th
 `brief` and `todo` render from the same ledger every time.
 A correction, a resolution and a completed obligation reconcile across both by construction rather than needing a second pass over two stores.
 The day's Lavish page is the third surface, and it re-ranks itself during the day rather than being a snapshot of 06:00.
-A completed read calls [`bin/fm-todo-render.sh`](../bin/fm-todo-render.sh), which first folds this ledger, the morning action metadata and the captain-held backlog into one durable item per ask through [`bin/fm-todo.sh`](../bin/fm-todo.sh), then rebuilds `.lavish/today-<YYYY-MM-DD>.html` from those items with no model call.
+A completed read calls [`bin/fm-todo-render.sh`](../bin/fm-todo-render.sh), which first folds this ledger, the morning action metadata and the captain-held backlog into one durable item per ask through [`bin/fm-todo.sh`](../bin/fm-todo.sh), then rebuilds `.lavish/today-<YYYY-MM-DD>.html`, a calm front page, and its back room `today-<YYYY-MM-DD>-all.html` from those items with no model call.
 An `automation-candidate` is excluded there exactly as it is from `todo`, because a proposal is not a human obligation.
 Each line says when it was last verified against its source, and a line not re-read in the current verification sweep says "not re-checked since" rather than passing as current; the page carries its own render time separately.
 Closures, including the captain's page commands, are durable on the item and show in the collapsed closed fold ("Closed today", or "Closed since" the previous sweep) with their evidence; a closed item returns only when its source meaningfully changes, with the reason shown.

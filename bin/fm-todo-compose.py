@@ -10,7 +10,8 @@ import re
 import sys
 import time
 
-STORE, MORNING, DAY, NOW, ZONE, HOME, MORNING_JSON, INTAKE, SOURCES, NAMES, SECTIONS, HELD_NEED_YOU = sys.argv[1:]
+(STORE, MORNING, DAY, NOW, ZONE, HOME, MORNING_JSON, INTAKE, SOURCES, NAMES, SECTIONS, HELD_NEED_YOU,
+ MODE, OTHER_PAGE) = sys.argv[1:]
 NOW = int(NOW)
 # Every spelling of the captain a closure actor may carry: the internal label
 # and the configured captain_names, singly and as one full name.
@@ -272,12 +273,12 @@ def freshness(rec):
     return '<span class="prov unv">cannot verify - no source read recorded</span>'
 
 
-def reply_form(rec):
-    """Hidden full-width note row; the queued text names the id and the revision shown."""
+def queue_js(rec):
+    """The note box's submit: the queued text names the id and the revision shown."""
     iid = rec.get('id') or ''
     rev = rec.get('rev') or ''
     title_raw = rec.get('title') or 'untitled item'
-    js = (
+    return (
         "event.preventDefault();"
         "var f=event.currentTarget,v=f.note.value.trim();if(!v)return;"
         "if(!window.lavish||!window.lavish.queuePrompt){f.querySelector('.ack').textContent="
@@ -292,12 +293,20 @@ def reply_form(rec):
         f"data:{{item_id:{json.dumps(iid)},rev:{json.dumps(rev)},title:{json.dumps(title_raw)},note:v,at:at}}}});"
         "f.note.value='';f.querySelector('.ack').textContent='queued';"
     )
-    return (f'<tr class="replyrow" id="note-{esc(iid)}"><td colspan="3">'
-            f'<form class="reply" data-lavish-question="todo-item-{esc(iid)}" onsubmit="{esc(js)}">'
-            f'<input type="text" name="note" autocomplete="off" '
-            f'placeholder="drop, done, park til Friday, mine, you: what to do, dig, or anything else">'
-            f'<button type="submit">Queue</button><span class="ack"></span>'
-            f'</form></td></tr>')
+
+
+def note_box(rec, words):
+    iid = esc(rec.get('id') or '')
+    return (f'<form class="reply" data-lavish-question="todo-item-{iid}" onsubmit="{esc(queue_js(rec))}">'
+            f'<input type="text" name="note" autocomplete="off" placeholder="{esc(words)}">'
+            f'<button type="submit">Queue</button><span class="ack"></span></form>')
+
+
+def reply_form(rec):
+    """Hidden full-width note row under a back-room row."""
+    return (f'<tr class="replyrow" id="note-{esc(rec.get("id") or "")}"><td colspan="3">'
+            + note_box(rec, 'drop, done, park til Friday, mine, you: what to do, dig, add, first, or anything else')
+            + '</td></tr>')
 
 
 def note_toggle(rec):
@@ -567,6 +576,160 @@ def by_you(actor):
 
 handled = [r for r in closed if r['closure'].get('reason') == 'fulfilled'
            and not by_you(r['closure'].get('actor')) and r['closure'].get('actor') not in ('source', 'unknown', '')]
+
+# --- the calm front page --------------------------------------------------------
+
+NOW_CAP = 3
+WAITING_CAP = 10
+DAY_START = day_start(NOW)
+ASKS = ('decision', 'approval', 'reply')
+
+
+def today_order():
+    path = Path(STORE) / 'today.json'
+    if not path.is_file() or path.is_symlink():
+        return []
+    return [i for i in json.loads(path.read_text()).get('order') or [] if isinstance(i, str)]
+
+
+def checked(rec, since):
+    v = rec.get('verification') or {}
+    return number(v.get('at')) >= since and v.get('rev') == rec.get('rev')
+
+
+def own(rec):
+    """A line the captain put on his own list, with no source to re-check."""
+    return any(a.startswith('you:') for a in rec.get('aliases') or [])
+
+
+def working_days(epoch):
+    """Monday-to-Friday days after the local day of <epoch> up to today."""
+    start, end = datetime.date.fromtimestamp(epoch), datetime.date.fromtimestamp(NOW)
+    return sum(1 for n in range(1, (end - start).days + 1) if (start + datetime.timedelta(days=n)).weekday() < 5)
+
+
+def needs_now(rec):
+    """The rule a line rises by, as a sort key, or None: a partner or customer
+    machine down, then a meeting or deadline ending later today, then the
+    longest partner or customer wait on the captain's reply past one working day."""
+    end = number(rec.get('ends_at'))
+    if rec.get('class') == 'outage' and partner(rec):
+        return 0, asked(rec)
+    if rec.get('class') == 'deadline' and end > NOW and stamp(end, '%Y-%m-%d') == DAY:
+        return 1, end
+    since = number(rec.get('awaiting_since')) or number(rec.get('asked_at'))
+    if rec.get('partner_first') and since and working_days(since) > 1:
+        return 2, since
+    return None
+
+
+LINE_CLICK = ("if(event.target.closest('a,button,form'))return;"
+              "if(String(window.getSelection()).trim())return;"
+              "this.classList.toggle('open');var i=this.querySelector('form input');"
+              "if(i&&this.classList.contains('open'))i.focus();")
+
+
+def front_line(rec, n=0):
+    """One calm line: who or what, one context line, its link and only the flags that matter."""
+    bits = []
+    if not own(rec):
+        bits.append(link_to(rec.get('link'), 'Open') if re.match(r'^https?://', rec.get('link') or '', re.I)
+                    else '')
+        at = asked(rec)
+        if at != UNDATED and at <= NOW and stamp(at, '%Y-%m-%d') != DAY:
+            bits.append(esc('since ' + stamp(at, '%a %-d %b')))
+        if not checked(rec, NOW - 86400):
+            v = number((rec.get('verification') or {}).get('at'))
+            bits.append('<span class="flag">' + esc(f'not re-checked since {when(v)}' if v else 'never checked at its source')
+                        + '</span>')
+    if rec.get('state') == 'waiting':
+        bits.append(esc(f'{rec.get("owner") or "someone else"} has it'))
+    ctx = re.sub(r'^<span class="ctx">|</span>$', '', context(rec))
+    why = ' · '.join(b for b in [ctx] + bits if b)
+    num = f'<span class="n">{n}</span>' if n else ''
+    return (f'<li id="item-{esc(rec.get("id", ""))}"{audit(rec)} onclick="{esc(LINE_CLICK)}">{num}'
+            f'<span class="who">{esc(rec.get("title") or "untitled item")}</span>{marks(rec)}'
+            + (f'<span class="why">{why}</span>' if why else '')
+            + note_box(rec, 'done, drop, first, park til Friday, mine, or anything else') + '</li>')
+
+
+def front_list(title, recs, cls=''):
+    if not recs:
+        return ''
+    return (f'<h2>{esc(title)}</h2>\n<ul class="lines {cls}">\n'
+            + ''.join(front_line(r) + '\n' for r in recs) + '</ul>')
+
+
+def list_box():
+    js = ("event.preventDefault();var f=event.currentTarget,v=f.note.value.trim();if(!v)return;"
+          "if(!window.lavish||!window.lavish.queuePrompt){f.querySelector('.ack').textContent="
+          "'review session not connected';return;}"
+          "var at=Math.floor(Date.now()/1000);"
+          "window.lavish.queuePrompt('Today list at '+at+': '+v,{tag:'today-list',text:'Today list: '+v,"
+          "element:f,queueKey:'todo-today-list',data:{note:v,at:at}});"
+          "f.note.value='';f.querySelector('.ack').textContent='queued';")
+    return (f'<form class="reply addbox" data-lavish-question="todo-today-list" onsubmit="{esc(js)}">'
+            '<input type="text" name="note" autocomplete="off" placeholder="add X, or X first">'
+            '<button type="submit">Queue</button><span class="ack"></span></form>')
+
+
+def front_page():
+    by_id = {r['id']: r for r in items}
+    order = [by_id[i] for i in today_order() if i in by_id and by_id[i].get('state') != 'closed']
+    listed = {r['id'] for r in order}
+    pool = [r for r in live if r.get('kind') in ASKS and r['id'] not in listed]
+    questions = [r for r in pool if held(r) or tooling(r)]
+    pool = [r for r in pool if r not in questions]
+    now = sorted((r for r in pool if checked(r, DAY_START) and needs_now(r)), key=lambda r: (needs_now(r), r['id']))
+    now = now[:NOW_CAP]
+    week_end = DAY_START + 8 * 86400
+    later = sorted((r for r in pool if r not in now and stamp(number(r.get('ends_at')) or NOW, '%Y-%m-%d') > DAY
+                    and number(r.get('ends_at')) < week_end), key=lambda r: (number(r['ends_at']), r['id']))
+    rest = [r for r in pool if r not in now and r not in later]
+    fresh = [r for r in rest if checked(r, NOW - 86400)]
+    waiting = (sorted((r for r in fresh if partner(r)), key=lambda r: (asked(r), r['id']))
+               + sorted((r for r in fresh if not partner(r)), key=lambda r: (asked(r), r['id'])))
+    shown = waiting[:WAITING_CAP]
+    floor = max([0] + [s for s in sweeps + epochs('passes') if stamp(s, '%Y-%m-%d') == DAY])
+    checked_line = (f'All checked at <span class="mono">{esc(stamp(floor))}</span>' if floor
+                    else 'Not re-checked at the sources yet today')
+    print('<div class="front"><header><div><div class="kicker">Starship</div><h1>Today</h1></div>'
+          f'<div class="meta">{esc(stamp(NOW, "%A %-d %B"))}. {checked_line}.</div></header>')
+    print(front_list('Needs you now', now, 'now'))
+    print('<h2>Today</h2>')
+    if order:
+        print('<ol class="lines">\n' + ''.join(front_line(r, n) + '\n' for n, r in enumerate(order, 1)) + '</ol>')
+    else:
+        print('<p class="sub">Nothing on your list yet.</p>')
+    print(list_box())
+    print(front_list('Partners waiting on you', [r for r in shown if partner(r)]))
+    print(front_list('Colleagues asking you', [r for r in shown if not partner(r)]))
+    print(front_list('Later this week', later[:5], 'quiet'))
+    notes = []
+    if len(waiting) > len(shown):
+        notes.append(f'{len(waiting) - len(shown)} more waiting, in the back room')
+    if len(rest) > len(fresh):
+        notes.append(f'{len(rest) - len(fresh)} not re-checked in the last day')
+    if questions:
+        notes.append(f'{len(questions)} question{"s" if len(questions) > 1 else ""} from Firstmate, asked in chat')
+    if notes:
+        print('<p class="sub">' + esc('. '.join(notes)) + '.</p>')
+    on_page = {r['id'] for r in now + order + shown + later[:5]}
+    done = [r for r in items if r.get('state') == 'closed' and not intake_retired(r)
+            and (r.get('closure') or {}).get('actor') != 'quiet' and number((r.get('closure') or {}).get('at')) >= DAY_START]
+    more = [r for r in items if r.get('state') in ('open', 'waiting') and r['id'] not in on_page]
+    print(f'<p class="back">{len(done)} closed today, {len(more)} more in the back room. '
+          + link_to_page(OTHER_PAGE, 'Open the back room') + '</p></div>')
+
+
+def link_to_page(href, label):
+    return f'<a href="{esc(href)}">{esc(label)}</a>' if href else ''
+
+
+if MODE == 'front':
+    front_page()
+    sys.exit(0)
+
 
 # --- page -------------------------------------------------------------------
 
