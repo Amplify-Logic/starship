@@ -718,6 +718,7 @@ def front_page():
     print(front_list('Partners waiting on you', [r for r in shown if partner(r)]))
     print(front_list('Colleagues asking you', [r for r in shown if not partner(r)]))
     print(front_list('Later this week', later[:5], 'quiet'))
+    print(front_addon_sections())
     notes = []
     if len(waiting) > len(shown):
         notes.append(f'{len(waiting) - len(shown)} more waiting, in the back room')
@@ -733,6 +734,70 @@ def front_page():
     more = [r for r in items if r.get('state') in ('open', 'waiting') and r['id'] not in on_page]
     print(f'<p class="back">{len(done)} closed today, {len(more)} more in the back room. '
           + link_to_page(OTHER_PAGE, 'Open the back room') + '</p></div>')
+
+
+# The front-page cap on add-on sections: the header of fm-todo-render.sh owns it.
+FRONT_SECTIONS, FRONT_LINES, FRONT_LINE_CHARS, FRONT_HEADING_CHARS = 2, 2, 160, 80
+INLINE = {'a', 'b', 'strong', 'i', 'em', 'span', 'code', 'small', 'time', 'mark'}
+
+
+def inline_text(nodes):
+    """The visible text of inline-only content, or None when it holds anything else."""
+    out = []
+    for node in nodes:
+        if isinstance(node, str):
+            out.append(node)
+            continue
+        inner = inline_text(node[2]) if node[0] in INLINE else None
+        if inner is None:
+            return None
+        out.append(inner)
+    return ''.join(out)
+
+
+def short_line(node, cap):
+    text = inline_text(node[2])
+    return text is not None and 0 < len(html.unescape(text).strip()) <= cap
+
+
+def short_body(body):
+    """True when an add-on section's body is one or two short lines and nothing else."""
+    lines = []
+    for node in body:
+        if isinstance(node, str):
+            if node.strip():
+                return False
+            continue
+        if node[0] == 'p':
+            lines.append(node)
+        elif node[0] in ('ul', 'ol'):
+            for child in node[2]:
+                if isinstance(child, str):
+                    if child.strip():
+                        return False
+                elif child[0] == 'li':
+                    lines.append(child)
+                else:
+                    return False
+        else:
+            return False
+    return 0 < len(lines) <= FRONT_LINES and all(short_line(n, FRONT_LINE_CHARS) for n in lines)
+
+
+def front_addon_sections():
+    """The short add-on sections that asked for the front page, the first few in name order."""
+    if not SECTIONS.strip():
+        return ''
+    parsed = Fragment(SECTIONS)
+    groups = []
+    for node in parsed.blocks():
+        if not isinstance(node, str) and node[0] == 'h2':
+            groups.append([node])
+        elif groups:
+            groups[-1].append(node)
+    shown = [g for g in groups if 'data-todo-front' in g[0][1]
+             and short_line(g[0], FRONT_HEADING_CHARS) and short_body(g[1:])]
+    return '\n'.join(''.join(parsed.render(n) for n in g).strip() for g in shown[:FRONT_SECTIONS])
 
 
 def link_to_page(href, label):

@@ -40,6 +40,8 @@
 #     asks re-checked in the last day, oldest first, ten at most between them.
 #   - Later this week: up to five asks ending after today and by Sunday 23:59
 #     of this calendar week; an ask ending later stays in its waiting list.
+#   - Any short add-on section that asked for the front page (ADD-ON SECTIONS
+#     below), at most two.
 # Then one line counting what is left out (more waiting, lines not re-checked
 # in the last day, and Firstmate's own questions - held decisions and tooling
 # approvals, which are asked in chat), and "N closed today, M more in the back
@@ -117,6 +119,14 @@
 # A morning detail section headed the same as an add-on section, at any depth,
 # is dropped with everything after it up to the next h2, because the add-on's
 # section is read on every render and the morning copy is always older.
+# Add-on sections live in the back room. A section can also ask for the front
+# page by putting data-todo-front on its h2. It shows there only while it is
+# short: a heading of at most 80 characters, then one or two lines, each a <p>
+# or an <li> of one <ul> or <ol>, of at most 160 characters, holding only text
+# and inline tags (a, b, strong, i, em, span, code, small, time, mark). Only the
+# first two such sections, in name order, show on the front page. Anything
+# longer, anything else and anything over that count stays in the back room
+# only; a section that shows on the front page is in the back room as well.
 #
 # FRESHNESS IS ON EVERY LINE. A line is "read <time>" only when its recorded
 # check is at or after this build's sweep or intake pass (or the start of the
@@ -380,7 +390,7 @@ resolve_day() {
 }
 
 render_cmd() {
-  local out='' morning='' day='' if_exists=false epoch body room back sidecar
+  local out='' morning='' day='' if_exists=false epoch body room back sidecar sections
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --out) [ "$#" -ge 2 ] || die '--out requires a value'; out=$2; shift 2 ;;
@@ -429,10 +439,12 @@ render_cmd() {
   FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" sync --morning-json "$sidecar" >/dev/null \
     || die "item sync failed; existing page preserved"
   back="${out%.html}-all.html"
+  # Each hook runs once per render; both pages read the same sections.
+  sections=$(addon_sections "$epoch" "$day")
   # Both pages are composed before either is written, so a failure keeps both.
-  body=$(render_page "$epoch" "$day" "$morning" "$sidecar" front "${back##*/}") \
+  body=$(render_page "$epoch" "$day" "$morning" "$sidecar" front "${back##*/}" "$sections") \
     || die "composition failed; existing page preserved"
-  room=$(render_page "$epoch" "$day" "$morning" "$sidecar" all "${out##*/}" "$(addon_sections "$epoch" "$day")") \
+  room=$(render_page "$epoch" "$day" "$morning" "$sidecar" all "${out##*/}" "$sections") \
     || die "composition failed; existing page preserved"
   write_atomic "$back" "$room" || die "cannot write the back room: $back"
   write_atomic "$out" "$body" || die "cannot write the page: $out"
