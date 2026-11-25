@@ -57,6 +57,14 @@ You can paste or drop images onto the page; they are attached to the next messag
 
 The page is another window onto the one primary session, not a second first mate.
 
+### Talking to a second mate
+
+When this home has a local second mate with the direct line on ([direct-line.md](direct-line.md)), a small switch takes the place of the Firstmate title above the chat: `First mate`, then one entry per such mate, named after its registry name with "mate" added, so `quick` shows as `Quick mate`.
+Picking a mate shows that mate's own conversation, read the same way as the first mate's, and the message box sends to it; picking First mate is the chat as it always was.
+Each browser remembers the choice; a mate that loses its direct line drops out of the switch and the chat shows the first mate again.
+With no such mate the switch does not appear.
+A mate's chat has no suggested next message and does not show its terminal prompts, and a message to a mate holds at most 8,000 characters.
+
 ### The band and the projects
 
 The band and both project views are drawn from what the terminal's own regions show: `bin/fm-factory.py --screen` for the Factory pane and `bin/fm-bridge-strip.sh fields` for the strip.
@@ -249,7 +257,7 @@ Every terminal escape and control character is taken out on the server, and the 
 
 ## How sending works
 
-Every message goes through `bin/fm-desk-voice.sh send --source web`, the desk floater's own path.
+Every message to the first mate goes through `bin/fm-desk-voice.sh send --source web`, the desk floater's own path.
 It types the message into the primary's own chat when that chat is safely empty, or past a Claude draft, and otherwise saves it to the durable desk-voice mailbox with a wake.
 Under the box, the page says which happened: typed into the chat, typed but not confirmed, or saved to the mailbox.
 Pasted images are saved where the floater saves its screenshots, `state/desk-voice/shots/`, owner-only, and passed with `--image`.
@@ -257,6 +265,9 @@ The words go to it on standard input (`--stdin`), not as an argument, because Li
 Only PNG, JPEG, GIF and WebP images are accepted.
 Typing into the chat turns line breaks into spaces, as it does for the floater; a mailbox delivery keeps them.
 [desk-floater.md](desk-floater.md#how-transcripts-reach-firstmate) owns the full delivery rules.
+
+A message to a second mate goes only through `bin/fm-direct-line.sh send` instead, with a fresh client id, so it gets every check and record the direct line keeps.
+The page lists only the mates `bin/fm-direct-line.sh list` shows with the direct line on and local, reading that list at most every ten seconds, and refuses a send or a read for any other.
 
 ## Security model
 

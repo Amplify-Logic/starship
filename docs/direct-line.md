@@ -85,6 +85,7 @@ Every read prints one JSON document whose `schema` field names its version:
 | `bin/fm-secondmate-pin.sh show` | `fm-secondmate-pin.v1` |
 
 The conversation read is the web page's own transcript reading ([web.md](web.md)), so its item HTML is already escaped; a page that inserts it should still serve a strict content security policy.
+The Starship web page itself offers each direct-line mate beside the first mate ([web.md](web.md#talking-to-a-second-mate)).
 `bin/fm-secondmate-pin.sh set` changes one mate's model pin without hand-editing `config/secondmate-harness`, and changes nothing unless the new pin reads back exactly; relaunching the mate is a separate step.
 
 ## Limits
