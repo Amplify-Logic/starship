@@ -156,7 +156,7 @@ Everything is in the home's private `data/backport/`, which is never published:
 | `notes/<slug>.md` | What stays home: where the item came from, the raw note, the owner's words about it |
 | `ledger.tsv` | Each card's stamp, the reader's verdict, the owner's answer, and where it went |
 
-The ledger is also what stops a settled card from being raised again: Never stays never, and Not now comes back once, after a month.
+The ledger is also what stops a settled card from being raised again: Never stays never, and Not now comes back once, after a month; a second Not now sets the card aside for good.
 `bin/fm-backport.sh`'s header owns the commands, the exact refusal rules and the ledger format.
 
 ## Switching it on

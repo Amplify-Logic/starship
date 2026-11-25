@@ -116,6 +116,10 @@ test_each_rule_refuses() {
   refused_for "$home" no-title 'line 1: the card must open with'
   good_card | sed 's/^Kind: practice/Kind: chore/' > "$dir/kind.md"
   refused_for "$home" kind 'Kind must be fix, rule, practice or capability'
+  good_card | sed 's/^Kind: practice/Kind: practice and more words/' > "$dir/kind-trailing.md"
+  refused_for "$home" kind-trailing 'Kind must be fix, rule, practice or capability'
+  good_card | sed 's/^Kind: practice/Kind: practice (a note) and more/' > "$dir/kind-after-note.md"
+  refused_for "$home" kind-after-note 'Kind must be fix, rule, practice or capability'
   good_card | sed '/^Needs:/d' > "$dir/no-needs.md"
   refused_for "$home" no-needs 'expected "Needs: ..." here'
   good_card | sed 's/^## Evidence it worked/## What we saw/' > "$dir/heading.md"
@@ -140,6 +144,15 @@ test_each_rule_refuses() {
   refused_for "$home" clock 'a clock time; leave times out'
   good_card | sed 's/^Before: a few/Until last week a few/' > "$dir/relative.md"
   refused_for "$home" relative 'a relative date'
+  good_card | sed 's/^Before: a few/Before 3\/11 a few/' > "$dir/date-no-year.md"
+  refused_for "$home" date-no-year 'a date; leave dates out'
+  good_card | sed 's/^Before: a few/Before, at 9pm, a few/' > "$dir/pm.md"
+  refused_for "$home" pm 'a clock time; leave times out'
+  local when
+  for when in today tonight 'this morning' 'this week' 'three days ago'; do
+    good_card | sed "s/^Before: a few/Until $when a few/" > "$dir/when.md"
+    refused_for "$home" when 'a relative date'
+  done
 
   good_card | sed 's#^Before: a few#See https://example.com/notes, a few#' > "$dir/link.md"
   refused_for "$home" link 'a link outside this repository'
@@ -152,6 +165,14 @@ test_each_rule_refuses() {
   refused_for "$home" blockquote 'a block quote; never quote anyone'
   good_card | sed 's/^A custom check that reads the network/A teammate said "it keeps waking me" when the network/' > "$dir/speech.md"
   refused_for "$home" speech 'quoted words; never quote anyone'
+  good_card | sed "s/^A custom check that reads the network/The owner said 'it keeps waking me' when the network/" > "$dir/single.md"
+  refused_for "$home" single 'quoted words; never quote anyone'
+  good_card | sed "s/^A custom check that reads the network/The owner said \xe2\x80\x98it isn\xe2\x80\x99t fixed yet\xe2\x80\x99 when the network/" > "$dir/curly-single.md"
+  refused_for "$home" curly-single 'quoted words; never quote anyone'
+  good_card | awk '{ print } /^## The problem/ { print ""; print "```"; print "the owner said \"it keeps waking me\""; print "```" }' > "$dir/fenced-speech.md"
+  refused_for "$home" fenced-speech 'quoted words; never quote anyone'
+  good_card | awk '{ print } /^## The problem/ { print ""; print "```"; print "> it keeps waking me"; print "```" }' > "$dir/fenced-quote.md"
+  refused_for "$home" fenced-quote 'a block quote; never quote anyone'
 
   # A name never seen in this repository in any case, built reversed so this
   # file holds it in no case either.
@@ -174,7 +195,12 @@ test_quoted_wording_allowed_only_in_how_it_works() {
   good_card > "$home/data/backport/cards/rule.md"
   bp "$home" check rule
   [ "$RC" -eq 0 ] || fail "wording: the exact wording under How it works was refused: $OUT"
-  pass "a rule card may carry its exact wording in quotes under How it works"
+  good_card | sed 's/^Kind: practice/Kind: practice (a rule for the first mate, no new code)/' \
+    | awk '{ print } /^## How it works/ { print ""; print "```text"; print "echo \"retry the read once\" > note"; print "```" }' \
+    | sed "s/^Which checks and which services/The owner's and the workers' checks and services/" > "$home/data/backport/cards/fenced.md"
+  bp "$home" check fenced
+  [ "$RC" -eq 0 ] || fail "wording: a Kind note, a fenced command under How it works or a possessive was refused: $OUT"
+  pass "a rule card may carry its exact wording in quotes under How it works, and Kind may carry one note in brackets"
 }
 
 test_needs_a_word_list_or_approvals() {
@@ -183,7 +209,11 @@ test_needs_a_word_list_or_approvals() {
   rm -f "$home/config/leak-names-approved"
   good_card > "$home/data/backport/cards/retry.md"
   refused_for "$home" retry 'create config/leak-names-approved'
-  pass "the check refuses in a home where the leak guard could not check new names"
+  printf 'quuxcorp\n' > "$home/config/leak-words"
+  printf 'path = addon\n' > "$home/config/addon"
+  bp "$home" check retry
+  says 'keeps no private word list' && fail "no-list: a home with its own words and an unusable add-on was told it keeps no list: $OUT"
+  pass "the check refuses in a home where the leak guard could not check new names, and only there"
 }
 
 test_stamp_bound_to_text_and_ready_gate() {
@@ -225,6 +255,17 @@ test_stamp_bound_to_text_and_ready_gate() {
     || fail "gate: the old yes carried over to the edited text: $OUT"
   bp "$home" sent retry
   [ "$RC" -eq 1 ] || fail "gate: an edited card was recorded as sent without a new yes"
+
+  good_card > "$card"
+  bp "$home" reader retry fail
+  bp "$home" answer retry yes
+  { [ "$RC" -eq 1 ] && says 'no fresh reader pass'; } \
+    || fail "gate: a yes was recorded after a newer reader failed the text: $OUT"
+  bp "$home" built retry
+  { [ "$RC" -eq 1 ] && says 'no fresh reader pass'; } \
+    || fail "gate: a card was recorded as built after a newer reader failed the text: $OUT"
+  bp "$home" list
+  printf '%s\n' "$OUT" | grep -q $'^retry\treader failed\t' || fail "gate: list did not follow the newest reader verdict: $OUT"
   pass "the stamp, the reader's verdict and the yes bind to the exact text, and ready needs all three"
 }
 
@@ -256,7 +297,10 @@ test_answers_and_list_states() {
   printf '%s\n' "$OUT" | grep -q $'^fresh\tnew\t' || fail "states: an unchecked card did not show as new: $OUT"
   FM_BACKPORT_NOW=$((t0 + 31 * 86400)) bp "$home" list
   printf '%s\n' "$OUT" | grep -q $'^later\tnot now, due again\t' || fail "states: not now did not come back after 30 days: $OUT"
-  pass "answers are recorded and list shows where every card stands, with not now coming back after 30 days"
+  FM_BACKPORT_NOW=$((t0 + 32 * 86400)) bp "$home" answer later not-now
+  FM_BACKPORT_NOW=$((t0 + 100 * 86400)) bp "$home" list
+  printf '%s\n' "$OUT" | grep -q $'^later\tset aside\t' || fail "states: a second not now did not set the card aside for good: $OUT"
+  pass "answers are recorded and list shows where every card stands, with not now coming back once after 30 days"
 }
 
 test_misuse() {

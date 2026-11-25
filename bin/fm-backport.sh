@@ -29,19 +29,22 @@
 # THE CHECK. check <slug> refuses the card, naming each problem by line, when:
 #   - the shape differs: a first line "# <title>", then the lines Kind:,
 #     Fits:, Needs: and Lands in: in that order, Kind one of fix, rule,
-#     practice or capability, then exactly the six sections "## The problem",
+#     practice or capability, optionally followed by one short note in
+#     brackets, then exactly the six sections "## The problem",
 #     "## The general rule", "## How it works", "## Evidence it worked",
 #     "## Left out on purpose" and "## Done when", in that order, none empty,
 #     and no other heading or text outside them;
 #   - it holds more than 500 words;
 #   - it holds a date or a time: a four-digit year, a numeric date, a month
-#     name, a clock time, or a relative day such as yesterday or last week;
+#     name, a clock time such as 23:30 or 9pm, or a relative time such as
+#     today, tonight, yesterday, this morning, last week or three days ago;
 #   - it holds a link or address other than one into this repository's own
 #     public home on GitHub (the origin of this checkout): any other URL, a
 #     bare www. address or an email address;
 #   - it holds quoted speech: a block quote, or three or more words inside
-#     double quotes outside "## How it works", where a rule card carries the
-#     exact wording to add;
+#     double or single quotes, straight or curly, anywhere but under
+#     "## How it works", where a rule card carries the exact wording to add;
+#     code fences are no exception outside that section;
 #   - bin/fm-leak-guard.sh --text --new-names finds a private word, a new
 #     name, a customer data shape or a key in it.
 # A card that passes gets a "checked" event carrying its sha256: the stamp.
@@ -68,7 +71,8 @@
 # WHAT LIST SAYS. One line per card, tab separated: slug, state, title. The
 # states are: new (never checked), changed (edited since its stamp), checked,
 # reader failed, waiting for yes, yes, not now (back after 30
-# days), not now, due again, never, sent and built.
+# days), not now, due again, set aside (a second not now, never raised
+# again), never, sent and built.
 #
 # Environment overrides, for tests and unusual layouts:
 #   FM_HOME, FM_BACKPORT_NOW (epoch used as now)
@@ -193,8 +197,8 @@ shape_problems() {
         if (ti < ntop && index(line, top[ti + 1] " ") == 1 && length(line) > length(top[ti + 1]) + 1) {
           if (ti == 0) {
             kind = substr(line, 7)
-            if (kind !~ /^(fix|rule|practice|capability)([ \t(]|$)/)
-              print "line " NR ": Kind must be fix, rule, practice or capability"
+            if (kind !~ /^(fix|rule|practice|capability)([ \t]+\([^()]*\))?[ \t]*$/)
+              print "line " NR ": Kind must be fix, rule, practice or capability, with at most one short note in brackets"
           }
           ti++; next
         }
@@ -226,17 +230,27 @@ text_problems() {
       allowed = (repo == "") ? "" : "https://github.com/" repo
     }
     function report(what) { print "line " NR ": " what }
+    function quoted(s, re, mark,   m, i, inner, n, w) {
+      while (match(s, re)) {
+        m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        i = index(m, mark); inner = substr(m, i + 1, length(m) - i - 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", inner)
+        n = split(inner, w, /[ \t]+/)
+        if (inner != "" && n >= 3) return 1
+      }
+      return 0
+    }
     {
       line = $0
-      if (line ~ /^## /) { section = substr(line, 4) }
+      if (!fence && line ~ /^## /) { section = substr(line, 4) }
       if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
       low = tolower(line)
       if (line ~ /(^|[^0-9])(19|20)[0-9][0-9]([^0-9]|$)/) report("a year; leave dates out")
-      if (line ~ /(^|[^0-9])[0-9][0-9]?\/[0-9][0-9]?\/[0-9][0-9]([^0-9]|$)/) report("a date; leave dates out")
+      if (line ~ /(^|[^0-9\/])[0-9][0-9]?\/[0-9][0-9]?(\/[0-9][0-9]([0-9][0-9])?)?([^0-9\/]|$)/) report("a date; leave dates out")
       if (line ~ ("(^|[^A-Za-z])" month "([^A-Za-z]|$)") || line ~ /(^|[^A-Za-z])May[ \t,]+[0-9]/ || line ~ /[0-9][ \t]+May([^A-Za-z]|$)/) report("a month name; leave dates out")
-      if (line ~ /(^|[^0-9:])[0-2]?[0-9]:[0-5][0-9]([^0-9]|$)/) report("a clock time; leave times out")
-      if (low ~ /(^|[^a-z])(yesterday|tomorrow)([^a-z]|$)/ ||
-          low ~ /(^|[^a-z])(last|next|this past)[ \t]+(week|month|year|night|morning|evening|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)([^a-z]|$)/)
+      if (line ~ /(^|[^0-9:])[0-2]?[0-9]:[0-5][0-9]([^0-9]|$)/ || low ~ /(^|[^0-9:])[0-9][0-9]?[ \t]*[ap]\.?m([^a-z]|$)/) report("a clock time; leave times out")
+      if (low ~ /(^|[^a-z])(yesterday|tomorrow|today|tonight|ago)([^a-z]|$)/ ||
+          low ~ /(^|[^a-z])(last|next|this|this past)[ \t]+(week|month|year|night|morning|afternoon|evening|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)([^a-z]|$)/)
         report("a relative date; say once, or how many times, instead")
       rest = line
       while (match(rest, /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^ \t)>\]"`]*/)) {
@@ -246,15 +260,14 @@ text_problems() {
       }
       if (low ~ /(^|[^a-z0-9.\/])www\.[a-z0-9-]+\./) report("a web address; leave it out")
       if (line ~ /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]+/) report("an email address; leave it out")
-      if (fence) next
+      if (section == "How it works" && fence) next
       if (line ~ /^[ \t]*>/) report("a block quote; never quote anyone")
       if (section != "How it works") {
         q = line
         gsub(/\342\200\234|\342\200\235/, "\"", q)
-        while (match(q, /"[^"]*"/)) {
-          inner = substr(q, RSTART + 1, RLENGTH - 2); q = substr(q, RSTART + RLENGTH)
-          if (split(inner, w, /[ \t]+/) >= 3 && inner !~ /^[ \t]*$/) report("quoted words; never quote anyone (a rule card puts its exact wording under \"## How it works\")")
-        }
+        gsub(/\342\200\230|\342\200\231/, "\047", q)
+        if (quoted(q, "\"[^\"]*\"", "\"") || quoted(q, "(^|[^A-Za-z0-9])\047([^\047]|[A-Za-z0-9]\047[A-Za-z0-9])*\047", "\047"))
+          report("quoted words; never quote anyone (a rule card puts its exact wording under \"## How it works\")")
       }
     }
   ' "$1"
@@ -269,7 +282,7 @@ guard_ready() {
   . "$FM_ROOT/bin/fm-leak-lib.sh"
   list=$(mktemp "${TMPDIR:-/tmp}/fm-backport-words.XXXXXX") || return 1
   fm_leak_words_write "$FM_HOME" "$CONFIG" "$list" 2>/dev/null || rc=$?
-  if [ "$rc" -le 0 ] && [ -s "$list" ]; then rc=0; else rc=1; fi
+  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; } && [ -s "$list" ]; then rc=0; else rc=1; fi
   rm -f "$list"
   return "$rc"
 }
@@ -346,7 +359,7 @@ cmd_answer() {
   ensure_dir
   hash=$(stamped_hash "$1") || exit
   if [ "$2" = yes ]; then
-    has_event "$1" reader-pass "$hash" \
+    [ "$(reader_verdict "$1" "$hash")" = reader-pass ] \
       || refuse "card $1 has no fresh reader pass for its current text; a yes needs one first"
   fi
   record "$1" "$2" "$hash"
@@ -379,6 +392,8 @@ cmd_done() {  # <event> <slug> [detail]
   answer=$(last_of "$slug" yes not-now never)
   [ "$(printf '%s\n' "$answer" | cut -f3)" = yes ] && [ "$(printf '%s\n' "$answer" | cut -f4)" = "$hash" ] \
     || refuse "card $slug has no yes for its current text; it cannot have been $event"
+  [ "$(reader_verdict "$slug" "$hash")" = reader-pass ] \
+    || refuse "card $slug has no fresh reader pass for its current text; it cannot have been $event"
   record "$slug" "$event" "$hash" "${3:-}"
   printf 'recorded %s for %s\n' "$event" "$slug"
 }
@@ -397,6 +412,8 @@ cmd_list() {
     last=$(last_of "$slug" built sent)
     if [ "$(printf '%s\n' "$answer" | cut -f3)" = never ]; then
       state=never
+    elif [ "$(printf '%s\n' "$answer" | cut -f3)" = not-now ] && [ "$(events "$slug" | awk -F '\t' '$3 == "not-now"' | wc -l)" -ge 2 ]; then
+      state="set aside"
     elif [ -n "$last" ] && [ "$(printf '%s\n' "$last" | cut -f4)" = "$hash" ]; then
       state=$(printf '%s\n' "$last" | cut -f3)
     elif ! has_event "$slug" checked "$hash"; then
@@ -404,7 +421,8 @@ cmd_list() {
     elif [ "$(printf '%s\n' "$answer" | cut -f3)" = not-now ]; then
       at=$(printf '%s\n' "$answer" | cut -f1)
       if [ $((t - at)) -ge "$NOT_NOW_SECONDS" ]; then state="not now, due again"; else state="not now"; fi
-    elif [ "$(printf '%s\n' "$answer" | cut -f3)" = yes ] && [ "$(printf '%s\n' "$answer" | cut -f4)" = "$hash" ]; then
+    elif [ "$(printf '%s\n' "$answer" | cut -f3)" = yes ] && [ "$(printf '%s\n' "$answer" | cut -f4)" = "$hash" ] \
+      && [ "$(reader_verdict "$slug" "$hash")" = reader-pass ]; then
       state=yes
     else
       reader=$(reader_verdict "$slug" "$hash")
