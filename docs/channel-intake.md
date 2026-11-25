@@ -66,7 +66,7 @@ Chit-chat, social posts, lunch and celebrations, and questions between colleague
 
 A kept post is one `observe --class update` call.
 Its `--ref` is the message timestamp, its `--source-epoch` the post time, its `--link` the Slack permalink, and its `--title` a one-line summary that carries the post's dates, for example "Example product limited release, 50 units - live on the partner webshop 15 Oct".
-A post that asks the page's owner to act, or sets a deadline that is theirs, is observed with an owed class instead (`obligation` or `deadline`), so it reaches "Needs you now" like any other ask.
+A post that asks the page's owner to act, or sets a deadline that is theirs, is observed with an owed class instead (`obligation` or `deadline`), so it reaches the to-do page like any other ask.
 An edit inside the revision window is re-observed like any other message, so a moved date updates the same item.
 
 An update is never notified and never on the to-do list.
@@ -170,8 +170,8 @@ A correction, a resolution and a completed obligation reconcile across both by c
 The day's Lavish page is the third surface, and it re-ranks itself during the day rather than being a snapshot of 06:00.
 A completed read calls [`bin/fm-todo-render.sh`](../bin/fm-todo-render.sh), which first folds this ledger, the morning action metadata and the captain-held backlog into one durable item per ask through [`bin/fm-todo.sh`](../bin/fm-todo.sh), then rebuilds `.lavish/today-<YYYY-MM-DD>.html`, a calm front page, and its back room `today-<YYYY-MM-DD>-all.html` from those items with no model call.
 An `automation-candidate` is excluded there exactly as it is from `todo`, because a proposal is not a human obligation.
-Each line says when it was last verified against its source, and a line not re-read in the current verification sweep says "not re-checked since" rather than passing as current; the page carries its own render time separately.
-Closures, including the captain's page commands, are durable on the item and show in the collapsed closed fold ("Closed today", or "Closed since" the previous sweep) with their evidence; a closed item returns only when its source meaningfully changes, with the reason shown.
+The front page says once when everything was last checked and flags a line that was not re-checked in the last day; in the back room each line says when it was last verified against its source, and a line not re-read in the current verification sweep says "not re-checked since" rather than passing as current, with the render time shown separately.
+Closures, including the captain's page commands and a quiet line closed after 14 days with no new message, are durable on the item and show in the back room's collapsed closed fold ("Closed today", or "Closed since" the previous sweep) with their evidence; a closed item returns only when its source meaningfully changes, with the reason shown.
 Typing `done` or `drop` on a row that is a held decision closes the row and asks Firstmate to re-check the held call through the same reconcile request the Factory pane's x key files, so the call settles with evidence instead of staying held.
 A home's add-on can extend the page through three hook points of `bin/fm-addon.sh`: `todo-admit` hooks refuse a new ask before it is recorded; `todo-verbs` hooks take more one-line verbs on a row, such as changes to a ticket the row names, move the row with `bin/fm-todo.sh close` or `hand-over`, recording their own source change so it does not reopen the row, and show their own state on the row with `bin/fm-todo.sh mark`; `todo-page` hooks add sections of their own, such as a live table from a system only that home reads.
 `bin/fm-todo.sh --help` owns the item record, identity, verification, page commands, add-on verbs and marks; `bin/fm-todo-render.sh --help` owns the page shape, add-on sections and the morning composition format; verification procedure remains owned by `daily-todo-freshness`.

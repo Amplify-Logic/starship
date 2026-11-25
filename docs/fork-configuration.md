@@ -331,7 +331,7 @@ Its three parts work as one system:
 
 - The morning intake (`bin/fm-morning-intake.sh`) is a once-a-day gate that makes sure the morning read of the captain's channels happens, retries it, and shows a missed morning instead of skipping it.
 - The continuous channel intake (`bin/fm-channel-intake.sh`) checks the home's enrolled sources, such as Slack, mail, calendar and Asana, through the day, remembers what it has seen and what the captain still owes, and sends one grouped private alert for anything urgent.
-- The daily to-do page (`bin/fm-todo-render.sh`) is rebuilt from those records on every read, with no model call, and every line on it says when it was last checked at its source.
+- The daily to-do page (`bin/fm-todo-render.sh`) is rebuilt from those records on every read, with no model call, as a calm front page with a back room behind one link; the front page says when everything was last checked at its source and flags any line that was not, and the back room shows each line's own last check.
 
 Nothing reads, arms or schedules anything until the home's own private, gitignored config switches it on with an `enabled = true` line in `config/morning-intake` or `config/channel-intake`.
 Each home names its own sources, with their ids, in its private source inventory (`data/channel-intake/sources.tsv` by default); this repository carries no names, ids or accounts.
