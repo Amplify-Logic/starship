@@ -346,6 +346,29 @@ extension VoiceVolumeTests {
         XCTAssertTrue(model.bubbleShown, "the next reply off Starship shows as before")
     }
 
+    /// With nothing newer said, a reply opened in full still waits on Starship
+    /// and comes back once the captain looks away.
+    @MainActor
+    func testAnOpenedReplyWithNothingNewerStillComesBackOffStarship() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        try await follow(model, home)
+        try reply(home, 1)
+        try await waitUntil { model.caption?.id == 1 }
+        model.toggleCaptionExpanded()
+        try pageInFront(home)
+        model.checkScreen()
+        try await waitUntil { model.lookingAtStarship }
+        XCTAssertFalse(model.bubbleShown)
+
+        try FileManager.default.removeItem(at: home.marker)
+        model.checkScreen()
+        try await waitUntil { !model.lookingAtStarship }
+        XCTAssertEqual(model.caption?.id, 1, "the opened reply is still the latest, so it comes back")
+        XCTAssertTrue(model.bubbleShown)
+    }
+
     /// A Do it offer is never lost: it waits behind a quiet bubble and shows
     /// once the captain looks away from Starship.
     @MainActor
