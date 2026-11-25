@@ -183,8 +183,10 @@ final class FloaterPanel: NSPanel {
     /// Places the floater's windows; a drag of the floater ends with `end()`.
     let mover: WindowMover
 
+    /// `makePanel` makes the reply card's and the halo's panels; tests pass
+    /// panels that never reach the screen.
     @MainActor
-    init(model: FloaterModel) {
+    init(model: FloaterModel, makePanel: @MainActor (NSRect) -> NSPanel = FloaterPanel.plainPanel) {
         let mover = WindowMover()
         self.mover = mover
         let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
@@ -195,12 +197,7 @@ final class FloaterPanel: NSPanel {
         let bubbleHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .bubble))
         bubbleHosting.sizingOptions = []
         bubbleHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
-        bubblePanel = Self.floating(NSPanel(
-            contentRect: bubbleHosting.frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        ))
+        bubblePanel = Self.floating(makePanel(bubbleHosting.frame))
         bubblePanel.contentView = Self.holder(bubbleHosting)
         // A window's own shadow is drawn once for its shape and lags a shape
         // that moves, so the halo panel draws the card's shadow instead.
@@ -208,12 +205,7 @@ final class FloaterPanel: NSPanel {
         let haloHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .halo))
         haloHosting.sizingOptions = []
         haloHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
-        haloPanel = Self.floating(NSPanel(
-            contentRect: haloHosting.frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        ))
+        haloPanel = Self.floating(makePanel(haloHosting.frame))
         haloPanel.contentView = Self.holder(haloHosting)
         haloPanel.hasShadow = false
         haloPanel.ignoresMouseEvents = true
@@ -249,6 +241,10 @@ final class FloaterPanel: NSPanel {
                 motion.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             }
         }
+    }
+
+    static func plainPanel(_ rect: NSRect) -> NSPanel {
+        NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     }
 
     /// A plain view that holds a hosting view and fills the window. A hosting

@@ -188,11 +188,7 @@ final class ReplyMotionTests: XCTestCase {
 
     @MainActor
     private func windows(at frame: NSRect) -> (mover: WindowMover, floater: NSWindow, card: NSWindow, halo: NSWindow) {
-        func window() -> NSWindow {
-            NSWindow(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless],
-                     backing: .buffered, defer: false)
-        }
-        let floater = window(), card = window(), halo = window()
+        let floater = Panel.make(), card = Panel.make(), halo = Panel.make()
         floater.setFrame(frame, display: false)
         let mover = WindowMover()
         mover.bubble = card
@@ -346,9 +342,9 @@ final class ReplyMotionTests: XCTestCase {
         try "motion=full\nlast=full\n".write(toFile: setting, atomically: true, encoding: .utf8)
         let model = FloaterModel(repoRoot: "/nonexistent", fmHome: home)
         XCTAssertEqual(model.motion.style, .full)
-        let panel = FloaterPanel(model: model)
+        // Its card and halo stay off screen, and the floater is never shown.
+        let panel = FloaterPanel(model: model, makePanel: Panel.make)
         defer { NSApp.windows.forEach { $0.orderOut(nil) } }
-        panel.orderFrontRegardless()
         func turn(_ seconds: TimeInterval) {
             let end = Date().addingTimeInterval(seconds)
             repeat {
@@ -434,5 +430,59 @@ final class ReplyMotionTests: XCTestCase {
         XCTAssertEqual(motion, ["Off", "Calm", "Full"])
         let stays = menu?.items.first { $0.title == "Reply stays" }?.submenu?.items.map(\.title)
         XCTAssertEqual(stays, ["8 s", "15 s", "30 s", "1 min"])
+    }
+}
+
+extension ReplyMotionTests {
+    /// A panel for tests that takes every order to show or hide and remembers
+    /// it, without ever putting the window on a screen: no test puts a floater
+    /// window where the person at this Mac would see it. `isVisible` reports what
+    /// the code under test asked for.
+    final class Panel: NSPanel {
+        private var shown = false
+
+        static func make(_ rect: NSRect = NSRect(x: 0, y: 0, width: 10, height: 10)) -> NSPanel {
+            Panel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel],
+                  backing: .buffered, defer: false)
+        }
+
+        override var isVisible: Bool { shown }
+        override func orderFrontRegardless() { shown = true }
+        override func orderFront(_ sender: Any?) { shown = true }
+        override func makeKeyAndOrderFront(_ sender: Any?) { shown = true }
+        override func orderOut(_ sender: Any?) { shown = false }
+    }
+}
+
+/// The floater's three windows (Talk and Show, the reply card, and the
+/// card's halo) each hold their SwiftUI view inside a plain content view.
+///
+/// A hosting view that is itself a window's content view recomputes the
+/// window's size limits from inside AppKit's constraint pass
+/// (NSHostingView.updateWindowContentSizeExtremaIfNecessary, which returns at
+/// once for any other view). When a reply arrived or the status line changed,
+/// that recomputation found the window resized and asked for another pass,
+/// and AppKit stops the app once a window has had more passes in a row than
+/// it has views: two here. Every crash report ended there.
+extension ReplyMotionTests {
+    @MainActor
+    func testNoWindowHasAHostingViewAsItsContentView() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("df-windows-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let model = FloaterModel(repoRoot: "/nonexistent", fmHome: home)
+        // Built and checked, never shown.
+        let panel = FloaterPanel(model: model, makePanel: ReplyMotionTests.Panel.make)
+        let windows: [(String, NSWindow?)] = [("floater", panel), ("card", panel.mover.bubble),
+                                             ("halo", panel.mover.halo)]
+        for (name, window) in windows {
+            let content = try XCTUnwrap(window?.contentView, name)
+            XCTAssertFalse(content is NSHostingView<FloaterView>, "\(name): the hosting view is the content view")
+            let hosting = try XCTUnwrap(content.subviews.first as? NSHostingView<FloaterView>, name)
+            XCTAssertEqual(hosting.sizingOptions, [], "\(name): WindowMover sizes the window, not SwiftUI")
+            XCTAssertEqual(hosting.frame, content.bounds, "\(name): the view fills its window")
+            XCTAssertEqual(hosting.autoresizingMask, [.width, .height], "\(name): and follows its size")
+            XCTAssertFalse(window?.isVisible ?? true, "\(name): nothing reaches the screen")
+        }
     }
 }
