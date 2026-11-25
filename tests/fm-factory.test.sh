@@ -3788,11 +3788,10 @@ test_hide_keeps_the_pane_away_and_show_brings_it_back() {
   write_world
   local out dir="$TMP_ROOT/case$CASE" over page
   export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock
-  bash "$PANE" hidden && fail "a new home keeps the pane hidden"
+  assert_absent "$HOME_FIX/config/factory-pane" "a new home keeps the pane hidden"
   DRIVE_PANE=1 HERDR_PANE_ID=w1:p9 drive_keys "SNAP:$dir/keys" h
   assert_contains "$(screen_of "$dir/keys" 50 100)" "h hide · q quit" "the keys line offers h beside the first mate"
   assert_equals "$(cat "$HOME_FIX/config/factory-pane" 2>/dev/null)" "hidden" "h keeps the pane hidden for the home"
-  bash "$PANE" hidden || fail "hidden does not say the pane is kept hidden"
   # A factory's own page has no h: it closes with q, with its tab.
   DRIVE_FACTORY=sample-shop HERDR_PANE_ID=w1:p9 drive_keys "SNAP:$dir/page"
   assert_not_contains "$(screen_of "$dir/page" 50 100)" "h hide" "a factory's own tab offers h"
@@ -3819,7 +3818,6 @@ test_hide_keeps_the_pane_away_and_show_brings_it_back() {
   assert_absent "$HOME_FIX/config/factory-pane" "show keeps the pane hidden"
   assert_grep 'plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2' \
     "$CALLS" "show does not open the pane"
-  bash "$PANE" hidden && fail "the pane still reads hidden after show"
   # With no pane to open beside, show only clears it and says when it returns.
   bash "$PANE" hide >/dev/null 2>&1 || fail "hide failed"
   : > "$CALLS"

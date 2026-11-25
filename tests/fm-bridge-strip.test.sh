@@ -466,6 +466,12 @@ test_a_hidden_factory_pane_comes_back_with_one_click() {
     [ "$(columns "$row")" -eq "$width" ] \
       || fail "with the mark, a $width-column pane got a $(columns "$row")-column row: [$row]"
   done
+  # A long call is cut short to leave the mark its room.
+  rm -f "$HOME_FIX/data/backlog.md"
+  held pick-design 'Which of two designs for the landing page, the calm paper one or the bold dark one with the big hero image'
+  row=$(frame 130 | plain)
+  assert_contains "$row" "+ Factories " "a long call crowded out the mark"
+  assert_contains "$row" "▸ Decide: Which of two designs" "the mark pushed the long call out"
   : > "$CALLS"
   (live_click factories 130) || fail "the live strip could not be driven"
   assert_grep "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX" \

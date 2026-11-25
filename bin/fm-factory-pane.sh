@@ -34,8 +34,6 @@
 #                                action and the bridge strip's Factories mark
 #                                run this). With no pane to open beside, it only
 #                                clears the setting and says when it returns.
-#   fm-factory-pane.sh hidden    exit 0 when the home keeps the pane hidden,
-#                                1 when it shows it
 #   fm-factory-pane.sh run [--factory ID] [--origin-tab ID]
 #                                the pane itself; Herdr starts it. With
 #                                --factory it is that factory's tab page.
@@ -269,12 +267,6 @@ cmd_remove() {
 
 setting_file() { printf '%s/config/factory-pane' "$(resolve_home)"; }
 
-is_hidden() {
-  local word
-  word=$(awk '{ print $1; exit }' "$(setting_file)" 2>/dev/null)
-  [ "$word" = hidden ]
-}
-
 cmd_hide() {
   local file dir
   [ "$#" -eq 0 ] || { usage; exit 2; }
@@ -311,7 +303,6 @@ case "${1:-}" in
   remove) shift; cmd_remove "$@" ;;
   hide) shift; cmd_hide "$@" ;;
   show) shift; cmd_show "$@" ;;
-  hidden) shift; [ "$#" -eq 0 ] || { usage; exit 2; }; is_hidden ;;
   -h|--help) usage; exit 0 ;;
   *) usage; exit 2 ;;
 esac

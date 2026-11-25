@@ -626,16 +626,23 @@ compose() {  # <width>
     right_w=$((right_w + bat_w))
     [ "$(row_need "$left_w" "$right_w")" -le "$width" ] || continue
 
-    # The most urgent call, after the crew, cut to the columns left over.
+    # The most urgent call, after the crew, cut to the columns left over,
+    # less the Factories mark's while the call still keeps CALL_MIN.
     label=$(call_label)
     clickable=0
     [ -z "$label" ] || [ "$label" = "$NOTICE" ] || clickable=1
     if [ -n "$label" ]; then
       sep=0
       [ "$left_w" -eq 0 ] || sep=5
-      room=$((width - $(row_need $((left_w + sep + 2)) "$right_w")))
       cut=${#label}
       [ "$cut" -le "$CALL_MIN" ] || cut=$CALL_MIN
+      fac_w=0
+      if [ -n "$FACTORIES" ]; then
+        fac_w=${#FACTORIES}
+        [ "$right_w" -eq 0 ] || fac_w=$((fac_w + 3))
+      fi
+      room=$((width - $(row_need $((left_w + sep + 2)) $((right_w + fac_w)))))
+      [ "$room" -ge "$cut" ] || room=$((width - $(row_need $((left_w + sep + 2)) "$right_w")))
       if [ "$room" -ge "$cut" ]; then
         [ "${#label}" -le "$room" ] || label="${label:0:$((room - 3))}..."
         [ "$sep" -eq 0 ] || left="${left}  ${FAINT}${RULE}  "
