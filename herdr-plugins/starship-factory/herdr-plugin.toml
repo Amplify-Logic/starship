@@ -12,7 +12,7 @@ platforms = ["linux", "macos"]
 id = "open"
 title = "Show the Factory pane"
 contexts = ["pane", "workspace"]
-command = ["bash", "../../bin/fm-factory-pane.sh", "open"]
+command = ["bash", "../../bin/fm-factory-pane.sh", "show"]
 
 [[panes]]
 id = "factory"

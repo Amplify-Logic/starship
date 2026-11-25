@@ -22,6 +22,20 @@
 #                                NEEDS YOU; a Factory pane already showing in
 #                                this tab moves its highlight there instead of
 #                                a second pane opening.
+#   fm-factory-pane.sh hide      stop showing the Factory pane beside the first
+#                                mate and keep it away: write `hidden` to the
+#                                home's config/factory-pane, which `starship`
+#                                (bin/fm-desk.py) honours when it fills in the
+#                                desk, and close every Factory pane overview
+#                                (factory tabs stay). The pane's `h` key runs it.
+#   fm-factory-pane.sh show [--pane ID]
+#                                bring it back: clear that setting, then open it
+#                                as `open` does (Herdr's Show the Factory pane
+#                                action and the bridge strip's Factories mark
+#                                run this). With no pane to open beside, it only
+#                                clears the setting and says when it returns.
+#   fm-factory-pane.sh hidden    exit 0 when the home keeps the pane hidden,
+#                                1 when it shows it
 #   fm-factory-pane.sh run [--factory ID] [--origin-tab ID]
 #                                the pane itself; Herdr starts it. With
 #                                --factory it is that factory's tab page.
@@ -43,6 +57,13 @@
 # follow), so `open --item` can find an overview already in its tab; it asks
 # that pane to move its highlight by writing the item id to focus/<pid> in the
 # same directory, which the pane reads and removes.
+#
+# `open` alone never changes the setting: the bridge strip's click on the
+# most urgent call opens the pane on demand even while it is kept hidden, and
+# the next `starship` still leaves it away.
+#
+# The setting: config/factory-pane under the home, whose first word `hidden`
+# keeps the pane away; anything else, or no file, shows it.
 #
 # Environment:
 #   FM_HOME                       the home whose factories are shown. Unset, the
@@ -216,25 +237,70 @@ cmd_install() {
   fi
 }
 
+# stop_panes: stop every recorded pane of <view> (any view when empty), its
+# record with it, and print how many stopped. The script is its pane's only
+# process, so the pane closes with it.
+stop_panes() {  # <dir> [view]
+  local rec pid stopped=0
+  for rec in "$1"/panes/*; do
+    [ -f "$rec" ] || continue
+    [ -z "${2:-}" ] || [ "$(record_value "$rec" view)" = "$2" ] || continue
+    pid=$(basename "$rec")
+    if is_pane_pid "$pid"; then
+      kill -TERM "$pid" 2>/dev/null && stopped=$((stopped + 1))
+    fi
+    rm -f "$rec"
+  done
+  printf '%s' "$stopped"
+}
+
 cmd_remove() {
-  local herdr dir rec pid stopped=0
+  local herdr dir stopped=0
   herdr=$(herdr_bin)
   FM_HOME=$(resolve_home) bash "$SCRIPT_DIR/fm-captain-hold.sh" unbind "$SETTLED_SOURCE" >/dev/null 2>&1 || true
   if dir=$(config_dir); then
-    for rec in "$dir"/panes/*; do
-      [ -f "$rec" ] || continue
-      pid=$(basename "$rec")
-      if is_pane_pid "$pid"; then
-        # The script is its pane's only process, so the pane closes with it.
-        kill -TERM "$pid" 2>/dev/null && stopped=$((stopped + 1))
-      fi
-      rm -f "$rec"
-    done
+    stopped=$(stop_panes "$dir")
     rm -rf "$dir/focus"
     rm -f "$dir/home"
   fi
   "$herdr" plugin unlink "$PLUGIN_ID" >/dev/null || die "stopped $stopped pane(s), but Herdr did not unlink the plugin"
   printf 'The Factory pane is removed (%s pane(s) closed).\n' "$stopped"
+}
+
+setting_file() { printf '%s/config/factory-pane' "$(resolve_home)"; }
+
+is_hidden() {
+  local word
+  word=$(awk '{ print $1; exit }' "$(setting_file)" 2>/dev/null)
+  [ "$word" = hidden ]
+}
+
+cmd_hide() {
+  local file dir
+  [ "$#" -eq 0 ] || { usage; exit 2; }
+  file=$(setting_file)
+  if ! { mkdir -p "$(dirname "$file")" && printf 'hidden\n' > "$file"; } 2>/dev/null; then
+    die "the Factory pane could not be kept hidden: $file is not writable"
+  fi
+  # Print first: from the pane's own key, stopping the overviews ends this run.
+  printf 'The Factory pane is hidden and stays hidden. Bring it back with: %s show\n' "$0"
+  if dir=$(config_dir); then
+    stop_panes "$dir" overview >/dev/null
+  fi
+  return 0
+}
+
+cmd_show() {
+  local file
+  file=$(setting_file)
+  if [ -e "$file" ] && ! rm -f "$file" 2>/dev/null; then
+    die "the Factory pane could not be shown again: $file could not be removed"
+  fi
+  if [ "$#" -eq 0 ] && [ -z "${HERDR_PANE_ID:-}" ]; then
+    printf 'The Factory pane is no longer hidden; the next starship command shows it beside the first mate.\n'
+    return 0
+  fi
+  cmd_open "$@"
 }
 
 case "${1:-}" in
@@ -243,6 +309,9 @@ case "${1:-}" in
   open) shift; cmd_open "$@" ;;
   install) shift; cmd_install "$@" ;;
   remove) shift; cmd_remove "$@" ;;
+  hide) shift; cmd_hide "$@" ;;
+  show) shift; cmd_show "$@" ;;
+  hidden) shift; [ "$#" -eq 0 ] || { usage; exit 2; }; is_hidden ;;
   -h|--help) usage; exit 0 ;;
   *) usage; exit 2 ;;
 esac

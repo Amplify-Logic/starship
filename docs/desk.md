@@ -31,6 +31,7 @@ Without a layout it opens nothing and points you at `onboard-starship`.
 - Your workspace, made when no workspace carries its label.
 - In the main tab, the one the layout names as `main` or else the workspace's first: the first mate, the [bridge strip](bridge-strip.md) across the top, and the [Factory pane](factory-pane.md) beside the first mate.
   When Herdr has no plugin installed for the bridge strip or the Factory pane, as on a new home, the desk installs it first.
+  A Factory pane you [keep hidden](factory-pane.md#hide-it-and-bring-it-back) is left out, and is not started again after a restart.
 - Every other tab the layout names, in order; a factory tab opens through the Factory pane's own tab opener, so pressing `enter` on that factory later finds the same tab, and the desk finds it again by that opener's record even when its label differs from the layout's.
 - One window per view, each attached to the same session with its own font size, until as many Herdr clients show the session as the layout names views.
   The layout's `terminal` picks the app: Terminal by default, where each view also gets its Terminal profile, or Starship's cream profile while the [workspace theme](fork-configuration.md#workspace-theme-configworkspace-theme) is light and Terminal has it, or Ghostty, where each view is its own Ghostty instance that quits when its window closes.

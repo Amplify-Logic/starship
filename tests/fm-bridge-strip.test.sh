@@ -359,7 +359,8 @@ test_a_title_is_shown_as_plain_text() {
 
 # click_strip <label|column> <width>: run the live strip under a pty of 3 rows,
 # click a column of its middle row the way Herdr reports a click to a pane that
-# asked for mouse reports, and save what it drew. `label` clicks the call.
+# asked for mouse reports, and save what it drew. `label` clicks the call, and
+# `factories` the mark that brings a hidden Factory pane back.
 click_strip() {
   python3 - "$STRIP" "$1" "$2" "$TMP_ROOT/case$CASE/screen" <<'PY'
 import fcntl, os, pty, re, select, signal, struct, sys, termios, time
@@ -383,7 +384,8 @@ drain(30, until="▸".encode())
 drain(0.5)
 text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", seen.decode("utf-8", "replace"))
 middle = [line for line in text.split("\n") if "▸" in line][-1]
-column = middle.index("▸") + 1 if where == "label" else int(where)
+column = (middle.index("▸") + 1 if where == "label"
+          else middle.index("+ Factories") + 3 if where == "factories" else int(where))
 os.write(fd, ("\x1b[<0;%d;2M\x1b[<0;%d;2m" % (column, column)).encode())
 drain(4)
 open(screen, "wb").write(seen)
@@ -445,6 +447,32 @@ test_a_click_on_the_call_opens_the_factory_pane_on_it() {
   assert_equals "$(cat "$CONFIG_FIX/factory/focus/$pid" 2>/dev/null)" pick-design \
     "the Factory pane already in the tab was not moved to the call"
   pass "bridge strip: a click on the most urgent call opens the Factory pane on that item, or moves the one in the tab to it; a click elsewhere nothing"
+}
+
+# While the home keeps the Factory pane hidden (bin/fm-factory-pane.sh hide),
+# the strip shows a `+ Factories` mark after the call, and one click on it
+# brings the pane back beside the pane below: the setting is cleared and the
+# pane opens, with no item.
+test_a_hidden_factory_pane_comes_back_with_one_click() {
+  local width row
+  reset_case
+  held pick-design 'Which of two designs'
+  assert_not_contains "$(frame 130 | plain)" "Factories" "a shown Factory pane got the mark"
+  printf 'hidden\n' > "$HOME_FIX/config/factory-pane"
+  assert_contains "$(frame 130 | plain)" "▸ Decide: Which of two designs" "the mark pushed the call out"
+  assert_contains "$(frame 130 | plain)" "+ Factories " "a hidden Factory pane has no mark to bring it back"
+  for width in 1 8 20 36 52 70 90 110 130 160 200; do
+    row=$(frame "$width" | plain)
+    [ "$(columns "$row")" -eq "$width" ] \
+      || fail "with the mark, a $width-column pane got a $(columns "$row")-column row: [$row]"
+  done
+  : > "$CALLS"
+  (live_click factories 130) || fail "the live strip could not be driven"
+  assert_grep "plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2 --focus --env FM_HOME=$HOME_FIX" \
+    "$CALLS" "a click on the mark did not open the Factory pane beside the pane below"
+  assert_no_grep "FM_FACTORY_ITEM" "$CALLS" "the mark opened the pane on a call"
+  assert_absent "$HOME_FIX/config/factory-pane" "the mark left the pane hidden for the next desk"
+  pass "bridge strip: a hidden Factory pane shows a mark that brings it back with one click"
 }
 
 # --- the next call, as soon as one is settled -------------------------------
@@ -1212,6 +1240,7 @@ fm_test_run \
   test_the_call_only_takes_the_columns_left_over \
   test_a_title_is_shown_as_plain_text \
   test_a_click_on_the_call_opens_the_factory_pane_on_it \
+  test_a_hidden_factory_pane_comes_back_with_one_click \
   test_a_parked_decision_gives_way_to_the_next_call \
   test_a_title_never_runs_into_fields_a_newer_reading_adds \
   test_the_live_strip_draws_the_next_call_within_seconds \

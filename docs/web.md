@@ -23,6 +23,18 @@ On Control Centre the line between Firstmate and Factories can be dragged to mak
 Each browser remembers where you left it.
 In a narrow window Control Centre gets a switch between Firstmate and Factories, a project's tab is one page that scrolls as a whole, and the row of tabs scrolls sideways, bringing a newly chosen tab into sight.
 
+### Hiding Factories
+
+Factories can be taken off Control Centre with one click.
+
+- **Hide:** the small Hide button in the top corner of Factories, or the `h` key.
+  The chat then takes the whole page, and in a narrow window the switch between Firstmate and Factories goes away.
+- **Show it again:** the Show Factories button in the top corner of the chat, or `h` again.
+
+The choice belongs to the home, not the browser: it is kept in `state/web/factories`, so a reload, another browser and a restarted page all show it the same way.
+While Factories is hidden, Control Centre's only key is `h`, and the band and each project's own tab work as ever.
+The terminal's Factory pane has its own `h` ([factory-pane.md](factory-pane.md#hide-it-and-bring-it-back)).
+
 ### The chat
 
 The chat shows the primary session's conversation as you would read it: only your messages and the first mate's replies, as chat bubbles with Markdown rendered.
@@ -164,7 +176,7 @@ There are no merge or spawn buttons.
 
 ### Keys
 
-The page has the Factory pane's keys, and each one does exactly what its button does, so it sends the same note:
+The page has the Factory pane's keys, and each one does exactly what its button does, so it sends the same note; `h` hides or shows Factories on the page only:
 
 | Key | What it does |
 | --- | --- |
@@ -177,6 +189,7 @@ The page has the Factory pane's keys, and each one does exactly what its button 
 | `t` | Talk the highlighted question through, or talk to the project's crew |
 | `r` | Read the report |
 | `s` | Switch who steers the project |
+| `h` | Hide Factories on Control Centre, or show it again ([Hiding Factories](#hiding-factories)) |
 | `esc` | Back to Control Centre, or cancel |
 | `?` | List every key |
 

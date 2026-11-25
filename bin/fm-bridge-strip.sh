@@ -12,8 +12,10 @@
 # state/mothership/<room>.unreachable), and the battery from `pmset -g batt` on
 # a Mac. It never steers, changes or drains anything; its one action is that a click on
 # the most urgent call opens the Factory pane on it (bin/fm-factory-pane.sh open
-# --item, beside the pane below the strip). docs/bridge-strip.md owns what the
-# strip shows and why; this header owns the commands.
+# --item, beside the pane below the strip), and while the home keeps the Factory
+# pane hidden, a click on its `+ Factories` mark brings it back there
+# (bin/fm-factory-pane.sh show). docs/bridge-strip.md owns what the strip shows
+# and why; this header owns the commands.
 #
 # Usage:
 #   fm-bridge-strip.sh install   link the plugin into Herdr, remember this home,
@@ -507,6 +509,21 @@ call_label() {
   esac
 }
 
+# --- the Factory pane kept hidden ----------------------------------------------
+
+# FACTORIES: the mark that brings the Factory pane back, shown while the home
+# keeps it hidden (config/factory-pane starts with `hidden`, which
+# bin/fm-factory-pane.sh hide writes); a click on it runs
+# bin/fm-factory-pane.sh show, which clears that and opens the pane.
+FACTORIES_MARK='+ Factories'
+FACTORIES=
+read_factories() {  # <home>
+  local word
+  FACTORIES=
+  word=$(awk '{ print $1; exit }' "$1/config/factory-pane" 2>/dev/null)
+  [ "$word" != hidden ] || FACTORIES=$FACTORIES_MARK
+}
+
 # --- the night shift ----------------------------------------------------------
 
 NIGHT_TEXT=
@@ -566,6 +583,9 @@ ROW=
 # row, or 0 when it is not shown; a click there opens the Factory pane on it.
 LINK_FROM=0
 LINK_TO=0
+# The columns the Factories mark takes, or 0 when it is not shown.
+FAC_FROM=0
+FAC_TO=0
 # The shortest a call's name is cut to before it is left out.
 CALL_MIN=12
 
@@ -580,9 +600,11 @@ row_need() {  # <left width> <right width>
 compose() {  # <width>
   local width=$1 mark_form crew_form bat_form mark mark_w crew_s crew_w bat bat_w
   local alert_s alert_w left left_w right right_w text rest label sep room cut
-  local night_s night_w clickable
+  local night_s night_w clickable fac_s fac_w
   LINK_FROM=0
   LINK_TO=0
+  FAC_FROM=0
+  FAC_TO=0
   while read -r mark_form crew_form bat_form; do
     if [ "$bat_form" = none ] && battery_warns; then
       continue
@@ -626,13 +648,27 @@ compose() {  # <width>
       fi
     fi
 
+    # The Factories mark, first on the right while the pane is kept hidden,
+    # when it fits whole after the call.
+    fac_s=
+    fac_w=0
+    if [ -n "$FACTORIES" ]; then
+      fac_w=${#FACTORIES}
+      [ "$right_w" -eq 0 ] || fac_w=$((fac_w + 3))
+      if [ "$(row_need "$left_w" $((right_w + fac_w)))" -le "$width" ]; then
+        fac_s="${CYAN}${FACTORIES:0:1}${ICE}${FACTORIES:1}"
+      else
+        fac_w=0
+      fi
+    fi
+
     # The night shift, between the alert and the battery, when it fits whole.
     night_s=
     night_w=0
     if [ -n "$NIGHT_TEXT" ]; then
       night_w=${#NIGHT_TEXT}
-      [ "$right_w" -eq 0 ] || night_w=$((night_w + 3))
-      if [ "$(row_need "$left_w" $((right_w + night_w)))" -le "$width" ]; then
+      [ $((right_w + fac_w)) -eq 0 ] || night_w=$((night_w + 3))
+      if [ "$(row_need "$left_w" $((right_w + fac_w + night_w)))" -le "$width" ]; then
         night_s="${NIGHT_COLOUR}${NIGHT_TEXT}"
       else
         night_w=0
@@ -642,7 +678,12 @@ compose() {  # <width>
     right=$alert_s
     [ -z "$night_s" ] || right="${right}${right:+   }${night_s}"
     [ "$bat_w" -eq 0 ] || right="${right}${right:+   }${bat}"
-    right_w=$((right_w + night_w))
+    [ -z "$fac_s" ] || right="${fac_s}${right:+   }${right}"
+    right_w=$((right_w + fac_w + night_w))
+    if [ -n "$fac_s" ]; then
+      FAC_FROM=$((width - right_w))
+      FAC_TO=$((FAC_FROM + ${#FACTORIES} - 1))
+    fi
     ROW=" ${left}$(printf '%*s' "$((width - 2 - left_w - right_w))" '')${right} "
     return 0
   done <<EOF
@@ -678,6 +719,7 @@ render_frame() {  # <home> <width> <height>
   read_crew "$home"
   track_reading
   read_night "$home"
+  read_factories "$home"
   read_reach "$home"
   read_battery
   compose "$width"
@@ -870,16 +912,19 @@ NOTICE_UNTIL=0
 # below the strip (the pane the strip was opened above), through
 # bin/fm-factory-pane.sh, which shows it in a Factory pane already open in
 # this tab or opens one.
-open_call() {  # <home>
+# With `show` it brings back a Factory pane the home keeps hidden instead
+# (bin/fm-factory-pane.sh show).
+open_call() {  # <home> [show]
   local out below now
+  local -a how=(open --item "$CALL_ID")
+  [ "${2:-}" != show ] || how=(show)
   below=
   if [ -n "${HERDR_PANE_ID:-}" ] && command -v jq >/dev/null 2>&1; then
     out=$("$(herdr_bin)" pane neighbor --pane "$HERDR_PANE_ID" --direction down 2>/dev/null) || out=
     below=$(printf '%s' "$out" | jq -r '.result.neighbor.neighbor_pane_id // empty' 2>/dev/null)
   fi
   if [ -n "$below" ] && env -u HERDR_PLUGIN_CONFIG_DIR FM_HOME="$1" \
-      bash "$SCRIPT_DIR/fm-factory-pane.sh" open --pane "$below" \
-      --item "$CALL_ID" </dev/null >/dev/null 2>&1; then
+      bash "$SCRIPT_DIR/fm-factory-pane.sh" "${how[@]}" --pane "$below" </dev/null >/dev/null 2>&1; then
     return 0
   fi
   now=$(date +%s)
@@ -926,6 +971,11 @@ wait_input() {  # <home> <seconds>
     if [ "$MOUSE_Y" -eq "$MIDDLE" ] && [ "$LINK_FROM" -gt 0 ] \
       && [ "$MOUSE_X" -ge "$LINK_FROM" ] && [ "$MOUSE_X" -le "$LINK_TO" ]; then
       open_call "$1"
+      return 0
+    fi
+    if [ "$MOUSE_Y" -eq "$MIDDLE" ] && [ "$FAC_FROM" -gt 0 ] \
+      && [ "$MOUSE_X" -ge "$FAC_FROM" ] && [ "$MOUSE_X" -le "$FAC_TO" ]; then
+      open_call "$1" show
       return 0
     fi
   done

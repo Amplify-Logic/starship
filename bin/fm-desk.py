@@ -53,6 +53,8 @@ What `open` does, in this order, re-reading Herdr after every step:
      (first installing its Herdr plugin when Herdr lists none by that id),
      and restarts either inside its own pane when that pane is only an idle
      shell (Herdr brings plugin panes back as plain shells after a restart).
+     A Factory pane the home keeps hidden (config/factory-pane, set by
+     bin/fm-factory-pane.sh hide) is neither shown nor started again.
   5. Opens every missing tab; a factory tab opens through bin/fm-factory.py
      open-tab. An existing factory tab whose page pane is only an idle shell
      gets its page started again, its other panes that are only idle shells
@@ -168,6 +170,17 @@ def wait_limit() -> float:
 
 def layout_path(home: str) -> str:
     return os.path.join(home, "config", "desk-layout")
+
+
+def factory_hidden(home: str) -> bool:
+    """The home keeps the Factory pane hidden: config/factory-pane starts with `hidden`
+    (bin/fm-factory-pane.sh hide and show own it)."""
+    try:
+        with open(os.path.join(home, "config", "factory-pane"), encoding="utf-8") as handle:
+            words = handle.read().split()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(words) and words[0] == "hidden"
 
 
 def parse_layout(text: str, where: str = "config/desk-layout") -> Dict[str, Any]:
@@ -502,7 +515,8 @@ def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[s
 def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
     found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [], "main": None,
-                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(), "plugins": None}
+                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(), "plugins": None,
+                             "factory_hidden": factory_hidden(home)}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
         return found
@@ -617,6 +631,9 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
         starting = True
 
     for kind, pane, name in (("bridge", bridge, "the Starship bridge"), ("factory", factory, "the Factory pane")):
+        if kind == "factory" and found.get("factory_hidden"):
+            # Kept hidden (fm-factory-pane.sh hide): neither shown nor started again.
+            continue
         if pane is None:
             plugin, _, what = PLUGINS[kind]
             if found["plugins"] is not None and plugin not in found["plugins"]:

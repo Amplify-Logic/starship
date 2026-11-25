@@ -16,6 +16,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Light or dark colours in the Factory pane and bridge strip | [Terminal theme](#terminal-theme-fm_terminal_theme) |
 | The night shift line on the bridge strip | [Night shift window](#night-shift-window-confignight-shift-window) |
 | What `starship` opens in Herdr: tabs, panes, Terminal or Ghostty windows and the sidebar | [Desk layout](#desk-layout-configdesk-layout) |
+| Keeping the Factory pane out of the desk | [Factory pane kept hidden](#factory-pane-kept-hidden-configfactory-pane) |
 | Starter settings for a new home: which model does which job, transcription words, and how hard the first mate thinks | [Starter settings](#starter-settings-first-launch), [crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson), [speech-to-text vocabulary](#speech-to-text-vocabulary-configstt-vocabulary), and [primary effort](#primary-effort-configprimary-effort) |
 | Spoken replies | [Desk voice-out](#desk-voice-out-configspeak) |
 | The call recorder | [Call recorder](#call-recorder-configcall-companion) |
@@ -704,6 +705,12 @@ The desk always opens Herdr's default session.
   A factory tab is named after the factory in the registry; the desk finds it by the tab the Factory pane recorded for it, else by the label.
 - `terminal` is the app the views open in, `Terminal` (the default) or `Ghostty`; pick Ghostty where Terminal cannot show 24-bit color, as on macOS before 26.
 - Each `view` line is one window: a Terminal profile name, then optionally `| <font size>`; an empty profile name uses Terminal's default, and Ghostty uses only the font size, as in `view = | 13`.
+
+## Factory pane kept hidden (config/factory-pane)
+
+The optional local `config/factory-pane` keeps the [Factory pane](factory-pane.md#hide-it-and-bring-it-back) out of the desk when its first word is `hidden`; anything else, or no file, shows it.
+`bin/fm-factory-pane.sh hide` and the pane's `h` key write it, and `bin/fm-factory-pane.sh show` and the bridge strip's `+ Factories` remove it; you do not need to edit it by hand.
+The web page keeps its own choice for Factories ([web.md](web.md#hiding-factories)).
 
 ## Claude concise prompt (config/claude-concise-prompt)
 

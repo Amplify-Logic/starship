@@ -392,6 +392,36 @@ test_a_restored_session_gets_its_dead_panes_started_in_place() {
   pass "desk: a restored session gets its dead panes started in place, and nothing else"
 }
 
+# A Factory pane the home keeps hidden (bin/fm-factory-pane.sh hide) is
+# neither shown on a new desk nor started again on a restored one, while the
+# rest of the desk, its factory tabs included, fills in as ever; once shown
+# again, the next run brings it back.
+test_a_factory_pane_kept_hidden_stays_away() {
+  new_case true
+  layout
+  printf 'hidden\n' > "$FM_HOME/config/factory-pane"
+  local out
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "done: show the Starship bridge" "the bridge did not show"
+  assert_not_contains "$out" "Factory pane" "a hidden Factory pane was shown"
+  assert_no_grep "factory-pane open" "$FAKE_HERDR_CALLS" "a hidden Factory pane was opened"
+  assert_grep "factory-tab sample-shop" "$FAKE_HERDR_CALLS" "a factory tab did not open"
+  new_case true
+  layout
+  restored_session
+  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n3 ?? herdr server\n' > "$FAKE_PS"
+  printf 'hidden\n' > "$FM_HOME/config/factory-pane"
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "start the Starship bridge again in its pane" "the dead bridge pane was not restarted"
+  assert_not_contains "$out" "Factory pane" "a hidden Factory pane was started again"
+  assert_no_grep "pane run w1:p3 " "$FAKE_HERDR_CALLS" "a hidden Factory pane's shell was typed into"
+  rm "$FM_HOME/config/factory-pane"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk open) || fail "open failed: $out"
+  assert_contains "$out" "start the Factory pane again in its pane" "a Factory pane shown again did not come back"
+  pass "desk: a Factory pane kept hidden stays away on a new and a restored desk, and comes back once shown"
+}
+
 test_a_session_that_is_not_running_is_started_before_any_view() {
   new_case false
   layout
@@ -1032,6 +1062,7 @@ fm_test_run \
   test_a_second_run_changes_nothing \
   test_every_herdr_call_names_the_default_session \
   test_a_restored_session_gets_its_dead_panes_started_in_place \
+  test_a_factory_pane_kept_hidden_stays_away \
   test_a_session_that_is_not_running_is_started_before_any_view \
   test_views_count_the_clients_already_showing_the_session \
   test_a_busy_first_pane_is_never_typed_into \
