@@ -208,6 +208,7 @@ Outside Herdr, `enter` opens the same page in place instead.
 | `s` | Switch who steers the highlighted factory, both ways, after `enter` confirms it. |
 | `b` `n` | On a listed older question, ask Starship to bring it back into NEEDS YOU, or say it is no longer needed, after `enter` confirms it. |
 | `esc` | Back, hide an opened folded count line or older questions shelf, or cancel a confirmation or the talk box. |
+| `h` | Hide the pane beside the first mate and keep it hidden; [Hide it, and bring it back](#hide-it-and-bring-it-back) says how it returns. A factory's own tab has no `h`. |
 | `q` | Quit. |
 
 ### Answering, and the talk box
@@ -360,12 +361,26 @@ bin/fm-factory-pane.sh remove    # close every Factory pane and factory page, an
 ```
 
 Set `FM_HOME` when installing for a home other than this code root; the pane remembers it.
-To show the pane beside another pane later, bind the plugin's `starship.factory.open` action to a key.
+To show the pane beside another pane later, run Herdr's Show the Factory pane action (`starship.factory.open`), or bind it to a key.
 `bin/fm-factory-pane.sh open --item <id>` opens the pane with its highlight on that item of NEEDS YOU, which is how a click on the [bridge strip](bridge-strip.md#the-most-urgent-call)'s most urgent call opens it.
 When a Factory pane is already showing in the same tab, its highlight moves to the item instead of a second pane opening, and the view scrolls to bring it into sight even after a hand scroll.
 An item the record does not hold yet keeps its place for up to a minute while a fresh record is built.
 
+### Hide it, and bring it back
+
+You may take the Factory pane out of view whenever you like, and it stays out until you bring it back.
+
+- **Hide it:** press `h` in the pane, or run `bin/fm-factory-pane.sh hide`.
+  The pane closes, and `starship` no longer opens it or starts it again when it fills in the desk.
+  A factory's own tab is not touched.
+- **Bring it back:** click `+ Factories` on the [bridge strip](bridge-strip.md#the-factory-pane-kept-hidden), run Herdr's Show the Factory pane action, or run `bin/fm-factory-pane.sh show` from a Herdr pane.
+  The pane opens beside the first mate again, and the next `starship` keeps it.
+- **While it is hidden,** a click on the strip's most urgent call still opens the pane on that call, just this once; the next `starship` leaves it hidden.
+
+The choice is kept for the home in `config/factory-pane` ([fork configuration](fork-configuration.md#factory-pane-kept-hidden-configfactory-pane)).
+The web page has its own Hide and Show Factories buttons ([web.md](web.md#hiding-factories)).
+
 ## Verification
 
-`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a factory's page read top to bottom with no line of queue counters and its calls put off to a date under COMING BACK, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's sentence or two with the question and whole answer a click unfolds, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
+`tests/fm-factory.test.sh` builds a fixture home of sample factories and a fixture fleet reading, and checks the record and the plain screen word for word, the three sentences counting every call once, the two shelves and the keys that bring an older question back or let it go, NEEDS YOU's order against the strip's most urgent call, a stopped job's words, the queue's counts, parked work counted by its date, a factory's page read top to bottom with no line of queue counters and its calls put off to a date under COMING BACK, a folded count line opened on every job it stands for, closed work against finished work with a change's merge time, a report's time and a settled call's sentence or two with the question and whole answer a click unfolds, each factory told as Now, New and Next and a quiet factory folded into one line, the quiet job, routine passes folded into one line and kept out of the feed except a failed one, and every pass shown as before without a routine mark, the registry fallback, the writing keys pressed in the real live view, the screen as data against the plain screen, an action from a second screen against the note the pressed key sends, the Read line and what `r` and a click hand the reader, the See what changed line and what `o` and a click hand the opener, the talk box listening to a stand-in microphone that writes real samples, what a spoken note hands the speech service and that a cancelled one hands it nothing more, how soon a parked decision leaves the live view, the Herdr calls behind the factory tab and the plugin against a stand-in Herdr, hiding the pane with `h` or `hide` and bringing it back with `show`, a worker copy closing when its job ends, and a running pane reloading its changed code in place.
 `tests/fm-tap-desk.test.sh` checks on one real backlog that the bridge strip, this pane, and the tap page show the same count of the owner's calls, and that the pane shows a question's recorded options.

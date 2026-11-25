@@ -2919,6 +2919,7 @@ class View:
         self.opened = opened
         self.in_tab = in_tab
         self.voice = voice    # whether the talk box can listen on this machine
+        self.hideable = False   # whether `h` hides the pane: the Herdr overview only
         # What was sent from this pane and is not in the record yet, by need and asking.
         self.answered: Dict[Tuple[str, str], Dict[str, Any]] = {}   # answers sent here a moment ago
         self.cursor = 0
@@ -3807,7 +3808,7 @@ class View:
         kind, ident = self.at()
         if kind == "none":
             # Nothing to move to, open, talk to or steer: only q does anything.
-            return [row(width, [S(" q quit", "faint")])]
+            return [row(width, [S(" h hide · q quit" if self.hideable else " q quit", "faint")])]
         keys = ["↑↓ move"]
         if kind == "need":
             need = self.need(ident)
@@ -3834,7 +3835,8 @@ class View:
             keys.append("enter open" if not self.opened else "esc back")
         elif self.in_tab:
             keys.append("esc back")
-        keys += ["t talk (voice)" if self.voice else "t talk (typed)", "s who steers", "q quit"]
+        keys += ["t talk (voice)" if self.voice else "t talk (typed)", "s who steers"]
+        keys += ["h hide", "q quit"] if self.hideable and not self.opened else ["q quit"]
         lines = [""]
         for key in keys:
             joined = "%s · %s" % (lines[-1], key) if lines[-1] else key
@@ -4685,6 +4687,8 @@ class Pane:
         self.home = home
         record = first_record(home)
         self.view = View(record, opened=opened, in_tab=in_tab, item=item, voice=voice_ready(home))
+        # The overview beside the first mate can be hidden and kept away (`h`, fm-factory-pane.sh hide).
+        self.view.hideable = not opened and bool(os.environ.get("HERDR_PANE_ID"))
         self.voice: Optional[Voice] = None   # the spoken note being heard or written down
         # A pane stopped while it listened can leave the part it was writing down.
         for name in os.listdir(pane_dir(home)) if os.path.isdir(pane_dir(home)) else []:
@@ -5085,6 +5089,8 @@ class Pane:
                     pass
                 herdr(["tab", "close", os.environ["HERDR_TAB_ID"]])
             return False
+        if lower == "h" and view.hideable and not view.opened:
+            return self.hide()
         if key == "up":
             view.move(-1)
         elif key == "down":
@@ -5175,6 +5181,21 @@ class Pane:
                                else "Starship steers %s again, and is told.") % fac["name"]}
                 view.follow = True
         return True
+
+    def hide(self) -> bool:
+        """Hide the pane and keep it hidden (fm-factory-pane.sh hide): False ends the pane."""
+        env = dict(os.environ, FM_HOME=self.home)
+        try:
+            proc = subprocess.run(["bash", os.path.join(BIN, "fm-factory-pane.sh"), "hide"], env=env,
+                                  capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.say("The pane was not hidden: %s" % exc, "red", 12)
+            return True
+        if proc.returncode != 0:
+            why = (proc.stderr.strip().splitlines() or ["it did not say why"])[-1]
+            self.say("The pane was not hidden: %s" % why.removeprefix("fm-factory-pane.sh: "), "red", 12)
+            return True
+        return False
 
     def steer(self, fid: str, who: str) -> None:
         """Change who steers factory <fid> to <who>: tell Starship, record it and show it in the feed."""

@@ -102,7 +102,10 @@ motion, key hints, panel sizes) live in the browser's own storage; SETTINGS_JS o
 and is served as /settings.js. The Voice part of Settings is the exception: it
 belongs to the home, not the browser, so GET /api/voice reads and POST
 /api/voice changes the spoken voice's level and mute and replays a recent reply,
-each only through bin/fm-speak.sh (voice_state, voice_change). VIEW_JS, served as /view.js, owns the page's
+each only through bin/fm-speak.sh (voice_state, voice_change). Whether
+Factories is hidden on Control Centre belongs to the home too: the page is
+drawn with it and POST /api/factories {"hidden": true|false} keeps it in
+state/web/factories (factories_hidden, factories_change). VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
 the act of the button it stands for.
@@ -314,6 +317,47 @@ def load_or_create_token(home: Path) -> str:
         handle.write(token + "\n")
     os.chmod(path, 0o600)
     return token
+
+
+# --- Factories kept hidden ----------------------------------------------------
+
+
+def factories_path(home: Path) -> Path:
+    return web_dir(home) / "factories"
+
+
+def factories_hidden(home: Path) -> bool:
+    """Whether this home keeps Factories off Control Centre: state/web/factories
+    starts with `hidden`. Every browser of the home reads the same choice."""
+    try:
+        words = factories_path(home).read_text(encoding="utf-8").split()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(words) and words[0] == "hidden"
+
+
+def factories_change(home: Path, body: bytes) -> Tuple[int, Dict[str, Any]]:
+    """{"hidden": true|false} from the page's Hide and Show Factories buttons."""
+    try:
+        ask = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 400, {"ok": False, "said": "The request was not JSON."}
+    if not isinstance(ask, dict) or set(ask) != {"hidden"} or not isinstance(ask["hidden"], bool):
+        return 400, {"ok": False, "said": "Send whether Factories is hidden."}
+    path = factories_path(home)
+    try:
+        if ask["hidden"]:
+            ensure_web_dir(home)
+            tmp = path.with_name(".factories.%d" % os.getpid())
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write("hidden\n")
+            os.replace(tmp, path)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError as exc:
+        return 500, {"ok": False, "said": f"Not kept: {exc.strerror or exc}."}
+    return 200, {"ok": True, "hidden": factories_hidden(home)}
 
 
 def derive(token: str, purpose: str) -> str:
@@ -2594,7 +2638,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/":
             self._nonce = secrets.token_urlsafe(16)
-            self._send(200, page_html(self._nonce, STATE.csrf, weekly_path(STATE.home).is_file()).encode("utf-8"),
+            self._send(200, page_html(self._nonce, STATE.csrf, weekly_path(STATE.home).is_file(),
+                                      factories_hidden(STATE.home)).encode("utf-8"),
                        "text/html; charset=utf-8")
         elif parsed.path == "/weekly":
             page = weekly_page(STATE.home)
@@ -2729,7 +2774,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front"):
+        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories"):
             self._text(404, "not found", close=True)
             return
         limit = {"/api/send": SEND_BODY_MAX, "/api/front": FRONT_BODY_MAX}.get(path, ACT_BODY_MAX)
@@ -2744,6 +2789,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(400, {"error": str(exc)})
                 return
             self._json(200, {"front": STATE.front.mark(page, front)})
+            return
+        if path == "/api/factories":
+            with STATE.act_lock:
+                status, answer = factories_change(STATE.home, body)
+            self._json(status, answer)
             return
         if path == "/api/voice":
             with STATE.act_lock:
@@ -2942,6 +2992,14 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 .state.offline{background:var(--you-bg);color:var(--you)}
 .side-switch{display:none}
 .state:empty{display:none}
+/* Factories hidden: the chat takes the whole of Control Centre, and one quiet button brings it back. */
+#home[data-facs="hidden"]{grid-template-columns:minmax(0,1fr)}
+#home[data-facs="hidden"] #divHome,#home[data-facs="hidden"] #panelPane{display:none}
+#home[data-facs="hidden"] #chatPane{display:flex}
+.facs-btn{flex:none;align-self:center;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:.1rem .65rem;font-size:.78rem;line-height:1.4;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
+.facs-btn:hover,.facs-btn:focus-visible{color:var(--ink);border-color:var(--edge);background:var(--surface-2)}
+#facsShow{margin-left:auto}
+#facsHide{margin-left:.25rem}
 
 #log{flex:1;min-height:0;overflow-y:auto;padding:.25rem 1rem .75rem}
 .wrap{max-width:var(--wrap,48rem);margin:0 auto}
@@ -3780,6 +3838,7 @@ VIEW_JS = r"""
     ['t', 'Talk the highlighted question through, or talk to a project\'s crew'],
     ['r', 'Read the report'],
     ['s', 'Switch who steers the project'],
+    ['h', 'Hide Factories on Control Centre, or show it again'],
     ['esc', 'Back, or cancel'],
     ['?', 'Show or hide this list']];
 
@@ -3787,6 +3846,7 @@ VIEW_JS = r"""
   function keyStrip(ctx) {
     if (ctx && ctx.confirming) return [['enter', 'send to Starship'], ['esc', 'cancel']];
     if (ctx && ctx.watching) return [['esc', 'back to the project'], ['?', 'all keys']];
+    if (ctx && ctx.facsHidden) return [['h', 'show Factories'], ['?', 'all keys']];
     return [['↑↓', 'move'], ['1/2/3', 'answer'], ['enter', 'open'], ['x', 'settled?'],
             ['k', 'keep'], ['t', 'talk'], ['r', 'read'], ['s', 'who steers'], ['?', 'all keys']];
   }
@@ -3810,6 +3870,9 @@ VIEW_JS = r"""
       if (key.length !== 1 || key === ' ') return null;
       return { act: 'hint', text:'Press enter to send it to Starship, or esc to cancel.' };
     }
+    /* With Factories hidden, Control Centre has only the key that shows it again. */
+    if (key === 'h' && ctx.tab === 'home') return { act: 'facs', hidden: ctx.facsHidden ? 'false' : 'true' };
+    if (ctx.facsHidden && ctx.tab === 'home') return key === '?' ? { act: 'keys' } : null;
     if (key === 'ArrowDown') return { act: 'move', step: 1 };
     if (key === 'ArrowUp') return { act: 'move', step: -1 };
     if (key === '?') return { act: 'keys' };
@@ -4153,6 +4216,18 @@ let tab=decodeURIComponent(location.hash.slice(1))||'home';
 let openCall=null,chose=false,confirming=null,talk=null,notice=null,noticeTimer=0,acting=false,selJob=null,hl=null,tabShown=null;
 /* Watch this worker: the job whose screen is open ({factory,job}), its last reading, and the read loop's turn. */
 let watching=null,wread=null,wturn=0;
+/* Factories kept off Control Centre, for the whole home (state/web/factories); a call or a sentence
+   the band leads to shows it for this visit only (facsPeek), and the choice stays. */
+let facsHidden=$('home').dataset.facs==='hidden',facsPeek=false;
+function facsShown(){return !facsHidden||facsPeek;}
+async function keepFacs(hide){
+  const was=facsHidden;facsHidden=hide;facsPeek=false;setSide(hide?'chat':'projects',true);draw();
+  let ok=false;
+  try{const r=await fetch('/api/factories',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({hidden:hide})});
+    ok=r.ok;}catch(e){}
+  if(!ok){facsHidden=was;draw();$('result').textContent=hide?'Factories could not be hidden for this home; try again.':'Factories could not be shown again for this home; try again.';}
+}
 const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
 const oldSent={};  /* older questions this page asked about that the record does not show yet */
 const full=new Set();    /* the clipped titles opened in full */
@@ -4526,7 +4601,7 @@ function drawProject(p){
 function drawKeys(){
   const strip=$('keystrip');strip.replaceChildren();
   strip.classList.toggle('confirming',!!confirming);
-  V.keyStrip({confirming:!!confirming,watching:!!watching}).forEach(k=>{const s=el('span');add(s,el('kbd','',k[0]),document.createTextNode(k[1]));strip.appendChild(s);});
+  V.keyStrip({confirming:!!confirming,watching:!!watching,facsHidden:tab==='home'&&!watching&&!facsShown()}).forEach(k=>{const s=el('span');add(s,el('kbd','',k[0]),document.createTextNode(k[1]));strip.appendChild(s);});
 }
 /* Watch this worker: a read-only copy of its screen, read again every two seconds. */
 function drawWorker(){
@@ -4591,7 +4666,9 @@ function draw(){
   if(watching&&tab!==watching.factory)watching=null;
   drawTabs();drawBand();drawStatus();
   $('home').hidden=tab!=='home';$('project').hidden=tab==='home'||!!watching;$('worker').hidden=!watching;
-  $('sideSwitch').hidden=tab!=='home';
+  $('home').dataset.facs=facsShown()?'shown':'hidden';
+  $('facsShow').hidden=facsShown();
+  $('sideSwitch').hidden=tab!=='home'||!facsShown();
   if(watching)drawWorker();else if(tab==='home')drawHome();else drawProject(project(tab));
   drawKeys();
   document.querySelectorAll('.clip').forEach(e=>e.classList.toggle('over',e.classList.contains('full')||e.scrollHeight>e.clientHeight+1));
@@ -4603,7 +4680,8 @@ function show(id,flash){
   const card=document.querySelector('[data-call="'+CSS.escape(id)+'"]');
   if(card){card.scrollIntoView({block:'nearest'});if(flash){card.classList.add('flash');}}
 }
-function setSide(side){
+function setSide(side,stay){
+  if(side==='projects'&&facsHidden&&!stay)facsPeek=true;
   $('home').dataset.side=side;
   $('sideSwitch').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.side===side)));
 }
@@ -4652,7 +4730,8 @@ function move(step){
 function keyContext(){
   const lit=hl||(openCall&&need(openCall)&&(tab==='home'||need(openCall).project===tab)?{kind:'call',id:openCall}:null);
   return {hl:lit?{kind:lit.kind,call:lit.kind==='call'?need(lit.id):null,project:lit.kind==='project'?project(lit.id):null}:null,
-    confirming:!!confirming,tab:tab,project:tab!=='home'?project(tab):null,projectOf:id=>project(id),watching:!!watching};
+    confirming:!!confirming,tab:tab,project:tab!=='home'?project(tab):null,projectOf:id=>project(id),watching:!!watching,
+    facsHidden:!facsShown()};
 }
 function openKeys(open){$('keysSheet').hidden=!open;$('keysBtn').setAttribute('aria-expanded',String(open));
   if(open)$('keysClose').focus();}
@@ -4669,6 +4748,7 @@ async function perform(d){
     case 'back':if(watching){unwatch();return;}if(tab!=='home')perform({act:'tab',id:'home'});return;
     case 'move':move(Number(d.step));return;
     case 'keys':openKeys($('keysSheet').hidden);return;
+    case 'facs':keepFacs(d.hidden==='true');return;
     case 'hint':say(false,d.text);draw();return;
     case 'more':if(full.has(d.key))full.delete(d.key);else full.add(d.key);draw();return;
     case 'call':if(need(d.id))show(d.id,true);else{tab='home';setSide('projects');draw();}return;
@@ -4678,7 +4758,7 @@ async function perform(d){
     case 'oldask':confirming={item:d.id,older:d.what};draw();return;
     case 'goto':{if(tab!=='home')perform({act:'tab',id:'home'});setSide('projects');
       const sec=document.querySelector('#pbody [data-sec="'+CSS.escape(d.to)+'"]');if(sec)sec.scrollIntoView({block:'start'});return;}
-    case 'stopped':tab=d.project;selJob=d.job;hl=null;setSide('projects');
+    case 'stopped':tab=d.project;selJob=d.job;hl=null;setSide('projects',true);
       history.replaceState(null,'','#'+encodeURIComponent(tab));draw();
       {const card=document.querySelector('#ppBody [data-job="'+CSS.escape(d.job)+'"]');if(card)card.scrollIntoView({block:'center'});}return;
     case 'keep':openCall=d.id;chose=true;confirming={item:d.id,keep:true};draw();return;
@@ -4897,7 +4977,7 @@ const homeDivider=divider($('divHome'),$('home'),'split');
   setInterval(()=>{if(inFront())say(true,true);},1000*(Number(document.body.dataset.frontBeat)||5));check();}
 
 document.querySelectorAll('.brand').forEach(b=>b.prepend(ship()));
-setSide('projects');poll();mirror();
+setSide(facsHidden?'chat':'projects',true);poll();mirror();
 })();
 """
 
@@ -4961,7 +5041,7 @@ def weekly_page(home: Path) -> Optional[str]:
         return None
 
 
-def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
+def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = False) -> str:
     weekly_link = ('<a class="qbtn" href="/weekly" target="_blank" rel="noopener" '
                    'title="What changed this week">This week</a>\n') if weekly else ""
     return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script>
@@ -4977,11 +5057,12 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 </header>
 <div class="side-switch" id="sideSwitch"><button type="button" data-side="chat">Firstmate</button>
 <button type="button" data-side="projects">Factories</button></div>
-<main class="main" id="home" data-side="projects">
+<main class="main" id="home" data-side="projects" data-facs="{'hidden' if facs_hidden else 'shown'}">
 <section class="pane" id="chatPane" aria-label="Firstmate">
 <div class="pane-head"><h2>Firstmate</h2>
 <div class="seg mate-switch" id="mateSwitch" role="group" aria-label="Who you talk to" hidden></div>
-<span id="state" class="state offline"><span class="label">Connecting</span></span></div>
+<span id="state" class="state offline"><span class="label">Connecting</span></span>
+<button class="facs-btn" id="facsShow" type="button" data-act="facs" data-hidden="false" title="Show Factories beside the chat">Show Factories</button></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div>
@@ -4999,7 +5080,8 @@ def page_html(nonce: str, csrf: str, weekly: bool = False) -> str:
 </section>
 <div class="divider" id="divHome" role="separator" tabindex="0" aria-label="Move the line between firstmate and Factories" aria-valuemin="25" aria-valuemax="75" title="Drag to resize; double-click to reset"></div>
 <section class="pane" id="panelPane" aria-label="Factories">
-<div class="pane-head"><h2>Factories</h2><span class="sub">Each project's work, start to finish</span><span class="when" id="clock"></span></div>
+<div class="pane-head"><h2>Factories</h2><span class="sub">Each project's work, start to finish</span><span class="when" id="clock"></span>
+<button class="facs-btn" id="facsHide" type="button" data-act="facs" data-hidden="true" title="Hide Factories; Show Factories brings it back">Hide</button></div>
 <div class="p-top" id="ptop"><p class="sum">reading the crew</p></div>
 <div class="p-body" id="pbody"></div>
 </section>

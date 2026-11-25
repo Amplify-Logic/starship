@@ -3778,6 +3778,57 @@ test_the_plugin_installs_opens_and_removes() {
   pass "factory pane: install links and records the home, binds its reconcile source, open splits right, remove stops only its own panes and unbinds it"
 }
 
+# The Factory pane can be hidden and kept hidden: `h` in the pane, or
+# `hide`, records it in the home's config/factory-pane and closes every
+# overview (a factory's own tab stays), and `show` clears it and opens the
+# pane again beside a pane, or says when it returns.
+test_hide_keeps_the_pane_away_and_show_brings_it_back() {
+  reset_case
+  write_registry
+  write_world
+  local out dir="$TMP_ROOT/case$CASE" over page
+  export HERDR_BIN_PATH="$BINDIR/herdr" HERDR_TAB_ID=w1:t1 HERDR_SOCKET_PATH=/run/a.sock
+  assert_absent "$HOME_FIX/config/factory-pane" "a new home keeps the pane hidden"
+  DRIVE_PANE=1 HERDR_PANE_ID=w1:p9 drive_keys "SNAP:$dir/keys" h
+  assert_contains "$(screen_of "$dir/keys" 50 100)" "h hide · q quit" "the keys line offers h beside the first mate"
+  assert_equals "$(cat "$HOME_FIX/config/factory-pane" 2>/dev/null)" "hidden" "h keeps the pane hidden for the home"
+  # A factory's own page has no h: it closes with q, with its tab.
+  DRIVE_FACTORY=sample-shop HERDR_PANE_ID=w1:p9 drive_keys "SNAP:$dir/page"
+  assert_not_contains "$(screen_of "$dir/page" 50 100)" "h hide" "a factory's own tab offers h"
+  # hide closes the overviews only.
+  mkdir -p "$FM_FACTORY_TEST_CONFIG/panes"
+  bash -c "exec -a 'fm-factory-pane.sh run' sleep 30" &
+  over=$!
+  bash -c "exec -a 'fm-factory-pane.sh run --factory sample-shop' sleep 30" &
+  page=$!
+  printf 'pane=w1:p4\ntab=w1:t1\nsession=/run/a.sock\nview=overview\n' > "$FM_FACTORY_TEST_CONFIG/panes/$over"
+  printf 'pane=w1:p5\ntab=w1:t2\nsession=/run/a.sock\nview=page\n' > "$FM_FACTORY_TEST_CONFIG/panes/$page"
+  rm -f "$HOME_FIX/config/factory-pane"
+  out=$(bash "$PANE" hide 2>&1) || fail "hide failed: $out"
+  assert_contains "$out" "The Factory pane is hidden and stays hidden" "hide says what it did"
+  assert_equals "$(cat "$HOME_FIX/config/factory-pane" 2>/dev/null)" "hidden" "hide keeps the pane hidden for the home"
+  wait "$over" 2>/dev/null
+  kill -0 "$over" 2>/dev/null && fail "hide left the overview running"
+  kill -0 "$page" 2>/dev/null || fail "hide closed a factory's own page"
+  kill "$page" 2>/dev/null
+  wait "$page" 2>/dev/null
+  # show with a pane clears it and opens the pane beside that pane.
+  : > "$CALLS"
+  out=$(HERDR_PANE_ID=w1:p2 bash "$PANE" show 2>&1) || fail "show failed: $out"
+  assert_absent "$HOME_FIX/config/factory-pane" "show keeps the pane hidden"
+  assert_grep 'plugin pane open --plugin starship.factory --entrypoint factory --placement split --direction right --target-pane w1:p2' \
+    "$CALLS" "show does not open the pane"
+  # With no pane to open beside, show only clears it and says when it returns.
+  bash "$PANE" hide >/dev/null 2>&1 || fail "hide failed"
+  : > "$CALLS"
+  out=$(env -u HERDR_PANE_ID bash "$PANE" show 2>&1) || fail "show with no pane failed: $out"
+  assert_contains "$out" "the next starship command shows it" "show with no pane says when it returns"
+  assert_absent "$HOME_FIX/config/factory-pane" "show with no pane keeps it hidden"
+  assert_no_grep 'plugin pane open' "$CALLS" "show with no pane opened something"
+  unset HERDR_BIN_PATH HERDR_TAB_ID HERDR_SOCKET_PATH
+  pass "factory pane: h and hide keep it hidden and close only the overviews, show brings it back"
+}
+
 # The bridge strip opens the pane on one item of NEEDS YOU: a new pane starts
 # its highlight there, and a pane already showing in the tab moves to it.
 # The bridge strip moving the pane to a call brings that call into sight,
@@ -4466,4 +4517,5 @@ fm_test_run \
   test_workers_splits_live_copies_beside_a_page_pane \
   test_the_plugin_installs_opens_and_removes \
   test_open_on_an_item_puts_the_highlight_on_it \
+  test_hide_keeps_the_pane_away_and_show_brings_it_back \
   test_a_scrolled_pane_shows_the_item_it_is_moved_to

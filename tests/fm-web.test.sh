@@ -1634,6 +1634,44 @@ test_the_voice_in_settings_is_the_homes_through_fm_speak() {
   pass "the voice in Settings is the home's, read and changed only through fm-speak.sh"
 }
 
+# Factories can be taken off Control Centre with one click and brought back
+# with one more, and the choice is the home's: it is kept in state/web/, so a
+# reload, another browser and a restarted server all draw the page the same way.
+test_factories_hide_and_come_back_for_the_whole_home() {
+  local home root port cookie csrf url bad out
+  home=$(make_home facs)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/factories"
+  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")
+  assert_contains "$out" 'data-facs="shown"' "Factories shows until it is hidden"
+  assert_contains "$out" 'id="facsHide"' "Factories carries its Hide button"
+  assert_contains "$out" 'id="facsShow"' "the chat carries the button that brings Factories back"
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"hidden":true}' "$url")" "no CSRF header"
+  assert_absent "$home/state/web/factories" "a refused change keeps nothing"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"hidden":true}' "$url")
+  assert_equals "true true" "$(jq -r '"\(.ok) \(.hidden)"' <<<"$out")" "hiding is kept"
+  assert_equals "hidden" "$(cat "$home/state/web/factories")" "the choice is kept in the home"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'data-facs="hidden"' "a reload draws it hidden"
+  for bad in '{"hidden":"yes"}' '{"hidden":true,"x":1}' '{}' 'nope'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  assert_equals "hidden" "$(cat "$home/state/web/factories")" "a refused change keeps the choice"
+  # Another server for the same home, as after a restart, still draws it hidden.
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/factories"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'data-facs="hidden"' "a restart keeps it hidden"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"hidden":false}' "$url")
+  assert_equals "true false" "$(jq -r '"\(.ok) \(.hidden)"' <<<"$out")" "showing it again is kept"
+  assert_absent "$home/state/web/factories" "shown leaves no setting behind"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" 'data-facs="shown"' "a reload draws it shown"
+  pass "Factories hides and comes back with one click, kept for the whole home"
+}
+
 # A page the owner is looking at tells the desk floater so, through one file
 # in the home, so the floater keeps its reply bubble quiet.
 test_a_page_in_front_marks_the_home_for_the_floater() {
@@ -1837,6 +1875,8 @@ out.push('on a project: ' + keys(on({ kind: 'project', project: garden }), ['Ent
 out.push('while confirming: ' + keys(on(null, { confirming: true }), ['Enter', 'Escape', 'x', 'Tab', 'Shift', 'ArrowDown', 'End', ' ']));
 out.push('anywhere: ' + keys(on(null), ['ArrowDown', 'ArrowUp', '?', 'Escape', 'q']));
 out.push('watching a worker: ' + keys(on({ kind: 'call', call: ask }, { watching: true }), ['Escape', '?', '1', 'k', 't', 's', 'Enter', 'ArrowDown']));
+out.push('factories shown: ' + keys(on({ kind: 'call', call: ask }), ['h']) + ' ' + keys(on(null, { tab: 'garden', project: garden }), ['h']));
+out.push('factories hidden: ' + keys(on({ kind: 'call', call: ask }, { facsHidden: true }), ['h', '?', 'ArrowDown', 'k', '1', 'Enter', 'Escape']));
 out.push('notes: ' + JSON.stringify([
   V.noteFor({ act: 'answer', option: '2' }, ask), V.noteFor({ act: 'keep' }, done), V.noteFor({ act: 'settled' }, ask),
   V.noteFor({ act: 'steer', factory: 'garden', who: 'you' }), V.noteFor({ act: 'read', id: 'garden-chart' }),
@@ -1845,7 +1885,8 @@ out.push('notes: ' + JSON.stringify([
 out.push('look: ' + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'home')) + ' '
   + JSON.stringify(V.withLook({ action: 'settled', item: 'garden-chart' }, 'garden')));
 out.push('strip: ' + V.keyStrip({}).map(k => k.join(' ')).join(', ') + ' | ' + V.keyStrip({ confirming: true }).map(k => k.join(' ')).join(', ')
-  + ' | ' + V.keyStrip({ watching: true }).map(k => k.join(' ')).join(', '));
+  + ' | ' + V.keyStrip({ watching: true }).map(k => k.join(' ')).join(', ')
+  + ' | ' + V.keyStrip({ facsHidden: true }).map(k => k.join(' ')).join(', '));
 const card = { project_name: 'Garden Journal', waited: 'waiting 3 h' };
 const mates = { project_name: 'Garden Journal', waited: 'ready 53 min', mate: 'near' };
 out.push('beside a call: ' + [V.callMeta(card, false, false), V.callMeta(card, true, false), V.callMeta(card, true, true),
@@ -1865,9 +1906,11 @@ on a project: Enter={"act":"tab","id":"garden"} t={"act":"talk","kind":"talk","f
 while confirming: Enter={"act":"send"} Escape={"act":"cancel"} x={"act":"hint","text":"Press enter to send it to Starship, or esc to cancel."} Tab=null Shift=null ArrowDown=null End=null  =null
 anywhere: ArrowDown={"act":"move","step":1} ArrowUp={"act":"move","step":-1} ?={"act":"keys"} Escape={"act":"back"} q=null
 watching a worker: Escape={"act":"back"} ?={"act":"keys"} 1=null k=null t=null s=null Enter=null ArrowDown=null
+factories shown: h={"act":"facs","hidden":"true"} h=null
+factories hidden: h={"act":"facs","hidden":"false"} ?={"act":"keys"} ArrowDown=null k=null 1=null Enter=null Escape=null
 notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":"2"},{"action":"keep","item":"garden-share","asking":"1794636660"},{"action":"settled","item":"garden-chart","asking":"1794632400"},{"action":"steer","factory":"garden","who":"you"},{"action":"read","item":"garden-chart"},{"action":"discuss","item":"garden-chart","asking":"1794632400","text":"why?"},{"action":"talk","factory":"garden","text":"hello"}]
 look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}
-strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel | esc back to the project, ? all keys
+strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel | esc back to the project, ? all keys | h show Factories, ? all keys
 beside a call: Garden Journal · waiting 3 h | waiting 3 h | checking | Garden Journal, from near · ready 53 min | from near · ready 53 min | -
 tabs: 0 252 88 0 250' \
     "how the page folds the chat, labels links, what each key sends, what sits beside a call and where the tabs scroll to"
@@ -2011,6 +2054,7 @@ test_a_failed_restart_keeps_sends_and_buttons_working
 test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_voice_in_settings_is_the_homes_through_fm_speak
+test_factories_hide_and_come_back_for_the_whole_home
 test_a_page_in_front_marks_the_home_for_the_floater
 test_colours_are_kept_and_kept_readable
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
