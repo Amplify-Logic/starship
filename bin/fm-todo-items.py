@@ -655,6 +655,10 @@ def parse_line(line, targeted, now):
         if not what:
             raise Refusal('you needs "<words>: <what to do>"')
         extra['what'] = what
+    elif verb == 'add' and not targeted:
+        top = re.match(r'^(.*\S)\s+first$', rest, re.I | re.S)
+        if top:
+            rest, extra['first'] = top.group(1).strip(), True
     return verb, rest, extra
 
 
@@ -769,9 +773,10 @@ def apply_command(store, items, line, target, shown_rev, now):
     if verb in ('add', 'first'):
         if rec['state'] == 'closed':
             raise Refusal(f'{rec["id"]} is closed; reopen it before putting it on the Today list')
-        if verb == 'add' and rec['id'] in store.today():
+        top = verb == 'first' or extra.get('first')
+        if not top and rec['id'] in store.today():
             return 'already ' + result
-        moved = place(store, rec['id'], 1 if verb == 'first' else 0, now)
+        moved = place(store, rec['id'], 1 if top else 0, now)
         return result if moved else 'already ' + result
     if verb in ('done', 'drop'):
         if rec['state'] == 'closed':

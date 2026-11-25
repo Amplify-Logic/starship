@@ -1556,6 +1556,11 @@ test_the_today_list_keeps_the_captains_order() {
   todo_at "$h" "$T_0900" command 'add Review the guide' >/dev/null
   out=$(todo_at "$h" "$T_0900" command 'guide first')
   assert_contains "$out" 'TODO_CMD: first ' '"X first" did not move the line'
+  # "add X first" puts a new line X at the top, not a line "X first" at the end.
+  todo_at "$h" "$T_0900" command 'add Ring the bank first' >/dev/null
+  assert_equals 'Ring the bank|Review the guide|Send the drafts|Call the supplier|' \
+    "$(todo_at "$h" "$T_0900" today list | cut -f4 | tr '\n' '|')" '"add X first" did not put a new line X at the top'
+  todo_at "$h" "$T_0900" today remove "$(field_of "$h" 'Ring the bank' 1)" >/dev/null
   out=$(todo_at "$h" "$T_0900" today add 'Call the supplier')
   assert_contains "$out" '(already)' 'adding a line already on the list again was not harmless'
   assert_equals 'Review the guide|Send the drafts|Call the supplier|' \
@@ -1649,7 +1654,9 @@ test_the_front_page_is_calm() {
 '{"key":"k-p6","source":"helpdesk","ref":"p6","class":"obligation","kind":"reply","title":"Partner six days","partner_awaiting":true,"awaiting_since":'"$((t - 6 * 86400))"',"updated":'"$t"'},'\
 '{"key":"k-p1","source":"helpdesk","ref":"p1","class":"obligation","kind":"reply","title":"Partner one day","partner_awaiting":true,"awaiting_since":'"$((t - 86400))"',"updated":'"$t"'},'\
 '{"key":"k-ask","source":"chat","ref":"ask","class":"urgent","title":"Colleague asks for codes","asked_at":'"$((t - 10 * 86400))"',"updated":'"$t"'},'\
-'{"key":"k-fri","source":"calendar","ref":"fri","class":"deadline","title":"Friday review","ends_at":"2026-09-11T11:00:00+02:00","updated":'"$t"'}'
+'{"key":"k-fri","source":"calendar","ref":"fri","class":"deadline","title":"Friday review","ends_at":"2026-09-11T11:00:00+02:00","updated":'"$t"'},'\
+'{"key":"k-cdl","source":"chat","ref":"cdl","class":"deadline","kind":"approval","title":"Colleague approval by noon","ends_at":"2026-09-10T12:00:00+02:00","asked_at":'"$((t - 3 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-mon","source":"chat","ref":"mon","class":"deadline","kind":"approval","title":"Colleague approval due Monday","ends_at":"2026-09-14T10:00:00+02:00","asked_at":'"$((t - 2 * 86400))"',"updated":'"$t"'}'
   intake_at "$h" "$((t - 2 * 86400))" observe --source C_BRIEF --ref stale --digest a --class obligation \
     --title 'Unchecked colleague line' >/dev/null
   printf -- '- [ ] fm-q1 - Pick a model for the reports (hold-kind: captain) (hold: which one) (since: 2026-09-01)\n' \
@@ -1663,9 +1670,11 @@ test_the_front_page_is_calm() {
     'Needs you now is not the three lines the rules pick, machine down, then due today, then the longest partner wait'
   assert_equals 'Partner six days|Partner one day|' \
     "$(front_section "$front" 'Partners waiting on you' | tr '\n' '|')" 'the partners waiting are wrong'
-  assert_equals 'Colleague asks for codes|Office tap down|' \
+  # A colleague deadline due today stays with the colleagues; the week ends on Sunday, so Monday waits there too.
+  assert_equals 'Colleague asks for codes|Colleague approval by noon|Colleague approval due Monday|Office tap down|' \
     "$(front_section "$front" 'Colleagues asking you' | tr '\n' '|')" 'a colleague ask rose above the list or went missing'
-  assert_equals 'Friday review|' "$(front_section "$front" 'Later this week' | tr '\n' '|')" 'later this week is wrong'
+  assert_equals 'Friday review|' "$(front_section "$front" 'Later this week' | tr '\n' '|')" \
+    'later this week is not the asks ending after today and by Sunday'
   assert_contains "$(cat "$front")" '1 not re-checked in the last day' 'an unchecked line was not counted on one line'
   assert_not_contains "$(cat "$front")" 'Unchecked colleague line' 'an unchecked line rendered as a row'
   assert_contains "$(cat "$front")" '1 question from Firstmate, asked in chat' 'the held question is not one count line'

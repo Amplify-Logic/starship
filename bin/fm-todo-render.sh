@@ -29,15 +29,17 @@
 # list of one-line rows that open the same note box on a click:
 #   - Needs you now: at most three lines, shown only when one qualifies. A line
 #     rises only when it was re-checked at its source today and is a partner-
-#     or customer-facing outage (a machine down), a deadline or meeting ending
-#     later today, or a partner or customer awaiting the captain's reply for
+#     or customer-facing outage (a machine down), a calendar meeting or a
+#     partner- or customer-facing deadline ending later today, or a partner or
+#     customer awaiting the captain's reply for
 #     more than one working day; in that order, then the oldest, earliest end
 #     or longest wait first. A colleague ask never rises.
 #   - Today: the captain's own list, numbered, in his order (bin/fm-todo.sh
 #     owns the Today list), with one box to queue "add X" or "X first".
 #   - Partners waiting on you, then Colleagues asking you: the other open
 #     asks re-checked in the last day, oldest first, ten at most between them.
-#   - Later this week: up to five asks ending after today and within the week.
+#   - Later this week: up to five asks ending after today and by Sunday 23:59
+#     of this calendar week; an ask ending later stays in its waiting list.
 # Then one line counting what is left out (more waiting, lines not re-checked
 # in the last day, and Firstmate's own questions - held decisions and tooling
 # approvals, which are asked in chat), and "N closed today, M more in the back

@@ -361,10 +361,20 @@ def source_kind(token):
     return None
 
 
+def source_of(rec):
+    label = rec.get('label') or ''
+    return next((k for k in map(source_kind, [label] + re.findall(r'\(([^()]*)\)', label)) if k), None)
+
+
+def meeting(rec):
+    """A calendar meeting: its source is a calendar."""
+    return (source_of(rec) or ('',))[0] == 'calendar' or any(
+        a.lower().startswith('calendar:') for a in rec.get('aliases') or [])
+
+
 def source_marker(rec):
     label = rec.get('label') or ''
-    tokens = [label] + re.findall(r'\(([^()]*)\)', label)
-    found = next((k for k in map(source_kind, tokens) if k), None)
+    found = source_of(rec)
     icon, name = found or ('other', 'Other')
     title = f'From {name}' if found else f'From {label or "an unrecorded source"}'
     return (f'<span class="src" title="{esc(title)}" aria-label="{esc(title)}">'
@@ -610,12 +620,14 @@ def working_days(epoch):
 
 def needs_now(rec):
     """The rule a line rises by, as a sort key, or None: a partner or customer
-    machine down, then a meeting or deadline ending later today, then the
-    longest partner or customer wait on the captain's reply past one working day."""
+    machine down, then a meeting or a partner or customer deadline ending later
+    today, then the longest partner or customer wait on the captain's reply past
+    one working day. A colleague's ask never rises."""
     end = number(rec.get('ends_at'))
     if rec.get('class') == 'outage' and partner(rec):
         return 0, asked(rec)
-    if rec.get('class') == 'deadline' and end > NOW and stamp(end, '%Y-%m-%d') == DAY:
+    if (rec.get('class') == 'deadline' and (meeting(rec) or partner(rec))
+            and end > NOW and stamp(end, '%Y-%m-%d') == DAY):
         return 1, end
     since = number(rec.get('awaiting_since')) or number(rec.get('asked_at'))
     if rec.get('partner_first') and since and working_days(since) > 1:
@@ -682,7 +694,8 @@ def front_page():
     pool = [r for r in pool if r not in questions]
     now = sorted((r for r in pool if checked(r, DAY_START) and needs_now(r)), key=lambda r: (needs_now(r), r['id']))
     now = now[:NOW_CAP]
-    week_end = DAY_START + 8 * 86400
+    monday = datetime.date.fromtimestamp(NOW) + datetime.timedelta(days=7 - datetime.date.fromtimestamp(NOW).weekday())
+    week_end = int(time.mktime(monday.timetuple()))
     later = sorted((r for r in pool if r not in now and stamp(number(r.get('ends_at')) or NOW, '%Y-%m-%d') > DAY
                     and number(r.get('ends_at')) < week_end), key=lambda r: (number(r['ends_at']), r['id']))
     rest = [r for r in pool if r not in now and r not in later]
