@@ -279,7 +279,25 @@ h1{margin:0 0 1.2rem}h2{padding-bottom:4px;border-bottom:1px solid var(--rule)}h
 ul,ol{padding-left:1.4rem;margin:0 0 .8rem}li{margin-bottom:.35rem}li>ul,li>ol{margin:.35rem 0 0}strong{font-weight:600}
 .tw{max-width:100%;overflow-x:auto;margin:1.1rem 0}table{min-width:420px}
 `;
-export { render };
+const paperCss = () => fs.readFileSync(PAPER_CSS, "utf8");
+const themeToggle = `<button class="theme-toggle" type="button" id="themeToggle">Switch to light paper</button><script>
+(function () {
+  var root = document.documentElement;
+  var toggle = document.getElementById("themeToggle");
+  function dark() {
+    var set = root.getAttribute("data-theme");
+    if (set) return set === "dark";
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function label() { toggle.textContent = dark() ? "Switch to light paper" : "Switch to dark paper"; }
+  label();
+  toggle.addEventListener("click", function () {
+    root.setAttribute("data-theme", dark() ? "light" : "dark");
+    label();
+  });
+})();
+</script>`;
+export { render, paperCss, themeToggle };
 
 function main(...args) {
   const outputDirArg = args.pop();
@@ -300,7 +318,7 @@ function main(...args) {
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
     const digest = crypto.createHash("sha256").update(sources.join("\n")).digest("hex").slice(0, 10);
     const title = escapeHtml(label.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()));
-    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${fs.readFileSync(PAPER_CSS, "utf8")}${reportCss}</style></head><body><main>\n${body}\n</main></body></html>\n`;
+    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${paperCss()}${reportCss}</style></head><body><main>\n${themeToggle}\n${body}\n</main></body></html>\n`;
     const outputDir = path.resolve(outputDirArg);
     const output = path.join(outputDir, `read-${slug}-${digest}.html`);
     fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });

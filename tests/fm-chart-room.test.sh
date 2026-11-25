@@ -256,6 +256,26 @@ test_every_view_is_reachable_and_nothing_is_a_dead_end() {
   pass "home, goal map, node, goal and report views all render with no dead rows"
 }
 
+# The chart room is a decision board, and decision boards wear the house
+# style pack (docs/house-style.md): every view carries assets/house-style/paper.css
+# and the light and dark paper switch, and the board's own rules add no colour
+# of their own, so the dark paper swaps the whole board rather than half of it.
+test_every_page_wears_the_paper_house_style() {
+  local page view pack own
+  pack=$(cat "$ROOT/assets/house-style/paper.css")
+  mkdir -p "$HOME_DIR/data/alpha-run-foundation-a1"
+  printf '# Foundation\n\nWhat was found.\n' > "$HOME_DIR/data/alpha-run-foundation-a1/report.md"
+  for view in / /p/alpha /p/alpha/node/alpha-decision-d1 /report/alpha-run-foundation-a1 /p/nowhere; do
+    page=$(chart render "$view") || true
+    assert_contains "$page" "$pack" "view $view does not wear the paper house style pack"
+    assert_contains "$page" 'class="theme-toggle"' "view $view has no light and dark paper switch"
+    own=${page#*"$pack"}
+    own=$(printf '%s' "${own%%</style>*}" | grep -o '#[0-9a-fA-F]\{3,8\}\b' || true)
+    [ -z "$own" ] || fail "view $view sets its own colours beside the pack: $own"
+  done
+  pass "every chart room view wears the paper house style with its switch"
+}
+
 test_every_page_carries_the_map_favicon() {
   local page view
   mkdir -p "$HOME_DIR/data/alpha-run-foundation-a1"
@@ -521,6 +541,7 @@ test_a_project_is_claimed_by_its_own_name_and_its_aliases
 test_a_project_without_a_charter_still_renders
 test_every_view_is_reachable_and_nothing_is_a_dead_end
 test_every_page_carries_the_map_favicon
+test_every_page_wears_the_paper_house_style
 test_a_folded_row_is_hidden_until_its_bucket_is_opened
 test_unknown_addresses_refuse_plainly
 test_a_record_that_cannot_be_read_stays_visible_and_marked

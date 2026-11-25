@@ -139,7 +139,8 @@ pass "explicit paths render headings and --no-open does not launch"
 
 page=$(cat "$out")
 assert_contains "$page" "$(cat "$ROOT/assets/house-style/paper.css")" "a report page did not wear the house style pack"
-pass "a report page wears the paper house style"
+assert_contains "$page" 'class="theme-toggle"' "a report page has no light and dark paper switch"
+pass "a report page wears the paper house style with its light and dark switch"
 
 edge_out=$(cd "$TMP_ROOT" && FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_LAVISH_BIN="$FAKEBIN/lavish-axi" FM_READ_TEST_LOG="$LOG" \
