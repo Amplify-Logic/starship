@@ -1367,6 +1367,7 @@ def _shelves_model(shelves: Dict[str, Any]) -> Dict[str, Any]:
 
 def _new_model(item: Dict[str, Any]) -> Dict[str, Any]:
     """One outcome as New on the overview and Lately on a project's tab tell it: its word as a label, then the work."""
+    detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
     return {
         "id": item.get("id"),
         "label": (lambda word: word[:1].upper() + word[1:])(plain_word(item.get("word")))
@@ -1377,6 +1378,9 @@ def _new_model(item: Dict[str, Any]) -> Dict[str, Any]:
         "pr": item.get("pr") or "",
         "read": bool(item.get("read")),
         "mark": MARKS.get(item.get("colour") or "", ""),
+        # A settled call's question and whole answer, unfolded under its sentence or two.
+        "detail": {"question": str(detail.get("question") or ""), "answer": str(detail.get("answer") or "")}
+        if detail.get("answer") else None,
     }
 
 
@@ -2956,6 +2960,14 @@ body.drag #log{outline:2px dashed var(--here);outline-offset:-.5rem}
 .verb{font-weight:600;margin-right:.3rem;color:var(--ink-2)}
 .verb.done{color:var(--done)}.verb.work{color:var(--work)}.verb.you{color:var(--you)}.verb.here{color:var(--here)}
 .news .btn{margin-left:.45rem}
+.told dd>details.news:not(:first-child),.told dd>details.news+p{margin-top:.3rem}
+details.news.settled summary{cursor:pointer;list-style:none}
+details.news.settled summary::-webkit-details-marker{display:none}
+details.news.settled summary::after{content:"more";margin-left:.45rem;font-size:.78rem;color:var(--ink-2);text-decoration:underline dotted}
+details.news.settled[open] summary::after{content:"less"}
+details.news.settled .more{margin:.25rem 0 .1rem;padding-left:.75rem;border-left:2px solid var(--line);color:var(--ink-2);font-size:.84rem}
+details.news.settled .more p+p{margin-top:.2rem}
+details.news.settled .more b{font-weight:600}
 .quiet-facs{border-top:1px solid var(--line);padding:.56rem .25rem 0;margin-top:.25rem}
 .quiet-facs h4{font-size:.84rem;font-weight:600;color:var(--ink-2)}
 .quiet-facs li{display:flex;flex-wrap:wrap;gap:.1rem .625rem;align-items:baseline;margin-top:.3rem;font-size:.875rem}
@@ -4144,6 +4156,14 @@ function drawTop(){
 }
 /* One outcome, as New on the overview and Lately on a project's tab tell it. */
 function newsLine(n,p){
+  /* A settled call reads in a sentence or two; its question and whole answer unfold under it. */
+  if(n.detail){const d=el('details','news settled');d.dataset.fold='settled:'+n.id;
+    const sum=el('summary');add(sum,el('time','',n.when),el('span','verb '+n.mark,n.label+':'));sum.appendChild(linked(n.text,true));
+    const more=el('div','more');
+    add(more,el('p','',''),el('p','',''));
+    more.children[0].appendChild(el('b','','Asked: '));more.children[0].appendChild(linked(n.detail.question,true));
+    more.children[1].appendChild(el('b','','You answered: '));more.children[1].appendChild(linked(n.detail.answer,true));
+    add(d,sum,more);return d;}
   const line=el('p','news');
   add(line,el('time','',n.when),el('span','verb '+n.mark,n.label+':'));
   if(n.pr){const a=el('a','lk',n.text);a.href=n.pr;a.target='_blank';a.rel='noopener noreferrer';a.title='See what changed';line.appendChild(a);}
@@ -4196,7 +4216,9 @@ function drawHome(){
     quiet.forEach(p=>{const li=el('li',hl&&hl.kind==='project'&&hl.id===p.id?'hl':'');li.dataset.proj=p.id;add(li,btn('proj-name',p.name,'tab',{id:p.id}),el('span','w',p.quiet_words));ul.appendChild(li);});
     q.appendChild(ul);facs.appendChild(q);}
   if(!M.projects.length)facs.appendChild(el('p','empty','No projects yet. Ask your firstmate to add one.'));
+  const open=new Set(Array.from(body.querySelectorAll('details[open]')).map(d=>d.dataset.fold).filter(Boolean));
   body.replaceChildren(needs,facs);
+  body.querySelectorAll('details').forEach(d=>{if(d.dataset.fold&&open.has(d.dataset.fold))d.open=true;});
 }
 /* A project's tab reads top to bottom, as the pane's page: what it is for and one sentence of
    state, Talk to this crew with who steers as a quiet line, Needs you with its older questions,

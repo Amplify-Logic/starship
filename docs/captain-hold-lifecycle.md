@@ -88,6 +88,7 @@ The `answer` subcommand records the captain's exact words and resolves the call 
 | `answer` | Closes a question-shaped call. |
 | `answer --release` | Frees a captain-gated work item to proceed without completing it. |
 | `answer --expect-identity <identity>` | Records the answer only when the call's current `open --identity` value still matches, and otherwise exits 3 and records nothing. |
+| `answer --summary <sentence>` | Also records one line saying what was decided, which the Factory screens show for the settled call in place of a shortened answer. |
 
 It requires a non-empty captain decision file of at most 8192 bytes.
 `answer --release` is attended-only: while the away-posture record exists it is refused before anything is written, and the keyed-answer intake refuses a `release` line the same way, because only the captain in an attended session releases a captain hold.
@@ -95,6 +96,7 @@ A quiet record is a present captain and does not refuse.
 It then works in this order:
 
 1. It durably writes a resolution block carrying the decision digest and a `Resolution mode:`.
+   The decision ends with an `End of decision.` line, so a reader of the record can tell it from the preserved body below it even once blank lines are dropped (bin/fm-fleet-snapshot.sh `body_lines`).
 2. It retains the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds.
 3. It then restores the successful record's resolution-first body ordering.
    The previous body remains preserved below the block and archived through tasks-axi `--archive-body`.

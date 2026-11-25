@@ -1119,7 +1119,7 @@ SH
     "a job closed with nothing built does not read closed"
   has_line "$out" " today Closed: Old checkout redesign, with no change or report on record." \
     "a job closed with its change unmerged does not read closed"
-  has_line "$out" " today Settled: Free shipping over fifty. You answered: Yes, from fifty." \
+  has_line "$out" " today Settled: Free shipping over fifty. Yes, from fifty. ▸ more" \
     "an answered call does not read settled, with what the owner answered"
   has_line "$out" " 07:30 Went live: Faster cart" "a merged change does not read went live at its merge"
   has_line "$out" " today Went live: Tidy the price list" "a local landing does not read went live"
@@ -1173,6 +1173,76 @@ SH
   assert_not_contains "$out" "8 more, on its own page" "New says its page holds more than the page lists"
   unset FM_FACTORY_PR_MERGED
   pass "factory feed: closed work reads closed; a merged change or a landing went live, a report is ready, an answered call is settled"
+}
+
+# On 2026-11-24 the owner read each settled call as its whole question, then
+# "You answered:" and the whole recorded answer, quotes, dates and notes and
+# all, and asked for a sentence or two that unfolds to the rest. A settled call
+# reads as the outcome recorded with the answer (answer --summary), else as its
+# question and the answer's first sentence, both short; a click unfolds the
+# question and the whole answer on the pane, and the record hands both screens
+# the same words.
+test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds() {
+  reset_case
+  write_registry
+  write_world
+  local snap dir="$TMP_ROOT/case$CASE" screen line
+  snap=$(jq '(.backlog.records[] | select(.id == "shop-gift")) as $row
+    | def call($id; $title; $lines): $row + {id: $id, title: $title, state: "done", kind: "captain",
+        hold_kind: "captain", completion: {verb: "done", date: "2026-11-14"}, body_lines: $lines};
+    .backlog.records += [
+      call("shop-wrap"; "Gift wrap for every order (wrap A recommended, B plain, C none)";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 1", "Resolution mode: answered",
+         "Captain decision:",
+         "Owner 14 Nov 07:10: \"yes, but only for orders over twenty. Ask again after the holiday rush\". Noted for the spring list (see the note)."]),
+      call("shop-named"; "Keep the shop name for the new country site?";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 2", "Resolution mode: answered",
+         "Outcome: The new country site keeps the shop name.", "",
+         "Captain decision:", "Owner 14 Nov 07:20: \"keep it, people know it\"."]),
+      call("shop-kept"; "Keep the old receipts?";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 3", "Resolution mode: answered",
+         "Captain decision:", "Keep them for a year.",
+         "Captain hold origin: tg-123", "Original task notes here."]),
+      call("shop-till"; "Replace the old till?";
+        ["Resolution recorded by fm-captain-hold.", "Decision digest: 4", "Resolution mode: answered",
+         "Captain decision:", "Replace it in March.", "Reason: the card reader fails weekly.", "End of decision.",
+         "Captain hold origin: tg-456", "Old till notes."])]' "$FM_FACTORY_SNAPSHOT") \
+    || fail "could not settle the calls"
+  printf '%s\n' "$snap" > "$FM_FACTORY_SNAPSHOT"
+  take_record
+  assert_equals "$(q '.feed[] | select(.job == "shop-wrap") | .text')" \
+    "Gift wrap for every order. Yes, but only for orders over twenty." \
+    "a settled call without an outcome does not read as its short question and the answer's first sentence"
+  assert_equals "$(q '.feed[] | select(.job == "shop-named") | .text')" "The new country site keeps the shop name." \
+    "a settled call does not read as the outcome recorded with its answer"
+  assert_equals "$(q '.feed[] | select(.job == "shop-kept") | "\(.text)|\(.answer)|\(.detail.answer)"')" \
+    "Keep the old receipts? Keep them for a year.|Keep them for a year.|Keep them for a year." \
+    "the task body kept under a resolution record reads as part of the owner's answer"
+  assert_equals "$(q '.feed[] | select(.job == "shop-till") | "\(.text)|\(.detail.answer)"')" \
+    "Replace the old till? Replace it in March.|Replace it in March. Reason: the card reader fails weekly." \
+    "an answer of more than one line does not unfold whole, or unfolds the task body kept under it"
+  assert_equals "$(q '.feed[] | select(.job == "shop-wrap") | .detail | "\(.question)|\(.answer)"')" \
+    "Gift wrap for every order (wrap A recommended, B plain, C none)|Owner 14 Nov 07:10: \"yes, but only for orders over twenty. Ask again after the holiday rush\". Noted for the spring list (see the note)." \
+    "the whole question and answer are not kept to unfold"
+  assert_equals "$(python3 "$FACTORY" --screen | jq -r '.factories[] | select(.id == "sample-shop") | .page.lately[] | select(.id == "shop-named") | .detail.answer')" \
+    'Owner 14 Nov 07:20: "keep it, people know it".' "a second screen is not handed the whole answer to unfold"
+  python3 "$FACTORY" --plain --width 100 --height 50 --factory sample-shop > "$dir/page" || fail "--plain failed"
+  has_line "$(cat "$dir/page")" " today Settled: Gift wrap for every order. Yes, but only for orders over twenty. ▸ more" \
+    "a settled call on its factory's page does not read short with more to unfold"
+  assert_not_contains "$(cat "$dir/page")" "holiday rush" "a folded settled call shows its whole answer"
+  line=$(awk '/Settled: Gift wrap/ { print NR; exit }' "$dir/page")
+  [ -n "$line" ] || fail "no settled call in sight to click"$'\n'"$(cat "$dir/page")"
+  DRIVE_FACTORY=sample-shop drive_keys $'\x1b[<0;20;'"$line"$'M\x1b[<0;20;'"$line"'m' "SNAP:$dir/open" \
+    $'\x1b[<0;20;'"$line"$'M\x1b[<0;20;'"$line"'m' "SNAP:$dir/folded"
+  screen=$(screen_of "$dir/open" 50 100)
+  assert_contains "$screen" "▾ less" "an unfolded settled call does not offer to fold"
+  assert_contains "$screen" "Asked: Gift wrap for every order (wrap A recommended, B plain, C none)" \
+    "a click does not unfold the whole question"
+  assert_contains "$(printf '%s\n' "$screen" | tr -s ' ' | tr '\n' ' ')" "after the holiday rush\". Noted for the spring list" \
+    "a click does not unfold the whole answer"
+  screen=$(screen_of "$dir/folded" 50 100)
+  assert_not_contains "$screen" "holiday rush" "a second click does not fold the answer away"
+  pass "factory feed: a settled call reads in a sentence or two, and its question and whole answer unfold"
 }
 
 # On 2026-11-22 "needs a look" read as a job waiting on the owner, "with
@@ -4328,6 +4398,7 @@ fm_test_run \
   test_an_open_card_reads_whole_and_names_no_path_or_internal_id \
   test_finished_work_shows_its_pr_short_section_beside_the_merge_choice \
   test_closed_work_reads_closed_and_only_delivered_work_reads_finished \
+  test_a_settled_call_reads_in_a_sentence_or_two_and_unfolds \
   test_routine_runs_fold_into_one_line_and_stay_out_of_the_feed \
   test_a_folded_pass_counts_as_idle_and_hides_no_other_card \
   test_a_routine_line_is_yes_no_or_title_kinds \

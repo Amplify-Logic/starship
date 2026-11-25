@@ -78,7 +78,7 @@ It shows the same facts as the terminal's Factory pane, which [factory-pane.md](
   Under the cards, two shelves hold the calls that wait on you but are not listed: older questions that waited two weeks with no date, each with Bring back and No longer needed, and the calls coming back on a date.
 - **Your factories** tells each project in one block, as three rows:
   - **Now** is what is running or stopped there: each busy job with its title, how long it has run, the four steps (planning, building, checking, ready for your OK) and what its worker is doing this minute, or `Nothing is running.`
-  - **New** is what came out since you last looked, newest first, each with its time: went live, report ready, settled with what you answered, ready for your OK, finished, hit a problem or closed. A change that went live links to the change, and a report has a Read it button.
+  - **New** is what came out since you last looked, newest first, each with its time: went live, report ready, settled in a sentence or two that opens to the whole question and answer, ready for your OK, finished, hit a problem or closed. A change that went live links to the change, and a report has a Read it button.
   - **Next** is the first job in line and how many more are lined up after it, or that it starts once you answer.
 
   A project with nothing for you, nothing running and nothing new folds into one line under Quiet for now.

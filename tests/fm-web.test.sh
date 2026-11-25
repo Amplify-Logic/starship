@@ -762,7 +762,10 @@ write_screen() {  # <home>
     "now": [{"id": "garden-water", "title": "Garden reminders", "state": "busy", "words": "sorting the queued reminders",
       "elapsed": "47 min", "colour": "amber", "quiet": false, "step": 2, "queue": "", "read": false}],
     "lately": [{"id": "garden-beds", "word": "went live", "label": "Went live", "text": "Raised beds", "when": "06:05",
-                "pr": "https://example.invalid/g/pull/9", "read": false, "title": "Raised beds", "colour": "green"}],
+                "pr": "https://example.invalid/g/pull/9", "read": false, "title": "Raised beds", "colour": "green"},
+               {"id": "garden-fence", "word": "settled", "label": "Settled", "text": "The fence stays wire.",
+                "when": "today", "pr": null, "read": false, "title": "Fence: wood or wire?", "colour": "mist",
+                "detail": {"question": "Fence: wood or wire?", "answer": "Wire, it matches the shed. Ask again in spring."}}],
     "lately_since": "in the last 12 hours",
     "next": [{"id": "garden-notes", "title": "Harvest notes", "state": "next", "words": "next", "elapsed": "",
               "colour": "mist", "quiet": false, "step": 1, "queue": "in line", "read": false}],
@@ -867,8 +870,12 @@ test_the_mirror_is_the_pane_and_the_strip_in_plain_words() {
       (.lately | map("\(.when) \(.label): \(.text) \(.pr)") | join(",")), .lately_since,
       (.next | map(.title) | join(",")), .lined, (.coming | map("\(.when) \(.title)") | join(",")),
       "\(.folded[0].words): \(.folded[0].jobs[0].title)", has("queue"), has("feed")] | map(tostring) | join(" | ")')" \
-    "2 things need you. 1 job is running. 1 change went live in the last 12 hours. | Garden reminders | 06:05 Went live: Raised beds https://example.invalid/g/pull/9 | in the last 12 hours | Harvest notes | 2 | Mon 16 Nov Charge for seeds | 1 put off to a date: Charge for seeds | false | false" \
+    "2 things need you. 1 job is running. 1 change went live in the last 12 hours. | Garden reminders | 06:05 Went live: Raised beds https://example.invalid/g/pull/9,today Settled: The fence stays wire.  | in the last 12 hours | Harvest notes | 2 | Mon 16 Nov Charge for seeds | 1 put off to a date: Charge for seeds | false | false" \
     "a project's own page"
+  # A settled call's sentence or two unfolds to its question and whole answer; other outcomes have nothing to unfold.
+  assert_equals "$(m '.projects[0].page.lately | map(.detail | if . then "\(.question) | \(.answer)" else "-" end) | join(" / ")')" \
+    "- / Fence: wood or wire? | Wire, it matches the shed. Ask again in spring." \
+    "a settled call does not hand the page its question and whole answer to unfold"
   # The page draws no column of workers beside a project's page: its work list
   # already names each one, so the mirror hands the page no second list of them.
   assert_equals "$(m '.projects[0].page | has("workers")')" "false" "the mirror hands the page a second list of workers"

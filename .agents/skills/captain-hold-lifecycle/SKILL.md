@@ -39,6 +39,7 @@ Read that fact before presenting the remaining choice, rather than asking whethe
 The script's help owns policy registration, supported events, and retry mechanics.
 
 When recording a captain answer, preserve what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
+Pass `--summary "<one plain sentence of what was decided>"` with it, so the Factory screens show that sentence for the settled call rather than shortening his words.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
 When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
