@@ -546,6 +546,32 @@ That warning rendered in the same shape as the trust dialog, with the selection 
 That gate is not a production blocker, because a normal environment has already accepted it and the treatment arm above ran against the real config and saw neither dialog.
 This change does not address that warning and does not claim to.
 
+### Add-dir directories
+
+Verified 2026-11-25 on Claude Code 2.1.326, in a scratch `CLAUDE_CONFIG_DIR` with the launch worktree and its project already trusted.
+The worktree belonged to one repository and each `--add-dir` directory to another, the shape of every worker outside the Firstmate repository.
+
+```sh
+tmux -L <sock> new-session -d -s s -x 150 -y 45 -c <wt> \
+  "CLAUDE_CONFIG_DIR=<cfg> claude --dangerously-skip-permissions --add-dir <home>/state/operational-inbox --add-dir <home>/state/x.inbox --add-dir <home>/data/x --add-dir <home>/.agents/skills"
+```
+
+With no entry for those directories, the launch stopped, under bypass and under `--permission-mode auto`:
+
+```
+Adding a new directory:
+<home>/state/operational-inbox
+This directory is part of the repository at <home>. ...
+❯ No, exit
+  Yes, add it
+Enter to confirm · Esc to cancel
+```
+
+An entry for the first directory alone moved the dialog to the second.
+An entry for each directory, or one for `<home>`, reached the composer with no dialog.
+`bin/fm-claude-trust.sh <wt> <proj> --add-dir <dir>...` then reached it from a fresh store in both modes, and also with `<home>` a linked worktree.
+The scratch account was signed out, so these arms end at the composer and submit no prompt.
+
 ### Secondmate homes
 
 Verified 2026-09-11 on Claude Code 2.1.269.

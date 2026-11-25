@@ -264,11 +264,17 @@ test_claude_spawn_refuses_when_the_brief_record_cannot_publish() {
   id="brief-doorbell-refused-z3"
   rec=$(make_spawn_case brief-doorbell-refused claude "$id")
   read_case_record "$rec"
-  mkdir -p "$HOME_DIR/state"
-  : > "$HOME_DIR/state/operational-inbox"
+  # Root writes into a read-only directory, which would make the refusal vacuous.
+  if [ "$(id -u)" = 0 ]; then
+    pass "a claude spawn refuses when its brief record cannot publish (skipped as root)"
+    return 0
+  fi
+  mkdir -p "$HOME_DIR/state/operational-inbox"
+  chmod 500 "$HOME_DIR/state/operational-inbox"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1)
   status=$?
+  chmod 700 "$HOME_DIR/state/operational-inbox"
   [ "$status" -ne 0 ] || fail "a claude spawn whose launch-brief record cannot publish succeeded"$'\n'"$out"
   assert_contains "$out" "could not publish the launch brief for $id" \
     "the refused spawn did not name the record publication failure"

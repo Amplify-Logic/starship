@@ -737,6 +737,7 @@
 # any per-task state exists, and before its busy hooks are written, every
 # claude launch pre-registers its launch directory -
 # the task worktree, or the secondmate home for a --secondmate spawn -
+# and every --add-dir directory
 # in the launching user's own Claude trust store through bin/fm-claude-trust.sh,
 # because Claude's interactive workspace-trust dialog gates a folder it has never
 # seen and firstmate cannot answer it. That helper's header owns the structural
@@ -4664,9 +4665,11 @@ rovo_config_override_flag() {
 # directory that does not exist at launch would leave the channel created
 # later outside the grant. The grant never covers the whole state/ (watcher
 # internals live there) or anything wider.
-claude_add_dirs_flag() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
+# One path per line: the trust registration before launch and the launch flag
+# both read this list, so the two cannot name different directories.
+claude_add_dirs() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
   local kind=$1 state_dir=$2 data_dir=$3 code_root=$4 id=$5
-  local state_real data_real root_real out='' d
+  local state_real data_real root_real
   local dirs=()
   state_real=$(cd "$state_dir" && pwd -P) || return 1
   case "$kind" in
@@ -4682,9 +4685,17 @@ claude_add_dirs_flag() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
     dirs=("$state_real/operational-inbox" "$state_real/$id.inbox" "$data_real/$id" "$root_real/.agents/skills")
     ;;
   esac
-  for d in "${dirs[@]}"; do
+  printf '%s\n' "${dirs[@]}"
+}
+
+claude_add_dirs_flag() {  # <kind> <state-dir> <data-dir> <code-root> <task-id>
+  local list d out=''
+  list=$(claude_add_dirs "$@") || return 1
+  while IFS= read -r d; do
     out="$out--add-dir $(shell_quote "$d") "
-  done
+  done <<EOF
+$list
+EOF
   printf '%s' "$out"
 }
 
@@ -7179,6 +7190,9 @@ spawn_assert_agent_worktree
 # answers the dialog itself and, on a path that was not pre-registered, refuses
 # to count a busy turn as ready until it has done so.
 AGY_TRUST_PREREGISTERED=0
+# Listing the add-dirs makes the task's inbox; a refused spawn leaves no empty
+# one behind. rmdir never removes one holding a record.
+spawn_drop_empty_inbox() { rmdir "$STATE/$ID.inbox/handled" "$STATE/$ID.inbox" 2>/dev/null || true; }
 case "$HARNESS" in
 claude*)
   if [ "$KIND" = secondmate ]; then
@@ -7186,9 +7200,26 @@ claude*)
   else
     spawn_trust_args=("$WT" "$PROJ_ABS")
   fi
+  # Claude gates each --add-dir too, so the directories this launch will pass
+  # are registered with it; a raw launch command carries none of them.
+  case "$LAUNCH" in
+  *__CLAUDEADDDIRS__*)
+    spawn_add_dirs=$(claude_add_dirs "$KIND" "$STATE" "$DATA" "$FM_ROOT" "$ID") || {
+      spawn_drop_empty_inbox
+      echo "error: could not resolve the task-channel directories for $ID's claude --add-dir grant; $(spawn_endpoint_hint)" >&2
+      exit 1
+    }
+    while IFS= read -r spawn_add_dir; do
+      spawn_trust_args+=(--add-dir "$spawn_add_dir")
+    done <<EOF
+$spawn_add_dirs
+EOF
+    ;;
+  esac
   # Only the `trusted:` lines are dropped: stderr, including the note that a
   # standing imports decline keeps external CLAUDE.md imports off, passes on.
   if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null; then
+    spawn_drop_empty_inbox
     echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; $(spawn_endpoint_hint)" >&2
     exit 1
   fi
