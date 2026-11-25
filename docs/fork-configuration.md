@@ -331,7 +331,7 @@ Its three parts work as one system:
 
 - The morning intake (`bin/fm-morning-intake.sh`) is a once-a-day gate that makes sure the morning read of the captain's channels happens, retries it, and shows a missed morning instead of skipping it.
 - The continuous channel intake (`bin/fm-channel-intake.sh`) checks the home's enrolled sources, such as Slack, mail, calendar and Asana, through the day, remembers what it has seen and what the captain still owes, and sends one grouped private alert for anything urgent.
-- The daily to-do page (`bin/fm-todo-render.sh`) is rebuilt from those records on every read, with no model call, and every line on it says when it was last checked at its source.
+- The daily to-do page (`bin/fm-todo-render.sh`) is rebuilt from those records on every read, with no model call, as a calm front page with a back room behind one link; the front page says when everything was last checked at its source and flags any line that was not, and the back room shows each line's own last check.
 
 Nothing reads, arms or schedules anything until the home's own private, gitignored config switches it on with an `enabled = true` line in `config/morning-intake` or `config/channel-intake`.
 Each home names its own sources, with their ids, in its private source inventory (`data/channel-intake/sources.tsv` by default); this repository carries no names, ids or accounts.
@@ -343,7 +343,8 @@ To turn it on:
 3. Start a new session, so the `intake-digest-lines` and `daily-todo-freshness` skills are linked in.
    Either file being present switches those two skills on, as an opt-in skill (above).
 
-By default the page folds a home's captain-held backlog decisions into its collapsed "Firstmate tooling approvals" section; a home whose held decisions are genuine calls for its owner, such as business calls, plans or purchases, adds `held_decisions_need_you = true` to `config/channel-intake` to list them in "Needs you now" instead, while approvals about Firstmate's own tooling keep their fold, and `bin/fm-todo-render.sh --help` owns how the page draws that line.
+The front page only counts captain-held backlog decisions, as questions asked in chat.
+By default the back room folds them into its collapsed "Firstmate tooling approvals" section; a home whose held decisions are genuine calls for its owner, such as business calls, plans or purchases, adds `held_decisions_need_you = true` to `config/channel-intake` to list them in the back room's "Needs you now" instead, while approvals about Firstmate's own tooling keep their fold, and `bin/fm-todo-render.sh --help` owns how the page draws that line.
 The intakes print their state into the session-start digest through the built-in `hooks/bootstrap/10-morning-intake` and `hooks/bootstrap/20-channel-intake`, and stay silent on a home that has not opted in.
 A home whose private add-on (above) carries same-named tools, hooks or skills keeps running the add-on's: its hooks and skills replace the built-in ones, and a schedule or live check it armed names its own scripts.
 An add-on can also extend the to-do page without carrying its own copy: a `todo-admit` hook refuses a new ask the home never puts on the page, such as an announcement, a `todo-verbs` hook takes more verbs typed on a row, such as changes to a ticket the row names, moves the row with `bin/fm-todo.sh close` or `hand-over` and marks it with `bin/fm-todo.sh mark`, and a `todo-page` hook adds a section of its own; `bin/fm-channel-intake.sh --help`, `bin/fm-todo.sh --help` and `bin/fm-todo-render.sh --help` own those contracts.
