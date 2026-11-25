@@ -51,6 +51,7 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-decision-surface.sh` | Render, poll, and route the private loopback Lavish surface over captain decisions   |
 | `fm-merge-rules.sh`      | The home's merge rule table: its format, which project row a merge reads, the docs, tests, and dependency classes of a pull request's changed files, and the generic merge-trail line (docs/fork-configuration.md "Merge rule table") |
 | `fm-tap-desk.sh`         | Export the owner's calls as phone tap cards, read each held decision's options and recommendation (`shapes`), route the taps through the captain-hold and PR-merge paths, and apply the seven-day easy-to-undo default |
+| `fm-backport.sh`         | Check a Backport card against its fixed shape and the anonymity rule, stamp it bound to its exact text, record the fresh reader's verdict and the owner's answer, and print it for sending or building only when all three hold (docs/backport.md) |
 | `fm-read.sh`             | Open a task's own page, or render Markdown reports as one private loopback Lavish reading page |
 | `fm-chart-room.sh`       | Serve the private read-only chart room: fleet home, per-project goal maps, rendered fresh on every request (docs/chart-room.md) |
 | `fm-bridge-view.sh`      | Serve the captain's phone-first fleet glance, the `/deck` Action Deck page, the `/machines` page, photo drop, and hold-to-speak on loopback behind Tailscale Serve (docs/bridge-view.md) |

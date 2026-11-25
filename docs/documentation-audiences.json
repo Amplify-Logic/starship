@@ -150,6 +150,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/opt-in-skills/backport/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/afk/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -531,6 +535,10 @@
     },
     {
       "path": "docs/meetings.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/backport.md",
       "audience": "operator-current"
     },
     {
