@@ -102,6 +102,7 @@ The bubble stays quiet while you are already looking at Starship, where it would
 
 A reply that arrives while you are looking at Starship is never shown, not even after you look away, and a reply already up goes when you turn to Starship.
 A reply you opened in full and an offer waiting for your tap are not lost: they wait behind the quiet bubble and show again as soon as you look away.
+A newer reply replaces a reply you opened in full, even one that arrives while you are looking at Starship, so the bubble never brings back an older reply.
 The voice is unchanged either way.
 
 The bubble has a switch of its own: **Turn reply bubble off** in the right-click menu, or the bell mark on the bubble itself, turns it off in one click.

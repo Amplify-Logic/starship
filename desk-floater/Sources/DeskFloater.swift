@@ -2158,7 +2158,9 @@ final class FloaterModel: ObservableObject {
         captionSeen = newest.id
         guard bubbleAllowed else {
             // Not shown now and never later: the captain read it on Starship,
-            // or switched the bubble off.
+            // or switched the bubble off. An older reply still held, one they
+            // opened in full, goes too, so it never comes back as the latest.
+            dropCaption()
             return
         }
         caption = newest

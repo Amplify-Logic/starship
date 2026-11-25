@@ -312,6 +312,40 @@ extension VoiceVolumeTests {
         XCTAssertNil(model.caption, "a reply the captain turned away from does not come back")
     }
 
+    /// The reported stale card: the captain opened a reply in full, turned to
+    /// Starship, and newer replies came while they read there. Looking away
+    /// brought back the old reply, as if nothing newer had been said. A newer
+    /// reply replaces the one held back, so the old one never shows late.
+    @MainActor
+    func testAnOpenedReplyHeldOnStarshipGoesOnceANewerReplyLands() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        try await follow(model, home)
+        try reply(home, 1)
+        try await waitUntil { model.caption?.id == 1 }
+        model.toggleCaptionExpanded()
+        try pageInFront(home)
+        model.checkScreen()
+        try await waitUntil { model.lookingAtStarship }
+        XCTAssertEqual(model.caption?.id, 1, "a reply opened in full waits while the captain is on Starship")
+        XCTAssertFalse(model.bubbleShown)
+
+        try reply(home, 2)
+        try await waitUntil { self.called(home, "speak --caption 2\n") }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try FileManager.default.removeItem(at: home.marker)
+        model.checkScreen()
+        try await waitUntil { !model.lookingAtStarship }
+        XCTAssertNotEqual(model.caption?.id, 1, "the older reply never comes back after a newer one")
+        XCTAssertNil(model.caption, "the newer reply was read on Starship, so it does not show late either")
+        XCTAssertFalse(model.bubbleShown)
+
+        try reply(home, 3)
+        try await waitUntil { model.caption?.id == 3 }
+        XCTAssertTrue(model.bubbleShown, "the next reply off Starship shows as before")
+    }
+
     /// A Do it offer is never lost: it waits behind a quiet bubble and shows
     /// once the captain looks away from Starship.
     @MainActor
