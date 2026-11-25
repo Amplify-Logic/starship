@@ -572,13 +572,15 @@ def fold(store, items, observations, now, backlog_seen, ledger_seen):
 def quiet(store, items, today, now):
     """Close each open line nobody is waiting on that had no new message for QUIET_DAYS.
 
-    Never a line on the captain's Today list, one he marked, a partner- or
-    customer-facing line (someone outside is waiting on it), a held decision
-    or one whose end time is still ahead. Its source's next change reopens it like any other closed line.
+    Only info and update lines go quiet: a decision, approval or reply has
+    someone waiting on the captain. Never a line on his Today list, one he
+    marked, a partner- or customer-facing line (someone outside is waiting on
+    it), a held decision or one whose end time is still ahead. Its source's
+    next change reopens it like any other closed line.
     """
     for rec in items.values():
         last = number(rec.get('active_at')) or number(rec.get('asked_at')) or number(rec.get('first_seen'))
-        if (rec['state'] != 'open' or rec['id'] in today or not last or now - last < QUIET_DAYS * 86400
+        if (rec['state'] != 'open' or rec.get('kind') not in UNOWED_KINDS or rec['id'] in today or not last or now - last < QUIET_DAYS * 86400
                 or rec.get('owner') or rec.get('pending') or (rec.get('snoozed_until') or '') > local_day(now)
                 or rec.get('partner_first') or rec.get('partner') or held(rec['aliases']) or number(rec.get('ends_at')) > now):
             continue
@@ -674,7 +676,7 @@ def own_item(store, items, text, now):
     text = ' '.join(text.split())
     if not text:
         raise Refusal('add needs the words of the line to put on the Today list')
-    same = [r for r in items.values() if r['state'] != 'closed' and r.get('title') == text
+    same = [r for r in items.values() if r['state'] != 'closed' and r.get('title') == strip_relative(text)
             and any(a.startswith('you:') for a in r['aliases'])]
     if same:
         return same[0]
@@ -723,6 +725,8 @@ def today(store, items, args, now):
         return 0
     if sub == 'add':
         rec = items[rest] if rest in items else own_item(store, items, rest, now)
+        if rec['state'] == 'closed':
+            raise Refusal(f'{rec["id"]} is closed; reopen it before putting it on the Today list')
         # Adding a line already on the list again keeps its place.
         moved = (args.position > 0 or rec['id'] not in store.today()) and place(store, rec['id'], args.position, now)
     elif sub in ('move', 'remove'):
@@ -1056,7 +1060,7 @@ def main():
                 # Coming back from waiting ends the hand-over: the ask is the captain's again.
                 back = {'owner': '', 'handover': ''} if rec['state'] == 'waiting' else {}
                 transition(store, rec, now, 'open', args.actor or 'firstmate', 'reopened',
-                           note=args.reason or 'reopened by firstmate', **back)
+                           note=args.reason or 'reopened by firstmate', active_at=now, **back)
             elif args.command == 'mark':
                 mark(store, rec, args, now)
             elif args.command == 'ack':

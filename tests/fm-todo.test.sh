@@ -80,9 +80,10 @@
 #   - The Today list keeps the captain's order through add, first, move and
 #     done, never lists his own lines for a source re-check, and carries its
 #     unfinished lines over to the next day in the same order.
-#   - A line nobody waits on closes as quiet after 14 days with no new message,
-#     never a customer-facing or Today line, is not counted as closed on the
-#     front page, and comes back when its source changes.
+#   - An info or update line closes as quiet after 14 days with no new message,
+#     never a colleague ask, a customer-facing or Today line, is not counted as
+#     closed on the front page, comes back when its source changes, and a hand
+#     reopen starts its 14 days again.
 #   - The front page shows at most three "Needs you now" lines picked by the
 #     rules (a customer machine down, then due today, then the longest partner
 #     wait past one working day), the Today list, partners then colleagues
@@ -1547,7 +1548,7 @@ front_section() {  # <page file> <heading>
 }
 
 test_the_today_list_keeps_the_captains_order() {
-  local h out id front
+  local h out id front code
   h="$TMP_ROOT/today-list"
   new_home "$h"
   todo_at "$h" "$T_0900" today add 'Send the drafts' >/dev/null
@@ -1564,8 +1565,20 @@ test_the_today_list_keeps_the_captains_order() {
   todo_at "$h" "$T_0900" command 'done supplier' >/dev/null
   assert_equals '' "$(todo_at "$h" "$T_0900" recheck | grep 'recheck:')" 'a line of the captain own was listed for a source re-check'
 
+  # Repeating an add that says "today" finds the same line instead of making a second one.
+  todo_at "$h" "$T_0900" command 'add Book the van today' >/dev/null
+  todo_at "$h" "$((T_0900 + 60))" command 'add Book the van today' >/dev/null
+  assert_equals 1 "$(todo_at "$h" "$T_0900" today list | cut -f4 | grep -c '^Book the van$')"     'a repeated add made a second line'
+  id=$(field_of "$h" 'Book the van' 1)
+  todo_at "$h" "$T_0900" today remove "$id" >/dev/null
+  # A closed line is refused, the same way the page verbs refuse it.
+  out=$(todo_at "$h" "$T_0900" today add "$(field_of "$h" 'Call the supplier' 1)" 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" 'today add put a closed line on the list'
+  assert_contains "$out" 'is closed' 'the refusal does not say why'
+
   render_at "$h" "$T_1000"
   front="$h/.lavish/today-2026-09-10.html"
+  assert_not_contains "$(cat "$front")" 'not re-checked' 'a line of the captain own taken off the list was counted as not re-checked'
   assert_equals 'Send the drafts|Review the guide|' "$(front_section "$front" Today | tr '\n' '|')" \
     'the front page does not show the Today list in his order, without the done line'
 
@@ -1582,34 +1595,45 @@ test_quiet_lines_leave_after_14_days_and_come_back() {
   local h id later
   h="$TMP_ROOT/quiet"
   new_home "$h"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-routine --digest a \
+    --title 'weekly stock note' >/dev/null
   intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-colleague --digest a --class obligation \
     --title 'colleague question' >/dev/null
-  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-partner --digest a --class obligation --partner \
-    --title 'customer question' >/dev/null
-  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-listed --digest a --class obligation \
-    --title 'question on my list' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-partner --digest a --partner \
+    --title 'customer note' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref q-listed --digest a \
+    --title 'note on my list' >/dev/null
   render_at "$h" "$T_1000"
-  todo_at "$h" "$T_1000" today add "$(field_of "$h" 'question on my list' 1)" >/dev/null
+  todo_at "$h" "$T_1000" today add "$(field_of "$h" 'note on my list' 1)" >/dev/null
 
   later=$((T_1000 + 13 * 86400))
   render_at "$h" "$later"
-  assert_equals open "$(field_of "$h" 'colleague question' 2)" 'a line went quiet before 14 days'
+  assert_equals open "$(field_of "$h" 'weekly stock note' 2)" 'a line went quiet before 14 days'
 
   later=$((T_1000 + 15 * 86400))
   render_at "$h" "$later"
-  id=$(field_of "$h" 'colleague question' 1)
-  assert_equals closed "$(field_of "$h" 'colleague question' 2)" 'a line nobody waits on stayed after 14 quiet days'
+  id=$(field_of "$h" 'weekly stock note' 1)
+  assert_equals closed "$(field_of "$h" 'weekly stock note' 2)" 'a line nobody waits on stayed after 14 quiet days'
   assert_equals quiet "$(jq -r '.closure.actor' "$h/data/todo/items/$id.json")" 'the quiet close is not labelled as such'
-  assert_equals open "$(field_of "$h" 'customer question' 2)" 'a customer-facing line went quiet'
-  assert_equals open "$(field_of "$h" 'question on my list' 2)" 'a line on the Today list went quiet'
+  assert_equals open "$(field_of "$h" 'colleague question' 2)" 'a colleague ask went quiet while the colleague waits'
+  assert_equals open "$(field_of "$h" 'customer note' 2)" 'a customer-facing line went quiet'
+  assert_equals open "$(field_of "$h" 'note on my list' 2)" 'a line on the Today list went quiet'
   assert_contains "$(cat "$h/.lavish/today-2026-09-25.html")" '0 closed today' 'a quiet line counted as closed on the front page'
 
+  # Reopened by hand, it stays: the 14 days start again.
+  todo_at "$h" "$((later + 300))" reopen --item "$id" --reason 'the captain wants it back' >/dev/null
+  render_at "$h" "$((later + 600))"
+  assert_equals open "$(field_of "$h" 'weekly stock note' 2)" 'a hand-reopened line went quiet again on the next sync'
+  render_at "$h" "$((later + 15 * 86400))"
+  assert_equals closed "$(field_of "$h" 'weekly stock note' 2)" 'a reopened line never went quiet again'
+
   # The other side writes again: the line comes back.
-  intake_at "$h" "$((later + 600))" observe --source C_BRIEF --ref q-colleague --digest b --class obligation \
-    --title 'colleague question' >/dev/null
+  later=$((later + 15 * 86400))
+  intake_at "$h" "$((later + 600))" observe --source C_BRIEF --ref q-routine --digest b \
+    --title 'weekly stock note' >/dev/null
   render_at "$h" "$((later + 1200))"
-  assert_equals open "$(field_of "$h" 'colleague question' 2)" 'a quiet line did not come back when its source changed'
-  pass 'a line nobody waits on leaves after 14 quiet days, never a customer or Today line, and comes back on a new message'
+  assert_equals open "$(field_of "$h" 'weekly stock note' 2)" 'a quiet line did not come back when its source changed'
+  pass 'an info line leaves after 14 quiet days, never a colleague ask, customer or Today line, and comes back'
 }
 
 test_the_front_page_is_calm() {

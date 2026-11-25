@@ -677,7 +677,7 @@ def front_page():
     by_id = {r['id']: r for r in items}
     order = [by_id[i] for i in today_order() if i in by_id and by_id[i].get('state') != 'closed']
     listed = {r['id'] for r in order}
-    pool = [r for r in live if r.get('kind') in ASKS and r['id'] not in listed]
+    pool = [r for r in live if r.get('kind') in ASKS and r['id'] not in listed and not own(r)]
     questions = [r for r in pool if held(r) or tooling(r)]
     pool = [r for r in pool if r not in questions]
     now = sorted((r for r in pool if checked(r, DAY_START) and needs_now(r)), key=lambda r: (needs_now(r), r['id']))

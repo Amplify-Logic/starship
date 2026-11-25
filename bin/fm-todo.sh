@@ -125,13 +125,15 @@
 # it was marked. An unreadable ledger or backlog is not an absence and closes
 # nothing.
 #
-# QUIET LINES LEAVE. A sync closes an open line with no new message from the
-# other side for 14 days (its `active_at`, else its ask time), as superseded
-# by actor `quiet`, unless nobody can call it unattended: a line on the Today
+# QUIET LINES LEAVE. A sync closes an open info or update line with no new
+# message from the other side for 14 days (its `active_at`, else its ask
+# time), as superseded by actor `quiet`. A decision, approval or reply never
+# goes quiet: someone is waiting on the captain. Nor does a line on the Today
 # list, one the captain marked (mine, a park not yet lapsed, a pending
 # you/dig), a partner- or customer-facing line (someone outside is waiting on
-# it), a held decision, or one whose end time is still ahead. Like any closed line, it
-# comes back when its source changes again.
+# it), a held decision, or one whose end time is still ahead. A reopen starts
+# the 14 days again. Like any closed line, it comes back when its source
+# changes again.
 #
 # THE TODAY LIST. data/todo/today.json holds the captain's own list, item ids
 # in his order. Only he puts things there, directly or through firstmate on
