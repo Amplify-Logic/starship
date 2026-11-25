@@ -34,6 +34,7 @@ Text in the pack meets the usual 4.5 to 1 contrast in both light and dark.
 - The web page's colours start on Paper ([web.md](web.md#settings)).
 - Report pages opened with `bin/fm-read.sh` use the pack, with the light and dark switch at the top.
 - The chart room's decision board (`bin/fm-chart-room.sh`) is built on `paper.css` and carries the same switch.
+  The browser remembers the choice made with that switch, so it holds across report pages and every chart room view.
 - Scout instructions ask for the report and its page in this style, and ship instructions ask for PR descriptions written this way (`bin/fm-brief.sh`).
 
 ## Choosing another look
