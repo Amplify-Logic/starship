@@ -256,7 +256,7 @@ Every terminal escape and control character is taken out on the server, and the 
 
 ## How sending works
 
-Every message goes through `bin/fm-desk-voice.sh send --source web`, the desk floater's own path.
+Every message to the first mate goes through `bin/fm-desk-voice.sh send --source web`, the desk floater's own path.
 It types the message into the primary's own chat when that chat is safely empty, or past a Claude draft, and otherwise saves it to the durable desk-voice mailbox with a wake.
 Under the box, the page says which happened: typed into the chat, typed but not confirmed, or saved to the mailbox.
 Pasted images are saved where the floater saves its screenshots, `state/desk-voice/shots/`, owner-only, and passed with `--image`.
