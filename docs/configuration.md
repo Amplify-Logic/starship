@@ -1227,6 +1227,9 @@ Before changing it, inspect the current file and curate the matching bullet in p
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
 `secondmate-provisioning` owns its propagation contract, including the required header, read-only secondmate copies, quarantine diagnostics, and the rollout rule that existing homes trim `data/captain.md` by hand after first propagation rather than deleting private content automatically.
 
+Pages, reports and decision boards use Starship's paper house style by default ([house-style.md](house-style.md)).
+A home that wants another look for the pages its agents write says so in `data/captain.md`, or in `data/captain-shared.md` for every secondmate home; the writing rules in that doc still apply.
+
 ## Operational learnings (data/learnings.md)
 
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.

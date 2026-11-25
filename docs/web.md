@@ -182,11 +182,11 @@ The Settings button opens one small panel:
 - **Text size**: five steps, Smaller to Largest, starting on Normal in the middle; the whole layout scales with it, except that below Normal the chat keeps Normal's width, so more words fit on a line.
 - **Style**: Calm, the default, in soft pastel tints with each section of a panel as its own card, or Lively, the same grouping with stronger colours; in Light both draw the header light too.
 - **Light or dark**: Auto follows the system setting; Light is a warm cream.
-- **Colours**: Default is the page's own colours; Sea, Green, Warm, Slate and Paper are ready-made schemes, picked with one click from their swatches, each with its own light and dark.
+- **Colours**: Paper, Starship's house style ([house-style.md](house-style.md)), is the default; Sea, Green, Warm and Slate are other ready-made schemes, and Plain is the page's own colours, each picked with one click from its swatch and each with its own light and dark.
   Custom opens three colour pickers, Accent, Background and Text, that change the page as you pick; it starts from the colours on screen, and keeps its picks for light and for dark apart.
   Every other colour on the page, its panels, lines and status colours, follows from those three.
   Text and accent are always kept readable: a pick too faint against its background is moved to the nearest readable shade, a mid-grey background that no text reads well on is shown a shade lighter, and the panel says so.
-  **Back to default** returns to the page's own colours.
+  **Back to default** returns to Paper.
 - **Reduce motion**: turns off the page's few animations, as the system setting also does.
 - **Show key hints**: the small key letters on the buttons and the line of keys at the bottom.
 - **Put the panels back**: returns the line between Firstmate and Factories to where it started.
@@ -195,6 +195,7 @@ The Settings button opens one small panel:
 
 Every other setting and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.
+A browser that was on the old Default colours starts on Paper.
 
 ### This week
 

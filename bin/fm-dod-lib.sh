@@ -452,6 +452,17 @@ Before you append the done line, confirm the PR URL the forge printed is under `
 EOF
 }
 
+# The one line that carries Starship's writing rule for a person
+# (docs/house-style.md owns it in full) into a brief: <what> names the text,
+# such as "Write the report". Rendered by the scout Definition of done in
+# bin/fm-brief.sh and by fm_pr_text_block, so a home never pastes it by hand.
+fm_readable_rule() {  # <what>
+  local doc
+  doc="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docs/house-style.md"
+  # shellcheck disable=SC2016 # the backticks are Markdown in the brief, not a command
+  printf '%s for a person, as `%s` sets out: open with a short plain-words summary they can take in within about a minute (what was found or changed, what it means, what they need to decide), keep sentences short with no jargon or internal labels, list any decisions as a short numbered list with a recommendation for each, and put evidence, tables and detail below under a clear heading.\n' "$1" "$doc"
+}
+
 # Single owner of the public PR text instruction shared by every ship mode that
 # ends in a pull request: the worker checks draft PR text and the no-mistakes
 # intent with bin/fm-leak-guard.sh --text before publishing it, and checks what
@@ -467,6 +478,7 @@ fm_pr_text_block() {
   cat <<EOF
 
 ## Public PR text
+$(fm_readable_rule "Whenever you write PR text yourself, write it")
 Personal and work details never go into a public repository's PR titles, descriptions or comments; this home keeps the words it means in a private list.
 Before you open or edit a PR, comment on one, or pass \`--intent\` or a gate answer to no-mistakes, write the draft text to a file and run \`$check --text <file>\` (or pipe the text to \`$check --text\`).
 It names the line and column of every listed word and key or token shape the text contains, never the word itself; on a public repository, rewrite each of those places and check it again, while a private repository's PR may keep listed words.

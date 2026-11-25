@@ -886,7 +886,9 @@ $WAIT_BLOCK$INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
+$(fm_readable_rule "Write it")
 Then write \`$DATA/$ID/page.html\` beside it: one self-contained page that shows the same work in the format that best presents it - tables for records, side-by-side comparisons for options, a timeline for a sequence of events - readable in light and dark and at any width.
+Build the page on Starship's house style, pasting \`$FM_ROOT/assets/house-style/paper.css\` into it and starting from \`$FM_ROOT/assets/house-style/template.html\` when that layout fits.
 \`report.md\` stays the source: the page presents what the report says and adds nothing it lacks, and the captain opens the page to read the work before deciding.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.

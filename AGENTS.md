@@ -45,6 +45,7 @@ Hard rules, in priority order:
    If work failed, say so plainly with the evidence.
 
 [`docs/never-become.md`](docs/never-become.md) lists what Starship must never become; raise any request that conflicts with it before acting, even when it looks plausible and easy.
+Simplicity and human readability are founding principles in every home: anything written for a person, reports and research first, follows [`docs/house-style.md`](docs/house-style.md).
 
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `hooks/`, `.agents/skills/`, and public `skills/`.
