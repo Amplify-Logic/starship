@@ -142,6 +142,43 @@ assert_contains "$page" "$(cat "$ROOT/assets/house-style/paper.css")" "a report 
 assert_contains "$page" 'class="theme-toggle"' "a report page has no light and dark paper switch"
 pass "a report page wears the paper house style with its light and dark switch"
 
+# The switch is the page's own script, so run it the way a browser would: a
+# reader on a dark machine picks light paper, and the next page they open keeps
+# light paper instead of falling back to the computer's setting.
+switch_page="$TMP_ROOT/switch-page.html"
+printf '%s' "$page" > "$switch_page"
+node - "$switch_page" <<'JS' || fail "the light and dark switch does not keep the reader's choice across pages"
+const fs = require("node:fs");
+const html = fs.readFileSync(process.argv[2], "utf8");
+const script = html.match(/id="themeToggle"[^>]*>[^<]*<\/button><script>([\s\S]*?)<\/script>/)[1];
+const store = new Map();
+function load(storage) {
+  const attrs = {};
+  const toggle = { textContent: "", listeners: [], addEventListener(_, fn) { this.listeners.push(fn); } };
+  const document = {
+    documentElement: { getAttribute: (k) => attrs[k] ?? null, setAttribute: (k, v) => { attrs[k] = v; } },
+    getElementById: () => toggle,
+  };
+  const window = { matchMedia: () => ({ matches: true }), localStorage: storage };
+  new Function("document", "window", script)(document, window);
+  return { attrs, toggle };
+}
+const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+const first = load(storage);
+if (first.toggle.textContent !== "Switch to light paper") throw new Error("a dark machine should offer light paper first");
+first.toggle.listeners.forEach((fn) => fn());
+if (first.attrs["data-theme"] !== "light") throw new Error("the switch did not turn the page to light paper");
+const next = load(storage);
+if (next.attrs["data-theme"] !== "light") throw new Error("the next page forgot the light paper choice");
+if (next.toggle.textContent !== "Switch to dark paper") throw new Error("the next page offers the wrong switch");
+const blocked = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
+const plain = load(blocked);
+if (plain.attrs["data-theme"]) throw new Error("blocked storage should fall back to the computer setting");
+plain.toggle.listeners.forEach((fn) => fn());
+if (plain.attrs["data-theme"] !== "light") throw new Error("the switch stopped working without storage");
+JS
+pass "the light and dark switch keeps the reader's choice across pages"
+
 edge_out=$(cd "$TMP_ROOT" && FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_LAVISH_BIN="$FAKEBIN/lavish-axi" FM_READ_TEST_LOG="$LOG" \
   "$READ" --no-open edge.md)

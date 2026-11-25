@@ -284,6 +284,11 @@ const themeToggle = `<button class="theme-toggle" type="button" id="themeToggle"
 (function () {
   var root = document.documentElement;
   var toggle = document.getElementById("themeToggle");
+  var key = "starship-paper-theme";
+  try {
+    var saved = window.localStorage.getItem(key);
+    if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  } catch (err) {}
   function dark() {
     var set = root.getAttribute("data-theme");
     if (set) return set === "dark";
@@ -292,7 +297,9 @@ const themeToggle = `<button class="theme-toggle" type="button" id="themeToggle"
   function label() { toggle.textContent = dark() ? "Switch to light paper" : "Switch to dark paper"; }
   label();
   toggle.addEventListener("click", function () {
-    root.setAttribute("data-theme", dark() ? "light" : "dark");
+    var next = dark() ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { window.localStorage.setItem(key, next); } catch (err) {}
     label();
   });
 })();
