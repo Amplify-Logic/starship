@@ -1150,8 +1150,9 @@ def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_IT
 
 
 class TranscriptCache:
-    def __init__(self, home: Path, link_files: bool = False) -> None:
+    def __init__(self, home: Path, link_files: bool = False, name: str = "firstmate") -> None:
         self.home = home
+        self.name = name
         # Only this server serves /api/file/, so only its reading links files;
         # the conversation command's reader shows the paths as plain words.
         self.link = file_linker(home) if link_files else None
@@ -1193,9 +1194,9 @@ class TranscriptCache:
         alive = lock_pid_alive(self.home)
         if path is None:
             reason = (
-                "No firstmate session is recorded for this home yet."
+                f"No {self.name} session is recorded for this home yet."
                 if session is None
-                else "Firstmate's conversation file was not found."
+                else f"{self.name[:1].upper()}{self.name[1:]}'s conversation file was not found."
             )
             return {"session": session, "state": "offline", "items": [], "waiting": [], "older": False, "note": reason,
                     "version": f"none:{session}"}
@@ -1301,12 +1302,13 @@ class Crew:
         with self.lock:
             cache = self.caches.get(mate_id)
             if cache is None or str(cache.home) != found["home"]:
-                cache = self.caches[mate_id] = TranscriptCache(Path(found["home"]))
+                cache = self.caches[mate_id] = TranscriptCache(Path(found["home"]), name=found["label"])
             return cache
 
     def picture(self, pid: str) -> Optional[Tuple[bytes, str]]:
+        listed = {m["id"]: m["home"] for m in self.list()}
         with self.lock:
-            caches = list(self.caches.values())
+            caches = [c for i, c in self.caches.items() if listed.get(i) == str(c.home)]
         for cache in caches:
             found = cache.picture(pid)
             if found is not None:
@@ -1320,24 +1322,31 @@ def direct_line_send(home: Path, root: Path, mate: Dict[str, str], text: str, im
     for image in images:
         argv.extend(["--image", str(image)])
     argv.extend(["--", text])
-    proc = direct_line_call(home, root, argv, DIRECT_SEND_TIMEOUT_SECONDS)
+    name = mate["label"]
+    try:
+        proc = direct_line_call(home, root, argv, DIRECT_SEND_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return {"outcome": "failed",
+                "detail": f"{name}'s direct line did not answer in time; check its chat before sending again."}
     try:
         record = json.loads((proc.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
         record = {}
     state = record.get("state") if isinstance(record, dict) else None
-    name = mate["label"]
     if proc.returncode in (0, 3) and state == "typed":
         return {"outcome": "typed", "detail": f"Typed into {name}'s chat."}
     if proc.returncode in (0, 3) and state == "typed-unconfirmed":
         return {"outcome": "typed-unconfirmed", "detail": f"Typed into {name}'s chat; the send was not confirmed."}
     if proc.returncode in (0, 3) and state == "mailbox":
         return {"outcome": "mailbox", "detail": f"{name}'s chat was busy, so it went to its mailbox."}
-    if proc.returncode == 4:
+    if proc.returncode == 4 and state == "sending":
         return {"outcome": "typed-unconfirmed", "detail": f"Still reaching {name}; it should show in the chat shortly."}
     detail = (record.get("detail") if isinstance(record, dict) else None) \
         or ((proc.stderr or "").strip().splitlines()[-1:] or ["the message could not be delivered"])[0]
-    return {"outcome": "failed", "detail": str(detail).removeprefix("fm-direct-line: ")}
+    detail = str(detail).removeprefix("fm-direct-line: ")
+    if proc.returncode == 4:
+        detail = f"Not confirmed by {name}: {detail}"
+    return {"outcome": "failed", "detail": detail}
 
 
 # --- the mirror: the Factory pane's screen and the bridge strip's fields ------

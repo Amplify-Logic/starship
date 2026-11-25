@@ -722,6 +722,66 @@ SH
   pass "a direct-line mate is a second chat on the page, read and sent to only through the direct line"
 }
 
+# A direct-line send that stopped while typing (exit 4, state unknown) is never
+# typed again, so the page says it was not confirmed and keeps the draft; only a
+# send still under way (exit 4, state sending) is reported as reaching the mate.
+# A mate with no session yet is named in its own note, and once the direct line
+# stops listing a mate its pictures are no longer served.
+test_a_direct_line_mate_is_told_truly_and_forgotten_when_gone() {
+  local home root port cookie csrf mate fresh out id png msession=99999999-8888-7777-6666-444444444444
+  home=$(make_home dltruth)
+  mate=$TMP_ROOT/dltruth-quick
+  fresh=$TMP_ROOT/dltruth-fresh
+  mkdir -p "$mate/state" "$fresh/state"
+  printf '%s\n' "$$" > "$mate/state/.lock"
+  printf '%s\n' "$msession" > "$mate/state/.lock-session"
+  mkdir -p "$home/claude/projects/-quick"
+  png=$(printf '\x89PNG\r\n\x1a\nmatepic' | base64 | tr -d '\n')
+  jq -nc --arg png "$png" '{type:"user",uuid:"qu1",origin:{kind:"human"},message:{role:"user",content:[{type:"text",text:"[Image #1] this one"},{type:"image",source:{type:"base64",media_type:"image/png",data:$png}}]}}' \
+    > "$home/claude/projects/-quick/$msession.jsonl"
+  write_basic_transcript "$(transcript "$home")"
+  root=$(make_root "$home" "sent: tmux %1")
+  jq -cn --arg mate "$mate" --arg fresh "$fresh" '{schema:"fm-direct-line-mates.v1", mates:[
+    {id:"quick", home:$mate, remote:false, direct_line:true},
+    {id:"fresh", home:$fresh, remote:false, direct_line:true}]}' > "$home/dl.list"
+  cat > "$root/bin/fm-direct-line.sh" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  list) cat "$FM_HOME/dl.list" ;;
+  send) cat "$FM_HOME/dl.send"; exit 4 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$root/bin/fm-direct-line.sh"
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  echo '{"schema":"fm-direct-line-delivery.v1","state":"unknown","detail":"the send stopped while typing; it is never typed again"}' > "$home/dl.send"
+  assert_equals "$(status_of --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"text":"hi","mate":"quick"}' \
+    "http://127.0.0.1:$port/api/send")" "502" "a send that stopped while typing is not reported as sent"
+  out=$(curl -sS --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"text":"hi","mate":"quick"}' "http://127.0.0.1:$port/api/send")
+  assert_equals "$(jq -r '.outcome' <<<"$out")" "failed" "a stopped send is a failure the owner can retry"
+  assert_equals "$(jq -r '.detail' <<<"$out")" \
+    "Not confirmed by Quick mate: the send stopped while typing; it is never typed again" "the report says why"
+  echo '{"schema":"fm-direct-line-delivery.v1","state":"sending"}' > "$home/dl.send"
+  out=$(curl -sS --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"text":"hi","mate":"quick"}' "http://127.0.0.1:$port/api/send")
+  assert_equals "$(jq -r '.outcome' <<<"$out")" "typed-unconfirmed" "a send still under way is reported as on its way"
+  assert_equals "$(jq -r '.detail' <<<"$out")" "Still reaching Quick mate; it should show in the chat shortly." \
+    "the report names the mate"
+  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/conversation?mate=fresh")
+  assert_equals "$(jq -r '.note' <<<"$out")" "No Fresh mate session is recorded for this home yet." \
+    "a mate with no session is named in its own note"
+  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/conversation?mate=quick")
+  id=$(jq -r '.items[0].pictures[0]' <<<"$out")
+  assert_equals "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$id" | tail -c 7)" "matepic" \
+    "a listed mate's picture is served"
+  jq -cn '{schema:"fm-direct-line-mates.v1", mates:[]}' > "$home/dl.list"
+  sleep 11
+  assert_equals "$(status_of --cookie "$cookie" "http://127.0.0.1:$port/api/picture/$id")" "404" \
+    "a mate the direct line no longer lists has no picture served"
+  pass "a direct-line send is reported truly, a fresh mate is named, and a gone mate's pictures are not served"
+}
+
 # With no direct-line mate (or no direct line at all) the page offers no choice.
 test_no_direct_line_mate_means_no_choice() {
   local home out
@@ -1925,6 +1985,7 @@ test_send_uses_desk_voice_with_saved_images
 test_send_reports_typed
 test_a_long_paste_is_sent_and_the_limit_is_named
 test_a_direct_line_mate_is_a_second_chat_on_the_page
+test_a_direct_line_mate_is_told_truly_and_forgotten_when_gone
 test_no_direct_line_mate_means_no_choice
 test_a_reply_links_files_under_the_home_and_serves_them_read_only
 test_notices_fold_away_and_pasted_pictures_show_as_pictures
