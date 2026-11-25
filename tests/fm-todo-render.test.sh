@@ -36,6 +36,9 @@
 #     render, in name order, after the morning detail and before the intake
 #     coverage; a hook that fails or runs out of time adds nothing and never
 #     fails the render, and a home with no add-on gets no such section.
+#   - Add-on sections live in the back room; one that asks for the front page
+#     shows there too only while it is short (two lines, each short, no other
+#     markup) and only the first two such sections do.
 #   - A morning copy of a section an add-on renders is never shown, and
 #     dropping it leaves no empty panel behind: a wrapper the drop emptied goes
 #     with it, and a morning file that held nothing else produces no
@@ -640,6 +643,68 @@ HOOK
   pass 'add-on sections render on every build in name order, and a failing or slow one never costs the page'
 }
 
+test_a_short_addon_section_can_ask_for_the_front_page() {
+  local h front room
+  h="$TMP_ROOT/addon-front"
+  new_home "$h"
+  observe_at "$h" "$T_0900" observe --source C_BRIEF --ref s1 --digest a --class urgent --title 'live item' >/dev/null
+  observe_at "$h" "$T_0900" complete --source C_BRIEF --checkpoint c-1 >/dev/null
+  mkdir -p "$h/addon/hooks/todo-page"
+  printf 'path = %s\n' "$h/addon" >"$h/config/addon"
+  # Asks for the front page and is two short lines: it shows there.
+  cat >"$h/addon/hooks/todo-page/10-short" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Overnight</h2>\n<p>Learned: front short one.</p>\n<p>Corrected: <a href="https://example.com/x">front short two</a>.</p>\n'
+HOOK
+  # Asks for the front page but holds three lines: back room only.
+  cat >"$h/addon/hooks/todo-page/20-three" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Three lines</h2>\n<ul><li>three a</li><li>three b</li><li>three c</li></ul>\n'
+HOOK
+  # Asks for the front page but one line runs long: back room only.
+  cat >"$h/addon/hooks/todo-page/30-long" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Long line</h2>\n<p>%s</p>\n' "$(printf 'long%.0s ' $(seq 1 60))"
+HOOK
+  # Asks for the front page but carries a table: back room only.
+  cat >"$h/addon/hooks/todo-page/40-table" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Table section</h2>\n<table><tr><td>cell</td></tr></table>\n'
+HOOK
+  # Never asks: back room only, as every add-on section was before.
+  cat >"$h/addon/hooks/todo-page/50-plain" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2>Plain section</h2>\n<p>plain line</p>\n'
+HOOK
+  # Two more short ones that ask: only the first fits under the front cap.
+  cat >"$h/addon/hooks/todo-page/60-second-short" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Second short</h2>\n<p>second short line</p>\n'
+HOOK
+  cat >"$h/addon/hooks/todo-page/70-third-short" <<'HOOK'
+#!/usr/bin/env bash
+printf '<h2 data-todo-front>Third short</h2>\n<p>third short line</p>\n'
+HOOK
+  chmod +x "$h/addon/hooks/todo-page"/*
+  render_at "$h" "$T_1530" render >/dev/null 2>&1 || fail 'the render failed'
+  front=$(cat "$h/.lavish/today-2026-09-10.html")
+  room=$(cat "$(page_of "$h")")
+
+  assert_contains "$front" 'Learned: front short one.' 'a short section that asked did not reach the front page'
+  assert_contains "$front" 'front short two</a>' 'the link in a short front line was lost'
+  assert_contains "$front" 'second short line' 'a second short section that asked did not reach the front page'
+  local name
+  for name in 'Three lines' 'Long line' 'Table section' 'Plain section' 'Third short'; do
+    assert_not_contains "$front" "$name" "the section '$name' reached the front page"
+    assert_contains "$room" "$name" "the section '$name' is missing from the back room"
+  done
+  assert_contains "$room" 'Learned: front short one.' 'the back room lost a section that also shows on the front'
+  [ "$(printf '%s\n' "$front" | grep -n -F 'Overnight' | cut -d: -f1)" -lt \
+    "$(printf '%s\n' "$front" | grep -n -F 'Open the back room' | cut -d: -f1)" ] \
+    || fail 'the front add-on lines are not above the link to the back room'
+  pass 'a short add-on section that asks shows on the front page; long, crowded or unasked ones stay in the back room'
+}
+
 test_team_updates_fold_newest_post_first() {
   local h page
   h="$TMP_ROOT/updates"
@@ -770,6 +835,7 @@ test_dropping_a_morning_copy_leaves_no_empty_panel_behind
 test_a_legacy_morning_copy_leaves_no_empty_reference_fold
 test_calm_layout_ranks_live_problems_first_and_folds_the_rest
 test_addon_sections_render_on_every_build
+test_a_short_addon_section_can_ask_for_the_front_page
 test_team_updates_fold_newest_post_first
 test_closed_folds_cover_nothing_and_stay_findable
 test_card_click_toggles_its_note_box
