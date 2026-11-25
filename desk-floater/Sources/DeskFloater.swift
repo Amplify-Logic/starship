@@ -201,7 +201,7 @@ final class FloaterPanel: NSPanel {
             backing: .buffered,
             defer: false
         ))
-        bubblePanel.contentView = bubbleHosting
+        bubblePanel.contentView = Self.holder(bubbleHosting)
         // A window's own shadow is drawn once for its shape and lags a shape
         // that moves, so the halo panel draws the card's shadow instead.
         bubblePanel.hasShadow = false
@@ -214,7 +214,7 @@ final class FloaterPanel: NSPanel {
             backing: .buffered,
             defer: false
         ))
-        haloPanel.contentView = haloHosting
+        haloPanel.contentView = Self.holder(haloHosting)
         haloPanel.hasShadow = false
         haloPanel.ignoresMouseEvents = true
         super.init(
@@ -223,7 +223,7 @@ final class FloaterPanel: NSPanel {
             backing: .buffered,
             defer: false
         )
-        self.contentView = hosting
+        self.contentView = Self.holder(hosting)
         _ = Self.floating(self)
         // One level above the card, so Talk and Show stay on top of a card
         // that unfolds around them, even after a click on the card.
@@ -249,6 +249,20 @@ final class FloaterPanel: NSPanel {
                 motion.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             }
         }
+    }
+
+    /// A plain view that holds a hosting view and fills the window. A hosting
+    /// view that is itself a window's content view keeps the window's size
+    /// limits in step with its content from inside AppKit's constraint pass;
+    /// a reply or status change then resizes the window there again and again,
+    /// and AppKit stops the app once a window has had more passes in a row
+    /// than it has views. WindowMover sizes these windows itself.
+    private static func holder(_ hosting: NSView) -> NSView {
+        let holder = NSView(frame: hosting.frame)
+        hosting.frame = holder.bounds
+        hosting.autoresizingMask = [.width, .height]
+        holder.addSubview(hosting)
+        return holder
     }
 
     /// Floats a panel above other windows on every Space without ever taking
@@ -375,14 +389,6 @@ enum FloaterLayout {
 /// on the visible screen, and otherwise beside the floater, where the bubble
 /// always opened. Its window is sized once to the card and never animated;
 /// the paper and words move inside it.
-///
-/// The views report their sizes and changes through `later`, never straight
-/// to the windows: SwiftUI runs those actions inside a window's own layout
-/// pass, and a window moved, resized or ordered from there needs another
-/// pass. AppKit allows a window only as many passes in a row as it has
-/// views, two for the floater and the halo, and throws past that, which
-/// quits the app. A reply arriving while the status line changed, or all
-/// three windows catching up at once after a Space switch, went past it.
 @MainActor
 final class WindowMover: ObservableObject {
     weak var window: NSWindow? {
@@ -413,7 +419,6 @@ final class WindowMover: ObservableObject {
     private var statusShown = false
     private var bubbleSize: CGSize = .zero
     private var cardPhase: CardMotion.Phase = .hidden
-    private var waiting: [() -> Void] = []
 
     init() {
         motion.onPhase = { [weak self] phase in self?.phaseChanged(phase) }
@@ -447,18 +452,6 @@ final class WindowMover: ObservableObject {
             floaterSize = window.frame.size
         }
         placeBubble()
-    }
-
-    /// Runs `work` once the pass under way is over, in the order asked.
-    func later(_ work: @escaping () -> Void) {
-        waiting.append(work)
-        guard waiting.count == 1 else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let due = self.waiting
-            self.waiting = []
-            due.forEach { $0() }
-        }
     }
 
     /// The card's size, or zero while there is no card to show.
@@ -2999,7 +2992,7 @@ struct FloaterView: View {
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
                 } action: { size in
-                    mover.later { mover.fit(size, statusShown: model.statusShown) }
+                    mover.fit(size, statusShown: model.statusShown)
                 }
         case .bubble:
             let live = CardContent(caption: model.caption, offer: model.shownOffer,
@@ -3017,13 +3010,13 @@ struct FloaterView: View {
             .onGeometryChange(for: CGSize.self) { proxy in
                 shown ? proxy.size : .zero
             } action: { size in
-                mover.later { mover.fitBubble(size) }
+                mover.fitBubble(size)
             }
             .onChange(of: live, initial: true) { _, now in
-                mover.later { motion.keep(now) }
+                motion.keep(now)
             }
             .onChange(of: model.bubbleShown, initial: true) { _, now in
-                mover.later { motion.update(shown: now) }
+                motion.update(shown: now)
             }
         case .halo:
             halo
