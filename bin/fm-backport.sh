@@ -38,6 +38,7 @@
 #   - it holds a date or a time: a four-digit year, a numeric date, a month
 #     name, a clock time such as 23:30 or 9pm, or a relative time such as
 #     today, tonight, yesterday, this morning, last week or three days ago;
+#     a count written 9/10 looks like a date too, so write 9 of 10;
 #   - it holds a link or address other than one into this repository's own
 #     public home on GitHub (the origin of this checkout): any other URL, a
 #     bare www. address or an email address;
@@ -246,7 +247,7 @@ text_problems() {
       if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
       low = tolower(line)
       if (line ~ /(^|[^0-9])(19|20)[0-9][0-9]([^0-9]|$)/) report("a year; leave dates out")
-      if (line ~ /(^|[^0-9\/])[0-9][0-9]?\/[0-9][0-9]?(\/[0-9][0-9]([0-9][0-9])?)?([^0-9\/]|$)/) report("a date; leave dates out")
+      if (line ~ /(^|[^0-9\/])[0-9][0-9]?\/[0-9][0-9]?(\/[0-9][0-9]([0-9][0-9])?)?([^0-9\/]|$)/) report("looks like a date; write counts as N of M")
       if (line ~ ("(^|[^A-Za-z])" month "([^A-Za-z]|$)") || line ~ /(^|[^A-Za-z])May[ \t,]+[0-9]/ || line ~ /[0-9][ \t]+May([^A-Za-z]|$)/) report("a month name; leave dates out")
       if (line ~ /(^|[^0-9:])[0-2]?[0-9]:[0-5][0-9]([^0-9]|$)/ || low ~ /(^|[^0-9:])[0-9][0-9]?[ \t]*[ap]\.?m([^a-z]|$)/) report("a clock time; leave times out")
       if (low ~ /(^|[^a-z])(yesterday|tomorrow|today|tonight|ago)([^a-z]|$)/ ||

@@ -137,7 +137,7 @@ test_each_rule_refuses() {
   good_card | sed 's/^Before: a few/Before, in 2025, a few/' > "$dir/year.md"
   refused_for "$home" year 'a year; leave dates out'
   good_card | sed 's/^Before: a few/Before 3\/11\/25 a few/' > "$dir/numeric-date.md"
-  refused_for "$home" numeric-date 'a date; leave dates out'
+  refused_for "$home" numeric-date 'looks like a date; write counts as N of M'
   good_card | sed 's/^Before: a few/Before November a few/' > "$dir/month.md"
   refused_for "$home" month 'a month name; leave dates out'
   good_card | sed 's/^Before: a few/Before 23:30 a few/' > "$dir/clock.md"
@@ -145,7 +145,9 @@ test_each_rule_refuses() {
   good_card | sed 's/^Before: a few/Until last week a few/' > "$dir/relative.md"
   refused_for "$home" relative 'a relative date'
   good_card | sed 's/^Before: a few/Before 3\/11 a few/' > "$dir/date-no-year.md"
-  refused_for "$home" date-no-year 'a date; leave dates out'
+  refused_for "$home" date-no-year 'looks like a date; write counts as N of M'
+  good_card | sed 's/^Before: a few/Before, 9\/10 runs passed; a few/' > "$dir/date-no-year.md"
+  refused_for "$home" date-no-year 'looks like a date; write counts as N of M'
   good_card | sed 's/^Before: a few/Before, at 9pm, a few/' > "$dir/pm.md"
   refused_for "$home" pm 'a clock time; leave times out'
   local when

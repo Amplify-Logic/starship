@@ -27,7 +27,7 @@ No worker is needed until the owner says yes to a card.
    - Is it already in the shared Starship, or on its way there: then it is already there.
    - Does it make no sense once every name, account, machine and project is taken out: then it stays here.
    - Would another Starship owner run into the same thing: then pay it forward, and otherwise it stays here.
-   Skip anything `bin/fm-backport.sh list` shows as never or set aside, and anything already carded except a card it shows as not now, due again.
+   Skip anything `bin/fm-backport.sh list` shows as never or set aside, and anything already carded except a card it shows as not now, due again that has no open tap item yet.
 3. **Write.** Write a card for each keeper, at most three a week counting the cards due again in step 5; the rest wait for a later week.
    Put the card in `data/backport/cards/<slug>.md` and everything that stays home in `data/backport/notes/<slug>.md`: where it came from, the raw note, the owner's words about it.
    Never copy a file out of the private add-on: a tool that should be shared is described on its card and rebuilt as a clean, general version.
@@ -36,7 +36,7 @@ No worker is needed until the owner says yes to a card.
    Ask it: could you rebuild this from the card and the repository alone, and can you tell anything about who, where, when or for whom it came from?
    Record its verdict with `bin/fm-backport.sh reader <slug> pass` or `fail`; a fail, any identifying detail, or a gap the repository cannot answer sends the card back to step 3, and any edit needs a new check and a new reader.
 5. **The owner's tap.** For each card the reader passed, file one backlog item, hold it for the owner with `bin/fm-captain-hold.sh hold` and a reason that carries the card's title, then give it the three choices with `bin/fm-tap-desk.sh mark <task> --option Yes --option "Not now" --option Never`, never marked easy to undo.
-   Do the same for each card `list` shows as not now, due again: it goes back on the tap board once, unchanged, and counts toward the three a week.
+   Do the same for each card `list` shows as not now, due again that has no open tap item yet: it goes back on the tap board once, unchanged, and counts toward the three a week; while that item waits for the owner's tap, later passes leave the card alone.
    The owner sees the cards on Monday and taps one choice each; the full card text goes in the item's note so the owner reads the exact text the yes covers.
 
 ## What each answer starts
