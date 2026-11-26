@@ -3088,6 +3088,8 @@ details.quiet.err summary{color:var(--you)}
 /* While the first mate works: a moving mark, what it is doing, and for how long. */
 .live{display:flex;align-items:center;gap:.5rem;margin:.375rem 0 .25rem 2.375rem;font-size:.84rem;color:var(--ink-2)}
 .live[hidden]{display:none}
+.stamp{display:block;margin-top:.2rem;font-size:.7rem;line-height:1;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.msg.user .stamp{text-align:right}
 .msg.waiting{flex-direction:column;align-items:flex-end}
 .msg.waiting .bubble{opacity:.55;border:1px dashed var(--edge)}
 .msg.waiting .wait{margin-top:.25rem;font-size:.78rem;color:var(--ink-2)}
@@ -3842,6 +3844,16 @@ VIEW_JS = r"""
     return state === 'busy' && !long ? 'Waiting, Firstmate will read it next' : 'Still waiting, Firstmate has not read it yet';
   }
 
+  /* When a message landed, in the viewer's local time: HH:MM to show, and the
+     full date and time for its hover. Null when the transcript gave no time. */
+  function msgTime(ts) {
+    var d = new Date(ts || '');
+    if (!ts || isNaN(d.getTime())) return null;
+    var two = function (n) { return (n < 10 ? '0' : '') + n; };
+    return { short: two(d.getHours()) + ':' + two(d.getMinutes()),
+             full: d.toLocaleString([], { dateStyle: 'full', timeStyle: 'short' }) };
+  }
+
   function quietLabel(group) {
     var things = plural(group.steps.length, 'thing', 'things');
     return group.pending ? 'Looking at ' + things + '…' : 'Looked at ' + things;
@@ -4004,7 +4016,7 @@ VIEW_JS = r"""
     return out;
   }
 
-  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
+  var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, msgTime: msgTime, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
               keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
@@ -4144,6 +4156,8 @@ function render(items){
       b.innerHTML=item.html||'';
       if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
       else if(item.images){b.appendChild(el('div','chip',item.images===1?'1 picture':item.images+' pictures'));}
+      const at=V.msgTime(item.ts);
+      if(at){const t=el('time','stamp',at.short);t.dateTime=item.ts;t.title=at.full;b.appendChild(t);}
       msg.appendChild(b);frag.appendChild(msg);
     }else if(item.kind==='compact'){
       const c=el('div','compact');const d=el('details');d.dataset.id=item.id;
