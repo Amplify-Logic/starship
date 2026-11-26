@@ -39,3 +39,4 @@ screen-steps/.build/
 /.agents/skills/daily-todo-freshness
 /.agents/skills/meeting-intake
 /.agents/skills/tap-desk
+/.agents/skills/backport

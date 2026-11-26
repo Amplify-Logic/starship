@@ -28,6 +28,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
 | A home's own private tools beside the shared code | [Private add-on](#private-add-on-configaddon) and [opt-in skills](#opt-in-skills-configadhd-configsecond-opinion) |
 | Keeping private names out of this public repository | [Private leak words](#private-leak-words-configleak-words) |
+| Paying a home's improvements back into the shared Starship as anonymous cards | [Backport](#backport-configbackport) |
 
 ## Workspace theme (`config/workspace-theme`)
 
@@ -258,6 +259,7 @@ Each switch is an optional local, gitignored presence flag; any file at the path
 | `intake-digest-lines` and `daily-todo-freshness` | `config/morning-intake` or `config/channel-intake` ([below](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake)) |
 | `meeting-intake` ([meetings.md](meetings.md)) | `config/meetings` ([below](#meeting-intake-configmeetings)) |
 | `tap-desk` | `config/tap-desk` ([below](#phone-tap-desk-configtap-desk)) |
+| `backport` | `config/backport` ([below](#backport-configbackport)) |
 
 A switched-on skill is linked into `.agents/skills/` under its usual name, so it loads exactly as a tracked skill does, and the link is gitignored.
 A harness lists skills when it starts, so a changed switch takes effect from the next launch.
@@ -913,6 +915,15 @@ A file at `config/tap-desk-merges`, whatever it holds, turns phone merging back 
 The page needs a Claude Code primary that can publish artifacts and read their database.
 Its private records live under `data/tap-desk/`: the card file and page `bin/fm-tap-desk.sh export` writes, the artifact link, the downloaded taps, and `ledger.jsonl`, the record of every routed tap and seven-day default; reasons also land in the decision record and as rule candidates in `data/learnings.md`.
 `bin/fm-tap-desk.sh`'s header owns the card format, routing, refusals, and default rules, and the skill owns when firstmate runs them.
+
+## Backport (config/backport)
+
+Optional, private, gitignored, and not inherited by secondmate homes; any file at the path turns it on, whatever it holds.
+Without it Backport is off: `bin/fm-backport.sh` refuses every command and writes nothing, so cloning this repository, seeding a secondmate home or adding a device never enrols a home.
+Its presence also switches on the `backport` [opt-in skill](#opt-in-skills-configadhd-configsecond-opinion), which runs the weekly pass that turns the home's improvements into anonymous cards for the shared Starship.
+The card check needs the new-name check of the [leak guard](#private-leak-words-configleak-words), so it also refuses until the home keeps a private word list or a `config/leak-names-approved` file, which may be empty.
+Cards, private notes and the ledger live under private `data/backport/`.
+[backport.md](backport.md) owns the anonymity rule and the card, `bin/fm-backport.sh`'s header owns the commands and refusals, and the skill owns the weekly pass.
 
 ## Merge rule table (config/merge-rules)
 
