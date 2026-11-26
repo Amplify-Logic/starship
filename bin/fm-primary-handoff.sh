@@ -33,8 +33,11 @@
 #                   first mate's own step, which a waiting ask never refuses
 #                   and whose refusal clears that ask.
 #                   Every step first settles a handover record no controller
-#                   is finishing any more: complete when a first mate holds
-#                   the lock, else aborted. It never launches a first mate.
+#                   is finishing any more (no `fresh go` controller, no
+#                   coordination lock holder and no live `run` daemon, which
+#                   recovers its own records): complete when a first mate
+#                   holds the lock, else aborted. It never launches a first
+#                   mate.
 #            ask    the same refusals, then one captain inbox note asking the
 #                   first mate to load the fresh skill. Prints
 #                   `asked: <words>`.
@@ -642,9 +645,13 @@ fresh_refusal() {  # <step> <from>
 # never refuses every later press. A first mate that took the lock completes
 # it; otherwise it is cleared as failed. It never launches a first mate.
 fresh_settle_stale_handover() (
-  local coord launch_lock record_phase record_token
+  local coord launch_lock record_phase record_token daemon
   fm_handoff_rotation_in_progress || return 0
   ! fresh_pending_pid >/dev/null || return 0
+  daemon="$STATE/.primary-handoff-daemon.lock"
+  if [ -e "$daemon" ] && fm_lock_holder_alive "$daemon" "$(cat "$daemon/pid" 2>/dev/null)"; then
+    return 0
+  fi
   coord=$(fm_handoff_coord_lock)
   fm_lock_try_acquire "$coord" || return 0
   trap 'fm_lock_release "$coord" 2>/dev/null || true' EXIT

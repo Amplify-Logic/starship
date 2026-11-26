@@ -181,6 +181,7 @@ When the first mate's own step is refused, it clears the waiting press, so the r
 A handover record that no controller is finishing any more never refuses a later press.
 Each step settles it first: when a first mate now holds the lock, as after a slow start, the handover is marked complete; otherwise it is cleared as aborted.
 Settling never launches a first mate.
+While the `run` daemon is live, settling leaves the record to the daemon, because its next poll recovers it.
 
 `bin/fm-primary-handoff.sh`'s header owns the exact commands, words, and test seams.
 

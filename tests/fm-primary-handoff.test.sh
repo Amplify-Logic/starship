@@ -1687,7 +1687,7 @@ test_fresh_go_hands_over_from_its_own_session() {
 }
 
 test_fresh_stale_handover_never_blocks_the_next_press() {
-  local out status=0 i
+  local out status=0 i daemon_pid
   : > "$SIGNAL_LOG"
   : > "$LAUNCH_LOG"
   rm -f "$HOME_FIX/config/primary-handoff"
@@ -1697,6 +1697,21 @@ test_fresh_stale_handover_never_blocks_the_next_press() {
   out=$(FM_HANDOFF_INJECT_FAIL=launch run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "the injected launch failure should fail: $out"
   assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the failed launch left no launching record"
+  # A live handoff daemon recovers its own records, so a press leaves them to it.
+  FM_HOME="$HOME_FIX" bash -c '
+    . "$1/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$STATE/.primary-handoff-daemon.lock" || exit 1
+    : > "$2"; while [ -f "$2" ]; do sleep 0.1; done
+    fm_lock_release "$STATE/.primary-handoff-daemon.lock"' _ "$ROOT" "$TMP_ROOT/daemon" &
+  daemon_pid=$!
+  for i in {1..50}; do [ ! -f "$TMP_ROOT/daemon" ] || break; sleep 0.1; done
+  [ -f "$TMP_ROOT/daemon" ] || fail "the stand-in daemon never took its lock"
+  out=$(fresh check --from web 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a press should refuse while the daemon owns the record"
+  assert_contains "$out" 'refused: A handover to a fresh session is already running.' "daemon-owned record words: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "a press settled a record the live daemon recovers"
+  rm -f "$TMP_ROOT/daemon"
+  wait "$daemon_pid"
   out=$(fresh check --from web 2>&1) && status=0 || status=$?
   expect_code 3 "$status" "with no first mate left the press should refuse"
   assert_contains "$out" 'refused: No first mate session is running' "a failed handover still reads as running: $out"
