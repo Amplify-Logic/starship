@@ -32,6 +32,9 @@
 #                   where the press came from; the default, terminal, is the
 #                   first mate's own step, which a waiting ask never refuses
 #                   and whose refusal clears that ask.
+#                   Every step first settles a handover record no controller
+#                   is finishing any more: complete when a first mate holds
+#                   the lock, else aborted. It never launches a first mate.
 #            ask    the same refusals, then one captain inbox note asking the
 #                   first mate to load the fresh skill. Prints
 #                   `asked: <words>`.
@@ -635,6 +638,30 @@ fresh_refusal() {  # <step> <from>
   return 0
 }
 
+# Settle a handover record that no controller is finishing any more, so it
+# never refuses every later press. A first mate that took the lock completes
+# it; otherwise it is cleared as failed. It never launches a first mate.
+fresh_settle_stale_handover() (
+  local coord launch_lock record_phase record_token
+  fm_handoff_rotation_in_progress || return 0
+  ! fresh_pending_pid >/dev/null || return 0
+  coord=$(fm_handoff_coord_lock)
+  fm_lock_try_acquire "$coord" || return 0
+  trap 'fm_lock_release "$coord" 2>/dev/null || true' EXIT
+  fm_handoff_rotation_in_progress || return 0
+  fm_handoff_read_record || return 0
+  record_phase=$(awk -F= '$1 == "phase" { print $2; exit }' "$(fm_handoff_state_path)")
+  record_token=$(awk -F= '$1 == "token" { print $2; exit }' "$(fm_handoff_state_path)")
+  if [ "$record_phase" = launching ] && fm_handoff_incoming_acknowledged; then
+    complete_record >/dev/null
+    return 0
+  fi
+  if launch_lock=$(fm_handoff_launch_lock "$record_token"); then
+    fm_lock_try_acquire "$launch_lock" || return 0
+  fi
+  abort_record "no controller is finishing this handover; cleared so the next press can start" || true
+)
+
 fresh_age_words() {  # <seconds>
   local minutes=$(($1 / 60))
   case "$minutes" in
@@ -679,6 +706,7 @@ cmd_fresh() {
   case "$from" in web|desk|terminal) ;; *) fm_handoff_log "--from must be web, desk or terminal"; return 2 ;; esac
   fm_handoff_load_config || return 1
   mkdir -p "$STATE" || return 1
+  fresh_settle_stale_handover
   refusal=$(fresh_refusal "$step" "$from")
   if [ -n "$refusal" ]; then
     if [ "$from" = terminal ] && fresh_ask_age >/dev/null; then

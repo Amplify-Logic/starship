@@ -178,6 +178,9 @@ Each step refuses, in plain words, while:
 
 The first mate's own `check` and `go` never wait behind a press, so a press from the web page or the desk can finish, and `/fresh` still works while an earlier press waits.
 When the first mate's own step is refused, it clears the waiting press, so the refusal the owner saw is the only result.
+A handover record that no controller is finishing any more never refuses a later press.
+Each step settles it first: when a first mate now holds the lock, as after a slow start, the handover is marked complete; otherwise it is cleared as aborted.
+Settling never launches a first mate.
 
 `bin/fm-primary-handoff.sh`'s header owns the exact commands, words, and test seams.
 

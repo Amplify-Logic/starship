@@ -1547,7 +1547,7 @@ test_fresh_session_needs_no_handoff_config() {
 }
 
 test_fresh_session_refuses_in_plain_words() {
-  local out status mark_pid
+  local out status mark_pid controller_pid
   : > "$SIGNAL_LOG"
   : > "$LAUNCH_LOG"
   rm -f "$HOME_FIX/config/primary-handoff"
@@ -1589,11 +1589,18 @@ test_fresh_session_refuses_in_plain_words() {
   out=$(fresh check 2>&1) || fail "a dead merge's mark still refuses: $out"
   rm -rf "$HOME_FIX/state/.merge-running.999999.lock"
 
+  # A controller `fresh go` started is still finishing this handover.
+  sleep 30 &
+  controller_pid=$!
   printf 'phase=releasing\n' > "$HOME_FIX/state/.primary-handoff"
+  printf 'pid=%s\n' "$controller_pid" > "$HOME_FIX/state/.primary-fresh"
   out=$(fresh check 2>&1) && status=0 || status=$?
   expect_code 3 "$status" "a handover already running should refuse"
   assert_contains "$out" 'refused: A handover to a fresh session is already running.' "handover words"
-  rm -f "$HOME_FIX/state/.primary-handoff"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=releasing' "a running handover's record was settled"
+  kill "$controller_pid" 2>/dev/null || true
+  wait "$controller_pid" 2>/dev/null || true
+  rm -f "$HOME_FIX/state/.primary-handoff" "$HOME_FIX/state/.primary-fresh"
 
   [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "a refusal signalled or launched"
   kill -0 "$FAKE_HOLDER_PID" || fail "a refusal stopped the live first mate"
@@ -1677,6 +1684,46 @@ test_fresh_go_hands_over_from_its_own_session() {
   cleanup_holders
   rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh" "$HOME_FIX/state/.primary-fresh.log"
   pass "go runs the handover in its own process session and clears the waiting ask"
+}
+
+test_fresh_stale_handover_never_blocks_the_next_press() {
+  local out status=0 i
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+
+  # A failed launch leaves no first mate and a launching record behind.
+  start_opus_holder
+  out=$(FM_HANDOFF_INJECT_FAIL=launch run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the injected launch failure should fail: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the failed launch left no launching record"
+  out=$(fresh check --from web 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "with no first mate left the press should refuse"
+  assert_contains "$out" 'refused: No first mate session is running' "a failed handover still reads as running: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=aborted' "the stale record was not cleared as failed"
+  [ ! -s "$LAUNCH_LOG" ] || fail "settling a stale record launched a first mate"
+  cleanup_holders
+
+  # A slow start leaves a launching record although the new first mate runs.
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  start_opus_holder
+  status=0
+  out=$(FM_TEST_STARTUP_DELAY=3 run_execute env FM_HANDOFF_STARTUP_SECS=1 \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the slow start should time out: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the slow start left no launching record"
+  for i in {1..80}; do
+    grep -q '^pid=' "$HOME_FIX/state/.lock-handoff" 2>/dev/null && break
+    sleep 0.1
+  done
+  out=$(fresh check --from desk 2>&1) || fail "a slow start that finished still refuses: $out"
+  assert_contains "$out" 'ready: ' "the next press should be ready once the new first mate runs"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the slow start was not marked finished"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "settling a slow start launched again: $(cat "$LAUNCH_LOG")"
+  cleanup_holders
+  rm -f "$HOME_FIX/state/.primary-fresh"
+  pass "a handover no controller finishes never blocks the next press, and settling it launches nothing"
 }
 
 # --- the Herdr launch route -----------------------------------------------------
@@ -1856,6 +1903,7 @@ test_fresh_session_refuses_in_plain_words
 test_fresh_ask_reaches_the_first_mate_once
 test_fresh_first_mate_never_waits_behind_a_press
 test_fresh_go_hands_over_from_its_own_session
+test_fresh_stale_handover_never_blocks_the_next_press
 test_herdr_route_reuses_the_first_mates_pane
 test_herdr_route_opens_a_tab_when_the_pane_closed
 test_herdr_route_refuses_a_pane_it_cannot_confirm

@@ -1648,9 +1648,6 @@ test_the_voice_in_settings_is_the_homes_through_fm_speak() {
   pass "the voice in Settings is the home's, read and changed only through fm-speak.sh"
 }
 
-# Factories can be taken off Control Centre with one click and brought back
-# with one more, and the choice is the home's: it is kept in state/web/, so a
-# reload, another browser and a restarted server all draw the page the same way.
 # The Fresh session button asks first, then hands the press to
 # bin/fm-primary-handoff.sh fresh, which owns every refusal; the page shows its
 # words, behind the same POST guards as a send.
@@ -1685,6 +1682,9 @@ fresh ask --from web FM_HOME=$home" "$(cat "$home/fresh.asks")" "each step runs 
   pass "the Fresh session button asks first and shows each refusal in plain words"
 }
 
+# Factories can be taken off Control Centre with one click and brought back
+# with one more, and the choice is the home's: it is kept in state/web/, so a
+# reload, another browser and a restarted server all draw the page the same way.
 test_factories_hide_and_come_back_for_the_whole_home() {
   local home root port cookie csrf url bad out
   home=$(make_home facs)
