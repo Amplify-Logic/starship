@@ -11,7 +11,7 @@ import sys
 import time
 
 (STORE, MORNING, DAY, NOW, ZONE, HOME, MORNING_JSON, INTAKE, SOURCES, NAMES, SECTIONS, HELD_NEED_YOU,
- MODE, OTHER_PAGE) = sys.argv[1:]
+ COLLEAGUE_HEADINGS, MODE, OTHER_PAGE) = sys.argv[1:]
 NOW = int(NOW)
 # Every spelling of the captain a closure actor may carry: the internal label
 # and the configured captain_names, singly and as one full name.
@@ -716,7 +716,8 @@ def front_page():
         print('<p class="sub">Nothing on your list yet.</p>')
     print(list_box())
     print(front_list('Partners waiting on you', [r for r in shown if partner(r)]))
-    print(front_list('Colleagues asking you', [r for r in shown if not partner(r)]))
+    print(front_list('Colleagues asking you' if COLLEAGUE_HEADINGS == 'true' else 'Waiting on you',
+                     [r for r in shown if not partner(r)]))
     print(front_list('Later this week', later[:5], 'quiet'))
     print(front_addon_sections())
     notes = []

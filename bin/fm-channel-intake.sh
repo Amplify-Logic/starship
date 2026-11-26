@@ -228,6 +228,9 @@
 #                            decisions in the day page's "Needs you now"
 #                            rather than its tooling fold; read by
 #                            bin/fm-todo-render.sh (default false)
+#   colleague_headings       true to head the day page's non-partner asks
+#                            "Colleagues asking you" rather than "Waiting on
+#                            you"; read by bin/fm-todo-render.sh (default false)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -456,6 +459,12 @@ load_config() {
           case "$value" in
             true|false) ;;
             *) die "held_decisions_need_you must be true or false: $value" ;;
+          esac
+          ;;
+        colleague_headings)
+          case "$value" in
+            true|false) ;;
+            *) die "colleague_headings must be true or false: $value" ;;
           esac
           ;;
         *) die "unknown config key: $key" ;;
