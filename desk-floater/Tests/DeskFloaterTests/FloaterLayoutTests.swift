@@ -100,12 +100,8 @@ final class FloaterLayoutTests: XCTestCase {
             throw XCTSkip("no screen to place windows on")
         }
         let visible = screen.visibleFrame
-        func window() -> NSWindow {
-            NSWindow(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless],
-                     backing: .buffered, defer: false)
-        }
-        let floater = window()
-        let bubbleWindow = window()
+        let floater = ReplyMotionTests.Panel.make()
+        let bubbleWindow = ReplyMotionTests.Panel.make()
         let parkedFrame = parked(visible.minX - 80, visible.minY - 44)
         floater.setFrame(parkedFrame, display: false)
         let mover = WindowMover()

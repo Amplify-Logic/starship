@@ -183,8 +183,10 @@ final class FloaterPanel: NSPanel {
     /// Places the floater's windows; a drag of the floater ends with `end()`.
     let mover: WindowMover
 
+    /// `makePanel` makes the reply card's and the halo's panels; tests pass
+    /// panels that never reach the screen.
     @MainActor
-    init(model: FloaterModel) {
+    init(model: FloaterModel, makePanel: @MainActor (NSRect) -> NSPanel = FloaterPanel.plainPanel) {
         let mover = WindowMover()
         self.mover = mover
         let hosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .card))
@@ -195,26 +197,16 @@ final class FloaterPanel: NSPanel {
         let bubbleHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .bubble))
         bubbleHosting.sizingOptions = []
         bubbleHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
-        bubblePanel = Self.floating(NSPanel(
-            contentRect: bubbleHosting.frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        ))
-        bubblePanel.contentView = bubbleHosting
+        bubblePanel = Self.floating(makePanel(bubbleHosting.frame))
+        bubblePanel.contentView = Self.holder(bubbleHosting)
         // A window's own shadow is drawn once for its shape and lags a shape
         // that moves, so the halo panel draws the card's shadow instead.
         bubblePanel.hasShadow = false
         let haloHosting = NSHostingView(rootView: FloaterView(model: model, mover: mover, part: .halo))
         haloHosting.sizingOptions = []
         haloHosting.frame = NSRect(x: 0, y: 0, width: 260, height: 60)
-        haloPanel = Self.floating(NSPanel(
-            contentRect: haloHosting.frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        ))
-        haloPanel.contentView = haloHosting
+        haloPanel = Self.floating(makePanel(haloHosting.frame))
+        haloPanel.contentView = Self.holder(haloHosting)
         haloPanel.hasShadow = false
         haloPanel.ignoresMouseEvents = true
         super.init(
@@ -223,7 +215,7 @@ final class FloaterPanel: NSPanel {
             backing: .buffered,
             defer: false
         )
-        self.contentView = hosting
+        self.contentView = Self.holder(hosting)
         _ = Self.floating(self)
         // One level above the card, so Talk and Show stay on top of a card
         // that unfolds around them, even after a click on the card.
@@ -249,6 +241,24 @@ final class FloaterPanel: NSPanel {
                 motion.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             }
         }
+    }
+
+    static func plainPanel(_ rect: NSRect) -> NSPanel {
+        NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    }
+
+    /// A plain view that holds a hosting view and fills the window. A hosting
+    /// view that is itself a window's content view keeps the window's size
+    /// limits in step with its content from inside AppKit's constraint pass;
+    /// a reply or status change then resizes the window there again and again,
+    /// and AppKit stops the app once a window has had more passes in a row
+    /// than it has views. WindowMover sizes these windows itself.
+    private static func holder(_ hosting: NSView) -> NSView {
+        let holder = NSView(frame: hosting.frame)
+        hosting.frame = holder.bounds
+        hosting.autoresizingMask = [.width, .height]
+        holder.addSubview(hosting)
+        return holder
     }
 
     /// Floats a panel above other windows on every Space without ever taking
