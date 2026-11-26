@@ -194,6 +194,20 @@ esac
 SH
 chmod +x "$FAKE/tools/fm-web.sh"
 
+# The fake fresh-session command stands in for bin/fm-primary-handoff.sh: it
+# logs each step and answers from fresh.<step> in the home, else ready or asked.
+cat > "$FAKE/tools/fm-primary-handoff.sh" <<'SH'
+#!/usr/bin/env bash
+echo "handoff $* home=${FM_HOME:-}" >> "$FAKE_HERDR_CALLS"
+if [ -f "$FM_HOME/fresh.$2" ]; then cat "$FM_HOME/fresh.$2"; exit 3; fi
+case "$2" in
+  check) echo 'ready: The first mate can save what it learned and start a fresh session.' ;;
+  ask) echo 'asked: The first mate saves what it learned, then starts the fresh session.' ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x "$FAKE/tools/fm-primary-handoff.sh"
+
 # --- fake process list and Terminal -----------------------------------------
 cat > "$FAKE/bin/osascript" <<'PY'
 #!/usr/bin/env python3
@@ -420,6 +434,29 @@ test_a_factory_pane_kept_hidden_stays_away() {
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "start the Factory pane again in its pane" "a Factory pane shown again did not come back"
   pass "desk: a Factory pane kept hidden stays away on a new and a restored desk, and comes back once shown"
+}
+
+# `starship fresh` checks first, needs a yes, and only then asks the first
+# mate; a refusal is said in plain words and starts nothing.
+test_a_fresh_session_from_the_desk_asks_first() {
+  local out status
+  new_case true
+  out=$(desk fresh </dev/null 2>&1) && status=0 || status=$?
+  expect_code 2 "$status" "with no terminal and no yes, fresh should start nothing"
+  assert_contains "$out" "A fresh session needs a yes" "the missing yes is not said"
+  assert_no_grep "handoff fresh ask" "$FAKE_HERDR_CALLS" "fresh asked the first mate without a yes"
+  : > "$FAKE_HERDR_CALLS"
+  out=$(desk fresh --yes 2>&1) || fail "fresh --yes failed: $out"
+  assert_contains "$out" "The first mate saves what it learned" "the ask's words were not printed"
+  assert_equals "handoff fresh check --from desk home=$FM_HOME
+handoff fresh ask --from desk home=$FM_HOME" "$(cat "$FAKE_HERDR_CALLS")" "fresh did not check, then ask, for this home"
+  : > "$FAKE_HERDR_CALLS"
+  printf 'refused: The first mate is in away or quiet mode. Come back first, then start a fresh session.\n' > "$FM_HOME/fresh.check"
+  out=$(desk fresh --yes 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a refusal should exit 3"
+  assert_contains "$out" "The first mate is in away or quiet mode." "the refusal's words were not printed"
+  assert_no_grep "handoff fresh ask" "$FAKE_HERDR_CALLS" "a refused check went on to ask"
+  pass "desk: starship fresh checks first, needs a yes, and says each refusal in plain words"
 }
 
 test_a_session_that_is_not_running_is_started_before_any_view() {
@@ -1063,6 +1100,7 @@ fm_test_run \
   test_every_herdr_call_names_the_default_session \
   test_a_restored_session_gets_its_dead_panes_started_in_place \
   test_a_factory_pane_kept_hidden_stays_away \
+  test_a_fresh_session_from_the_desk_asks_first \
   test_a_session_that_is_not_running_is_started_before_any_view \
   test_views_count_the_clients_already_showing_the_session \
   test_a_busy_first_pane_is_never_typed_into \

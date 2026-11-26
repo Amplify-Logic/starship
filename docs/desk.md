@@ -50,6 +50,11 @@ A pane with no agent that runs a command but shows nothing on screen yet, as a s
 A pane holding typed-ahead input is left alone, and a tab or pane running anything else is left as it is; both are named in a note.
 Tabs it adds go at the end; it does not reorder tabs you moved.
 
+## A fresh session
+
+`starship fresh` asks the first mate to save what it learned and start a new, empty session, the same as the web page's Fresh session button and the bridge strip's `↻ Fresh session` mark ([primary-handoff.md](primary-handoff.md#fresh-session)).
+It checks first, asks `y/N`, and says each refusal in plain words; `starship fresh --yes` skips the question.
+
 ## After a restart
 
 When Herdr's server stops, as at a reboot, Herdr restores the saved layout itself but brings every pane back as a plain shell, except agent panes it resumes through its own agent integration, such as the first mate under Claude Code.

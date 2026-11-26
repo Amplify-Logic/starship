@@ -47,6 +47,8 @@ META="$STATE/$ID.meta"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-merge-running-lib.sh
+. "$SCRIPT_DIR/fm-merge-running-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 # Role partition: landing local-only work is MAIN-owned; the Pi supervision
 # branch reports readiness and never lands (contract: bin/fm-lease-lib.sh;
@@ -77,8 +79,11 @@ merge_control_cleanup() {
   [ -z "$MERGE_PROJECT_LOCK" ] || fm_lock_release "$MERGE_PROJECT_LOCK" || true
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  fm_merge_running_end
 }
 trap merge_control_cleanup EXIT
+# A fresh first-mate session waits while this mark is held (bin/fm-merge-running-lib.sh).
+fm_merge_running_begin "$STATE"
 MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
 fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"
 MERGE_META_LOCK=$(fm_meta_lock_path "$META")

@@ -6,6 +6,11 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# A fake holder inherits this shell's environment; a Herdr or tmux pane named
+# there would point the launch route at the session this suite runs in.
+unset HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_TAB_ID HERDR_WORKSPACE_ID \
+  HERDR_SOCKET_PATH TMUX TMUX_PANE
+
 TMP_ROOT=$(fm_test_tmproot fm-primary-handoff)
 HOME_FIX="$TMP_ROOT/home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
@@ -1410,6 +1415,110 @@ SH
   pass "tmux dispatch through the real primary launcher carries a bound acquisition acknowledgement"
 }
 
+# A first mate that is the only window of its tmux session: stopping it must
+# not close the session before the new one starts there. Runs a real tmux
+# server on a private socket, since the session's lifetime is tmux's own rule.
+test_tmux_route_survives_a_lone_first_mate_window() {
+  local out status=0 sock real_tmux server_tmux windows
+  real_tmux=$(command -v tmux 2>/dev/null) || {
+    printf 'skip: tmux absent; lone-window tmux handover not run\n'
+    return 0
+  }
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  write_quota "$TMP_ROOT/quota.json" 90
+  sock="$TMP_ROOT/lone.sock"
+  ln -sf "$real_tmux" "$FAKEBIN/tmux"
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/pi"
+  # shellcheck disable=SC2016 # the holder expands its own $$ and $HOME_FIX
+  PATH="$FAKEBIN:/usr/bin:/bin" "$real_tmux" -S "$sock" -f /dev/null new-session -d -s lone \
+    'exec bash -c '\''printf "%s\n" "$$" > "$HOME_FIX/state/.lock"; while :; do sleep 1; done'\'' claude-primary-handoff-test'
+  for _ in {1..50}; do [ -s "$HOME_FIX/state/.lock" ] && break; sleep 0.1; done
+  cat "$HOME_FIX/state/.lock" >> "$HOME_FIX/holders"
+  server_tmux="$sock,$("$real_tmux" -S "$sock" display-message -p '#{pid}'),0"
+  out=$(run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX_PANE -u HERDR_PANE_ID TMUX="$server_tmux" \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  windows=$("$real_tmux" -S "$sock" list-windows -t lone -F '#{window_name}:#{pane_dead}' 2>&1)
+  "$real_tmux" -S "$sock" kill-server 2>/dev/null || true
+  cleanup_holders
+  rm -f "$FAKEBIN/tmux" "$sock"
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  expect_code 0 "$status" "a lone first-mate window left no first mate: $out"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch pi' ] || fail "expected one pi launch: $(cat "$LAUNCH_LOG")"
+  case "$windows" in
+    FIRSTMATE*:0) ;;
+    *) fail "the session should hold only the new, live first mate window: $windows" ;;
+  esac
+  pass "the tmux route keeps a lone first mate's session until the new one runs, then closes the old pane"
+}
+
+# A slow start leaves the old pane held open. A later press from the web page
+# or the desk, outside the first mate's tmux, settles it and closes that pane
+# on the server the handover recorded.
+test_settling_a_slow_tmux_start_closes_the_held_pane() {
+  local out status=0 sock real_tmux server_tmux windows
+  real_tmux=$(command -v tmux 2>/dev/null) || {
+    printf 'skip: tmux absent; settled slow-start pane check not run\n'
+    return 0
+  }
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  write_quota "$TMP_ROOT/quota.json" 90
+  sock="$TMP_ROOT/slow.sock"
+  ln -sf "$real_tmux" "$FAKEBIN/tmux"
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  sleep 3
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/pi"
+  # shellcheck disable=SC2016 # the holder expands its own $$ and $HOME_FIX
+  PATH="$FAKEBIN:/usr/bin:/bin" "$real_tmux" -S "$sock" -f /dev/null new-session -d -s slow \
+    'exec bash -c '\''printf "%s\n" "$$" > "$HOME_FIX/state/.lock"; while :; do sleep 1; done'\'' claude-primary-handoff-test'
+  for _ in {1..50}; do [ -s "$HOME_FIX/state/.lock" ] && break; sleep 0.1; done
+  cat "$HOME_FIX/state/.lock" >> "$HOME_FIX/holders"
+  server_tmux="$sock,$("$real_tmux" -S "$sock" display-message -p '#{pid}'),0"
+  out=$(run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX_PANE -u HERDR_PANE_ID TMUX="$server_tmux" \
+    FM_HANDOFF_STARTUP_SECS=1 "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the slow start should time out: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the slow start left no launching record"
+  for _ in {1..80}; do
+    grep -q '^pid=' "$HOME_FIX/state/.lock-handoff" 2>/dev/null && break
+    sleep 0.1
+  done
+  rm -f "$HOME_FIX/config/primary-handoff"
+  out=$(run_execute env -u TMUX -u TMUX_PANE "$ROOT/bin/fm-primary-handoff.sh" fresh check --from desk 2>&1) || true
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the press did not settle the slow start: $out"
+  windows=$("$real_tmux" -S "$sock" list-windows -t slow -F '#{window_name}:#{pane_dead}' 2>&1)
+  "$real_tmux" -S "$sock" kill-server 2>/dev/null || true
+  cleanup_holders
+  rm -f "$FAKEBIN/tmux" "$sock" "$HOME_FIX/state/.primary-fresh"
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  case "$windows" in
+    FIRSTMATE*:0) ;;
+    *) fail "settling the slow start should leave only the new, live first mate window: $windows" ;;
+  esac
+  pass "settling a slow tmux start from outside tmux closes the old held pane"
+}
+
 test_recovery_waits_for_inflight_ack_publication() {
   local out recovery_pid i
   : > "$LAUNCH_LOG"
@@ -1444,9 +1553,438 @@ SH
   pass "recovery waits for an in-flight acquisition receipt without aborting or launching twice"
 }
 
+# --- a fresh session on the owner's word ---------------------------------------
+
+# A synthetic holder whose own launch line reads as a claude-opus primary, the
+# way bin/fm-primary.sh launches one, so the profile comes from its argv.
+start_opus_holder() {
+  # shellcheck disable=SC2016 # the loop belongs to the synthetic holder
+  ( exec -a claude bash -c 'while :; do sleep 5; done' claude-primary-handoff-test \
+      --model claude-opus-5-5 --name FIRSTMATE ) &
+  FAKE_HOLDER_PID=$!
+  printf '%s\n' "$FAKE_HOLDER_PID" >> "$HOME_FIX/holders"
+  printf '%s\n' "$FAKE_HOLDER_PID" > "$HOME_FIX/state/.lock"
+}
+
+fresh() {  # <step> [args...]
+  run_execute "$ROOT/bin/fm-primary-handoff.sh" fresh "$@"
+}
+
+test_fresh_session_needs_no_handoff_config() {
+  local out status=0 record
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  start_opus_holder
+  # A marker left from when handoff config was on is stale; the live launch line wins.
+  write_active pi
+  out=$(fresh check 2>&1) || status=$?
+  expect_code 0 "$status" "a fresh session should be ready without config: $out"
+  assert_contains "$out" 'ready: ' "check should say ready"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  expect_code 0 "$status" "a fresh session should run without config: $out"
+  record=$(cat "$HOME_FIX/state/.primary-handoff")
+  assert_contains "$record" 'phase=complete' "the fresh session did not complete"
+  assert_contains "$record" 'from=claude-opus' "the profile was not read from the live launch line"
+  assert_contains "$record" 'to=claude-opus' "a fresh session must keep the same profile"
+  assert_contains "$record" 'trigger=manual' "a fresh session is a manual handover"
+  assert_contains "$record" 'reason=manual:fresh-session' "the fresh session reason is missing"
+  [ "$(cat "$SIGNAL_LOG")" = "signal $FAKE_HOLDER_PID" ] || fail "the outgoing was not signalled once"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch claude-opus' ] || fail "expected one claude-opus launch: $(cat "$LAUNCH_LOG")"
+  [ "$(live_holder_count)" = 1 ] || fail "the fresh session left no single live owner"
+  # The cooldown a completed handover records never stops the owner's own ask.
+  write_active claude-opus
+  start_fake_holder
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  expect_code 0 "$status" "a second fresh session inside the cooldown should run: $out"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 2 ] || fail "the cooldown stopped a fresh session"
+  cleanup_holders
+  pass "a fresh session runs the same profile with no handoff config, read from the live launch line before a stale marker"
+}
+
+test_fresh_session_refuses_in_plain_words() {
+  local out status mark_pid controller_pid
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+
+  out=$(fresh check 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "no live first mate should refuse"
+  assert_contains "$out" 'refused: No first mate session is running' "no live first mate words"
+
+  start_opus_holder
+  : > "$HOME_FIX/state/.afk"
+  out=$(fresh check 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "away mode should refuse"
+  assert_contains "$out" 'refused: The first mate is in away or quiet mode.' "away words"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "execute --fresh should refuse away mode: $out"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh --force 2>&1) && status=0 || status=$?
+  expect_code 2 "$status" "--fresh must never take --force"
+  rm -f "$HOME_FIX/state/.afk"
+
+  # A merge under way holds its mark for as long as it runs.
+  FM_HOME="$HOME_FIX" bash -c '
+    . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-merge-running-lib.sh"
+    fm_merge_running_begin "$STATE"; : > "$2"; while [ -f "$2" ]; do sleep 0.1; done
+    fm_merge_running_end' _ "$ROOT" "$TMP_ROOT/merging" &
+  mark_pid=$!
+  for _ in {1..50}; do [ ! -f "$TMP_ROOT/merging" ] || break; sleep 0.1; done
+  out=$(fresh check 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a merge under way should refuse"
+  assert_contains "$out" 'refused: A merge is under way.' "merge words"
+  out=$(run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "execute --fresh should refuse a merge under way: $out"
+  rm -f "$TMP_ROOT/merging"
+  wait "$mark_pid"
+  out=$(fresh check 2>&1) || fail "a finished merge still refuses: $out"
+
+  # A merge that died without cleaning up no longer counts.
+  mkdir -p "$HOME_FIX/state/.merge-running.999999.lock"
+  printf '999999\n' > "$HOME_FIX/state/.merge-running.999999.lock/pid"
+  out=$(fresh check 2>&1) || fail "a dead merge's mark still refuses: $out"
+  rm -rf "$HOME_FIX/state/.merge-running.999999.lock"
+
+  # A controller `fresh go` started is still finishing this handover.
+  sleep 30 &
+  controller_pid=$!
+  printf 'phase=releasing\n' > "$HOME_FIX/state/.primary-handoff"
+  printf 'pid=%s\n' "$controller_pid" > "$HOME_FIX/state/.primary-fresh"
+  out=$(fresh check 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a handover already running should refuse"
+  assert_contains "$out" 'refused: A handover to a fresh session is already running.' "handover words"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=releasing' "a running handover's record was settled"
+  kill "$controller_pid" 2>/dev/null || true
+  wait "$controller_pid" 2>/dev/null || true
+  rm -f "$HOME_FIX/state/.primary-handoff" "$HOME_FIX/state/.primary-fresh"
+
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "a refusal signalled or launched"
+  kill -0 "$FAKE_HOLDER_PID" || fail "a refusal stopped the live first mate"
+  cleanup_holders
+  pass "a fresh session refuses away mode, a merge under way and a running handover in plain words"
+}
+
+test_fresh_ask_reaches_the_first_mate_once() {
+  local out status=0 notes
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  start_opus_holder
+  out=$(fresh ask --from web 2>&1) || status=$?
+  expect_code 0 "$status" "the ask should reach the first mate: $out"
+  assert_contains "$out" 'asked: ' "ask should say asked"
+  notes=$(cat "$HOME_FIX"/state/inbox/*.note)
+  assert_contains "$notes" 'Fresh session asked for from the Starship web page.' "the note does not say where the press came from"
+  assert_contains "$notes" 'Load the fresh skill' "the note does not name the fresh skill"
+  out=$(fresh ask --from desk 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a second ask should wait behind the first"
+  assert_contains "$out" 'refused: A fresh session was asked for just now.' "waiting ask words"
+  [ "$(find "$HOME_FIX/state/inbox" -name '*.note' | wc -l | tr -d ' ')" = 1 ] || fail "a second press sent a second note"
+  [ ! -s "$SIGNAL_LOG" ] || fail "an ask stopped the first mate before it saved anything"
+  kill -0 "$FAKE_HOLDER_PID" || fail "an ask stopped the live first mate"
+  out=$(FM_FRESH_ASK_WAIT_SECS=0 fresh check --from desk 2>&1) || fail "an ask past its wait still refuses: $out"
+  cleanup_holders
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  pass "a press asks the first mate once, through one inbox note, and stops nothing"
+}
+
+test_fresh_first_mate_never_waits_behind_a_press() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  start_opus_holder
+  fresh ask --from web >/dev/null 2>&1 || fail "the ask failed"
+  out=$(fresh check 2>&1) || status=$?
+  expect_code 0 "$status" "the first mate's own check waited behind the press it answers: $out"
+  assert_contains "$out" 'ready: ' "the first mate's own check should say ready"
+  out=$(fresh check --from desk 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a press from the desk should still wait behind the web press"
+  assert_contains "$out" 'refused: A fresh session was asked for just now.' "waiting ask words"
+
+  # The first mate's go refused by away mode ends the press there.
+  : > "$HOME_FIX/state/.afk"
+  out=$(fresh go 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "go should refuse away mode"
+  assert_contains "$out" 'refused: The first mate is in away or quiet mode.' "away words"
+  rm -f "$HOME_FIX/state/.afk"
+  out=$(fresh check --from web 2>&1) || fail "a refused go left the press waiting: $out"
+  assert_contains "$out" 'ready: ' "the next press should be ready once go was refused"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "a refusal signalled or launched"
+  cleanup_holders
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  pass "the first mate's own check never waits behind a press, and its refused go clears that press"
+}
+
+test_fresh_go_hands_over_from_its_own_session() {
+  local out status=0 i
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff" "$HOME_FIX/state/.primary-fresh.log"
+  start_opus_holder
+  fresh ask --from desk >/dev/null 2>&1 || fail "the ask failed"
+  out=$(FM_FRESH_GRACE_SECS=0 fresh go 2>&1) || status=$?
+  expect_code 0 "$status" "go should start the handover: $out"
+  assert_contains "$out" 'started: ' "go should say started"
+  for i in {1..100}; do
+    grep -q '^phase=complete$' "$HOME_FIX/state/.primary-handoff" 2>/dev/null && break
+    sleep 0.1
+  done
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff" 2>/dev/null)" 'phase=complete' \
+    "the detached handover did not complete: $(cat "$HOME_FIX/state/.primary-fresh.log" 2>/dev/null)"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch claude-opus' ] || fail "expected one claude-opus launch: $(cat "$LAUNCH_LOG")"
+  for i in {1..50}; do out=$(fresh check 2>&1) && break; sleep 0.1; done
+  assert_contains "$out" 'ready: ' "a finished handover still refuses the next press: $out"
+  cleanup_holders
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh" "$HOME_FIX/state/.primary-fresh.log"
+  pass "go runs the handover in its own process session and clears the waiting ask"
+}
+
+test_fresh_stale_handover_never_blocks_the_next_press() {
+  local out status=0 i daemon_pid
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -f "$HOME_FIX/config/primary-handoff"
+
+  # A failed launch leaves no first mate and a launching record behind.
+  start_opus_holder
+  out=$(FM_HANDOFF_INJECT_FAIL=launch run_execute "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the injected launch failure should fail: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the failed launch left no launching record"
+  # A live handoff daemon recovers its own records, so a press leaves them to it.
+  FM_HOME="$HOME_FIX" bash -c '
+    . "$1/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$STATE/.primary-handoff-daemon.lock" || exit 1
+    : > "$2"; while [ -f "$2" ]; do sleep 0.1; done
+    fm_lock_release "$STATE/.primary-handoff-daemon.lock"' _ "$ROOT" "$TMP_ROOT/daemon" &
+  daemon_pid=$!
+  for i in {1..50}; do [ ! -f "$TMP_ROOT/daemon" ] || break; sleep 0.1; done
+  [ -f "$TMP_ROOT/daemon" ] || fail "the stand-in daemon never took its lock"
+  out=$(fresh check --from web 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a press should refuse while the daemon owns the record"
+  assert_contains "$out" 'refused: A handover to a fresh session is already running.' "daemon-owned record words: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "a press settled a record the live daemon recovers"
+  rm -f "$TMP_ROOT/daemon"
+  wait "$daemon_pid"
+  out=$(fresh check --from web 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "with no first mate left the press should refuse"
+  assert_contains "$out" 'refused: No first mate session is running' "a failed handover still reads as running: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=aborted' "the stale record was not cleared as failed"
+  [ ! -s "$LAUNCH_LOG" ] || fail "settling a stale record launched a first mate"
+  cleanup_holders
+
+  # A slow start leaves a launching record although the new first mate runs.
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  start_opus_holder
+  status=0
+  out=$(FM_TEST_STARTUP_DELAY=3 run_execute env FM_HANDOFF_STARTUP_SECS=1 \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --fresh 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the slow start should time out: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the slow start left no launching record"
+  for i in {1..80}; do
+    grep -q '^pid=' "$HOME_FIX/state/.lock-handoff" 2>/dev/null && break
+    sleep 0.1
+  done
+  out=$(fresh check --from desk 2>&1) || fail "a slow start that finished still refuses: $out"
+  assert_contains "$out" 'ready: ' "the next press should be ready once the new first mate runs"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the slow start was not marked finished"
+  [ "$(wc -l < "$LAUNCH_LOG" | tr -d ' ')" = 1 ] || fail "settling a slow start launched again: $(cat "$LAUNCH_LOG")"
+  cleanup_holders
+  rm -f "$HOME_FIX/state/.primary-fresh"
+  pass "a handover no controller finishes never blocks the next press, and settling it launches nothing"
+}
+
+# --- the Herdr launch route -----------------------------------------------------
+
+HERDR_DIR="$TMP_ROOT/herdr"
+FAKE_HERDR="$HERDR_DIR/herdr"
+HERDR_LOG="$HERDR_DIR/calls"
+mkdir -p "$HERDR_DIR"
+cat > "$FAKE_HERDR" <<'SH'
+#!/bin/bash
+# A stand-in Herdr: one session, one first-mate pane, read from $HERDR_DIR.
+printf '%s\n' "$*" >> "$HERDR_DIR/calls"
+args=("$@")
+last=$(( ${#args[@]} - 1 ))
+[ "${args[$((last - 1))]}" = --session ] || { echo 'no --session' >&2; exit 9; }
+case "$1 $2" in
+  'pane process-info')
+    [ ! -f "$HERDR_DIR/gone" ] || { printf '{"error":{"code":"pane_not_found"}}\n'; exit 1; }
+    shell=$(cat "$HERDR_DIR/shell")
+    group=$shell
+    out=$(cat "$HERDR_DIR/outgoing" 2>/dev/null)
+    if [ -n "$out" ] && kill -0 "$out" 2>/dev/null; then group=$out; fi
+    printf '{"result":{"process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":%s}}}\n' "$4" "$shell" "$group"
+    ;;
+  'pane get')
+    printf '{"result":{"pane":{"pane_id":"%s","workspace_id":"w1"}}}\n' "$3"
+    ;;
+  'tab create')
+    [ ! -f "$HERDR_DIR/no-workspace" ] || { printf '{"error":{"code":"workspace_not_found"}}\n'; exit 1; }
+    printf '{"result":{"root_pane":{"pane_id":"w1:p9","workspace_id":"w1"}}}\n'
+    ;;
+  'workspace create')
+    printf '{"result":{"root_pane":{"pane_id":"w2:p1","workspace_id":"w2"}}}\n'
+    ;;
+  'pane run')
+    bash -c "$4" </dev/null >/dev/null 2>&1 &
+    ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$FAKE_HERDR"
+
+fake_proc_env() {
+  printf 'HERDR_ENV=1\nHERDR_PANE_ID=w1:p1\nHERDR_SESSION=fm-lab-fixture\n'
+}
+export -f fake_proc_env
+export HERDR_DIR
+
+run_herdr_fresh() {  # [VAR=value...]
+  run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX -u TMUX_PANE \
+    FM_HANDOFF_HERDR_BIN="$FAKE_HERDR" FM_HANDOFF_PROC_ENV_CMD=fake_proc_env "$@" \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --fresh
+}
+
+herdr_fixture() {  # <shell-pid>
+  : > "$HERDR_LOG"
+  : > "$LAUNCH_LOG"
+  : > "$SIGNAL_LOG"
+  rm -f "$HERDR_DIR/gone" "$HERDR_DIR/no-workspace"
+  printf '%s\n' "$1" > "$HERDR_DIR/shell"
+  printf '%s\n' "$FAKE_HOLDER_PID" > "$HERDR_DIR/outgoing"
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/pi"
+}
+
+herdr_fixture_reset() {
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  chmod +x "$FAKEBIN/pi"
+}
+
+test_herdr_route_reuses_the_first_mates_pane() {
+  local out status=0 calls
+  rm -f "$HOME_FIX/config/primary-handoff"
+  write_active pi
+  start_fake_holder
+  herdr_fixture "$$"
+  out=$(run_herdr_fresh 2>&1) || status=$?
+  expect_code 0 "$status" "the Herdr route did not finish: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the Herdr route did not acknowledge"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'route=herdr' "the record does not keep the Herdr route"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'herdr_pane=w1:p1' "the record does not keep the pane"
+  calls=$(cat "$HERDR_LOG")
+  assert_contains "$calls" 'pane run w1:p1 ' "the incoming did not start in the first mate's own pane"
+  assert_not_contains "$calls" 'tab create' "a tab was opened although the pane was free"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch pi' ] || fail "expected one pi launch: $(cat "$LAUNCH_LOG")"
+  while IFS= read -r line; do
+    case "$line" in *' --session fm-lab-fixture') ;; *) fail "a Herdr call did not name the recorded session: $line" ;; esac
+  done < "$HERDR_LOG"
+  [ "$(live_holder_count)" = 1 ] || fail "the Herdr route left no single live owner"
+  cleanup_holders
+  herdr_fixture_reset
+  pass "the Herdr route starts the fresh first mate in its own pane, naming the recorded session on every call"
+}
+
+test_herdr_route_opens_a_tab_when_the_pane_closed() {
+  local out status=0 calls
+  rm -f "$HOME_FIX/config/primary-handoff"
+  write_active pi
+  start_fake_holder
+  herdr_fixture "$$"
+  gone_after_kill() {
+    printf 'signal %s\n' "$1" >> "$SIGNAL_LOG"
+    kill "$1" 2>/dev/null || true
+    : > "$HERDR_DIR/gone"
+  }
+  export -f gone_after_kill
+  out=$(run_herdr_fresh FM_HANDOFF_SIGNAL_CMD=gone_after_kill 2>&1) || status=$?
+  calls=$(cat "$HERDR_LOG")
+  assert_contains "$calls" 'tab create --workspace w1 ' "no tab was opened for a closed pane: $out"
+  assert_contains "$calls" 'pane run w1:p9 ' "the incoming did not start in the new tab"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the tab route did not acknowledge: $out"
+  cleanup_holders
+  # When that pane was the workspace's last, the workspace is gone as well.
+  write_active pi
+  start_fake_holder
+  herdr_fixture "$$"
+  : > "$HERDR_DIR/no-workspace"
+  out=$(run_herdr_fresh FM_HANDOFF_SIGNAL_CMD=gone_after_kill 2>&1) || status=$?
+  calls=$(cat "$HERDR_LOG")
+  assert_contains "$calls" 'workspace create --cwd ' "no workspace was opened when the workspace closed: $out"
+  assert_contains "$calls" 'pane run w2:p1 ' "the incoming did not start in the new workspace"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the workspace route did not acknowledge: $out"
+  cleanup_holders
+  herdr_fixture_reset
+  pass "the Herdr route opens a tab, else a workspace, when the first mate's pane closed with it"
+}
+
+test_herdr_route_refuses_a_pane_it_cannot_confirm() {
+  local out status=0 stranger
+  rm -f "$HOME_FIX/config/primary-handoff"
+  write_active pi
+  start_fake_holder
+  sleep 60 &
+  stranger=$!
+  printf '%s\n' "$stranger" >> "$HOME_FIX/holders"
+  herdr_fixture "$stranger"
+  out=$(run_herdr_fresh 2>&1) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "an unconfirmed Herdr pane should refuse: $out"
+  assert_contains "$out" 'Herdr does not confirm' "the refusal does not say why"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "an unconfirmed pane signalled or launched"
+  kill -0 "$FAKE_HOLDER_PID" || fail "an unconfirmed pane stopped the live first mate"
+  cleanup_holders
+  herdr_fixture_reset
+  pass "the Herdr route refuses before signalling when Herdr cannot confirm the first mate's pane"
+}
+
+# Every profile bin/fm-primary.sh launches reads back as itself from the launch
+# line it prints, so the fresh session restarts what is actually running.
+test_profile_reads_back_from_every_launch_line() {
+  local profile line read_back
+  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
+    line=$(PATH="$FAKEBIN:/usr/bin:/bin" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 \
+      "$ROOT/bin/fm-primary.sh" "$profile" 2>/dev/null | tail -n 1)
+    [ -n "$line" ] || fail "$profile printed no launch line"
+    read_back=$(bash -c '
+      . "$1/bin/fm-primary-handoff-lib.sh"
+      eval "set -- $2"
+      fm_handoff_profile_from_argv "$*"' _ "$ROOT" "$line") \
+      || fail "$profile launch line did not read back: $line"
+    assert_equals "$profile" "$read_back" "$profile launch line read back wrong"
+  done
+  read_back=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_profile_from_argv "node /x/pi --name FIRSTMATE"' _ "$ROOT")
+  assert_equals pi "$read_back" "a node-hosted launch line did not read back"
+  pass "every primary profile reads back from its own launch line"
+}
+
+test_fresh_session_needs_no_handoff_config
+test_fresh_session_refuses_in_plain_words
+test_fresh_ask_reaches_the_first_mate_once
+test_fresh_first_mate_never_waits_behind_a_press
+test_fresh_go_hands_over_from_its_own_session
+test_fresh_stale_handover_never_blocks_the_next_press
+test_herdr_route_reuses_the_first_mates_pane
+test_herdr_route_opens_a_tab_when_the_pane_closed
+test_herdr_route_refuses_a_pane_it_cannot_confirm
+test_profile_reads_back_from_every_launch_line
+
 test_recovery_waits_for_inflight_ack_publication
 
 test_tmux_route_carries_acknowledgement
+test_tmux_route_survives_a_lone_first_mate_window
+test_settling_a_slow_tmux_start_closes_the_held_pane
 
 test_pending_startup_reuses_launcher
 test_reused_outgoing_identity_is_not_signalled

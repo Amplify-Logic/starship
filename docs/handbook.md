@@ -119,6 +119,7 @@ Some skills are commands you type:
 | `/afk` | You are stepping away: routine events are handled quietly, and a summary waits for your return |
 | `/quiet` | You are here but want fewer interruptions; only things that need you come through |
 | `/stow` | File what this session learned and tidy the memory files |
+| `/fresh` | Save what this session learned, then start a clean first-mate session that picks up everything under way; the web page and the desk have the same Fresh session control |
 | `/updatefirstmate` | Pull the latest shared Starship and restart cleanly |
 | `/catchup` | Catch this home up with its own upstream, on demand or weekly once you opt in; stops for you to approve the merge |
 

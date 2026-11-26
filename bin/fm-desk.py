@@ -29,6 +29,15 @@ Usage:
                                 page that cannot open is a note, not a
                                 failure. With a layout already there it
                                 changes nothing.
+  fm-desk.py fresh [--yes]      a fresh first-mate session from the desk: asks
+                                bin/fm-primary-handoff.sh fresh check, then
+                                asks you to confirm (y/N) unless --yes says so
+                                already, then `fresh ask --from desk`, which
+                                asks the first mate to save what it learned
+                                and start the fresh session. It prints each
+                                answer's words; a refusal exits 3, and with no
+                                terminal to ask and no --yes it starts nothing
+                                and exits 2
   fm-desk.py install-command    put `starship` and `onboard-starship` on PATH:
                                 each in ~/.local/bin becomes a link to this
                                 script, unless another command by that name is
@@ -92,6 +101,7 @@ Environment:
   HERDR_CONFIG_PATH       Herdr's config file (default ~/.config/herdr/config.toml)
 Test seams:
   FM_DESK_BIN             directory holding fm-bridge-strip.sh, fm-factory-pane.sh,
+                          fm-primary-handoff.sh,
                           fm-factory.py and fm-web.sh (default: this script's
                           directory)
   FM_DESK_PS              process lister printing `pid tty command` lines
@@ -1325,6 +1335,42 @@ def cmd_onboard() -> int:
     return 0
 
 
+def fresh_step(home: str, step: str) -> Tuple[str, str]:
+    """One step of bin/fm-primary-handoff.sh fresh: its `<state>: <words>` first line."""
+    env = dict(os.environ)
+    env["FM_HOME"] = home
+    try:
+        proc = subprocess.run([os.path.join(bin_dir(), "fm-primary-handoff.sh"), "fresh", step, "--from", "desk"],
+                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise Failure("a fresh session could not be asked for: %s" % error)
+    state, _, words = (proc.stdout.splitlines() or [""])[0].partition(": ")
+    if not words:
+        raise Failure("a fresh session could not be asked for: %s" % (proc.stderr.strip() or "no answer"))
+    return state, words
+
+
+def cmd_fresh(yes: bool) -> int:
+    home = home_dir()
+    state, words = fresh_step(home, "check")
+    if state != "ready":
+        say(words)
+        return 3
+    if not yes:
+        if not sys.stdin.isatty():
+            say("A fresh session needs a yes: run `%s fresh` in a terminal, or `%s fresh --yes`." % (ME, ME))
+            return 2
+        sys.stdout.write("Start a fresh first mate session? It saves what this one learned first, "
+                         "and everything under way carries over. [y/N] ")
+        sys.stdout.flush()
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            say("Nothing started.")
+            return 0
+    state, words = fresh_step(home, "ask")
+    say(words)
+    return 0 if state == "asked" else 3
+
+
 def usage(stream: Any = sys.stderr) -> None:
     lines = __doc__.split("\n")
     start = next(i for i, line in enumerate(lines) if line.startswith("Usage:"))
@@ -1344,6 +1390,8 @@ def main(argv: List[str]) -> int:
             return cmd_open()
         if command == "layout" and argv[1:] in ([], ["--save"]):
             return cmd_layout(save=len(argv) == 2)
+        if command == "fresh" and argv[1:] in ([], ["--yes"]):
+            return cmd_fresh(yes=len(argv) == 2)
         if command == "install-command" and len(argv) == 1:
             return cmd_install_command()
         if command == "onboard" and len(argv) == 1:

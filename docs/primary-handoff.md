@@ -1,7 +1,8 @@
 # Primary orchestrator handoff
 
-Quota- and context-aware automated rotation of the Firstmate primary orchestrator.
-Opt-in only: absent or disabled `config/primary-handoff` leaves every existing primary launch path unchanged.
+Quota- and context-aware automated rotation of the Firstmate primary orchestrator, and a [fresh session](#fresh-session) on the owner's word.
+The automatic rotation is opt-in only: absent or disabled `config/primary-handoff` leaves every existing primary launch path unchanged.
+A fresh session needs no config, because the owner's press is the ask.
 
 `bin/fm-primary-handoff.sh` and its header own the exact commands, flags, state fields, and test seams.
 This document owns the atomic-lock protocol, the never-two-holders invariant, the dual trigger axes, and the failure-mode catalog.
@@ -59,6 +60,20 @@ Test seam: `FM_HANDOFF_CONTEXT_USED` overrides the durable sample.
 - **Quota trigger** still walks `chain` to the next distinct usable profile (cross-runtime).
   When no distinct usable successor exists (for example `claude-opus` at the end of the shared-provider Claude chain), `check` prints `handoff: chain exhausted ...` and does not enter a quota rotation or record a failure; it then evaluates the context axis as usual, so a same-profile refresh can still happen.
 - When both axes fire on the same check and a quota rotation is possible, **quota wins**: a same-runtime refresh cannot restore provider quota.
+
+## Launch routes
+
+The incoming primary starts where the outgoing one runs, so the owner finds it in the same place.
+The route is chosen at planning from the outgoing process and kept in the handoff record, so recovery after the outgoing has exited still knows the way:
+
+- **Herdr:** the outgoing process's own environment names a Herdr pane, and Herdr confirms that pane's shell is its ancestor.
+  The incoming starts in that same pane once it is back at an idle shell prompt, else in a new tab of the same workspace, else in a new workspace when that workspace closed with its only pane.
+  Every Herdr call names the session the outgoing recorded.
+  An environment that names a Herdr pane Herdr cannot confirm refuses before anything is signalled.
+- **tmux:** anything else starts a new tmux window from the controller's own tmux, as before the Herdr route existed.
+- **Custom:** `FM_HANDOFF_LAUNCH_CMD`, the test and operator seam.
+
+`bin/fm-primary-handoff-lib.sh` "launch routes" owns the exact rules.
 
 ## Atomic-lock handoff protocol
 
@@ -129,6 +144,47 @@ Unless `execute --force`:
 
 Coordination, generation, and live-owner checks apply even with `--force`.
 
+## Fresh session
+
+A fresh session replaces the first-mate session with a new, empty one of the same profile, in the same place, on the owner's word.
+The owner asks for it three ways, and every way asks to confirm first:
+
+- `/fresh` typed in chat, which loads the `fresh` skill; the first mate asks once in chat.
+- The **Fresh session** button on the Starship web page ([web.md](web.md#fresh-session)), which asks on the page.
+- The `↻ Fresh session` mark on the bridge strip, which takes a second click ([bridge-strip.md](bridge-strip.md#a-fresh-session)), or `starship fresh` in a terminal, which asks y/N ([desk.md](desk.md#a-fresh-session)).
+
+One press runs one flow:
+
+1. `fresh check` says whether a fresh session can start now, or refuses in one plain sentence.
+2. From the web page or the desk, `fresh ask` leaves the first mate one captain inbox note asking it to load the `fresh` skill; the press stops nothing itself.
+3. The first mate saves what the session learned by running the `stow` skill's full pass, then runs `fresh go` as its turn's last command.
+4. `fresh go` starts `execute --fresh` in its own process session after a short grace, so the first mate's reply still lands and stopping the first mate never stops the handover.
+5. `execute --fresh` is the same atomic-lock protocol as a context rotation, from the live profile to itself: the old session closes, and the new one starts in the same place and acquires the lock.
+   The old session stops before the new one starts, but on tmux its window stays open until the new one holds the lock, so a first mate that is its tmux session's only window keeps that session.
+   Work in progress needs no handover of its own: workers keep running, and the new session picks everything up from durable records at session start.
+
+The memory save runs in the outgoing session rather than as a note for the new one, because only the outgoing session holds what was learned in conversation; a new session running `/stow` could only re-read what is already on disk.
+The cost is that a press waits for the first mate to reach its inbox, which it does at its next wake.
+
+The live profile is the live lock holder's own launch line, read back against the launch lines `bin/fm-primary.sh` owns, else `state/.primary-active`, which only an enabled handoff config writes and which can go stale once it is disabled.
+A manual fresh session ignores the cooldown, because it is an explicit ask, and it never takes `--force`.
+
+Each step refuses, in plain words, while:
+
+- the first mate is in away or quiet mode;
+- a merge is under way: `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh` each hold a mark for as long as they run (`bin/fm-merge-running-lib.sh`), because stopping the session that started a merge part way through can strand it;
+- a handover is already running, or an earlier press from the web page or the desk is still waiting for the first mate (presses from those two only);
+- no first mate is running, its profile cannot be read, or there is no launch route.
+
+The first mate's own `check` and `go` never wait behind a press, so a press from the web page or the desk can finish, and `/fresh` still works while an earlier press waits.
+When the first mate's own step is refused, it clears the waiting press, so the refusal the owner saw is the only result.
+A handover record that no controller is finishing any more never refuses a later press.
+Each step settles it first: when a first mate now holds the lock, as after a slow start, the handover is marked complete; otherwise it is cleared as aborted.
+Settling never launches a first mate.
+While the `run` daemon is live, settling leaves the record to the daemon, because its next poll recovers it.
+
+`bin/fm-primary-handoff.sh`'s header owns the exact commands, words, and test seams.
+
 ## In-flight captain decisions (conversation-only state)
 
 Rotation destroys conversation-only state in the outgoing primary pane.
@@ -164,6 +220,8 @@ Chosen tradeoff:
 | Incoming launch fails or acknowledgement is delayed | Launch non-zero or startup deadline | Retain `launching`; subsequent checks retry or finalize the same target | No launch over a live owner |
 | Controller dies after incoming startup | Matching live acquisition acknowledgement | Finalize the recorded attempt once | Incoming remains owner |
 | Unrelated or reused PID owns the home | Lock and process identity differ from record | Abort recovery without signalling it | Unrelated owner preserved |
+| Outgoing names a Herdr pane Herdr cannot confirm | Launch route detection | Refuse before signalling | Untouched |
+| Fresh session while away, while a merge is under way, or while a handover runs | `fresh` refusals and `execute --fresh` | Refuse in plain words, exit 3 | Untouched |
 | Second supervisor races | Coordination lock | Loser exits without mutating session lock | Preserved by serialization |
 | Attempted launch while live holder exists | Pre-launch assert | Hard refuse | Preserved |
 | Failure injection at any phase | `FM_HANDOFF_INJECT_FAIL` test seam | Abort that phase without advancing past the safety gate | Asserted by tests |
@@ -189,5 +247,7 @@ Operators must run `fm-primary-handoff.sh execute --force` (or wait until a moni
 This is an accepted limitation, not a bug.
 
 ## Testing
+
+`tests/fm-primary-handoff.test.sh` also covers the fresh session (no config, the profile read back from every launch line, each refusal, the single inbox ask, and `go` in its own process session) and the Herdr route against a stand-in Herdr: the same pane, a new tab or workspace when the pane closed, and a refusal when Herdr cannot confirm the pane.
 
 `tests/fm-primary-handoff.test.sh` uses synthetic holders and runtime stubs to exercise stale-release/acquisition races, preflight refusals, delayed and unrelated ownership acknowledgements, controller death at durable phase boundaries, recovery without duplicate launches, the happy path, disabled no-op, context-threshold detection, the cursor-grok quota mapping and its general-window selection, the `claude-fable` model-window rotation to `claude-opus`, same-runtime rotation, afk refusal, cooldown, workers-survive, watcher re-arm, wake durability across flush, and failure-injection cases that prove the never-two-holders invariant across flush, signal, wait, release, and launch failures.

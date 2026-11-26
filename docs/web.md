@@ -35,6 +35,16 @@ The choice belongs to the home, not the browser: it is kept in `state/web/factor
 While Factories is hidden, Control Centre's only key is `h`, and the band and each project's own tab work as ever.
 The terminal's Factory pane has its own `h` ([factory-pane.md](factory-pane.md#hide-it-and-bring-it-back)).
 
+### Fresh session
+
+The **Fresh session** button in the top corner of the chat starts a new, empty first-mate session without losing anything under way.
+
+- One click checks whether a fresh session can start now, and the page asks you to confirm: Start fresh, or Cancel (`esc`).
+- Start fresh asks the first mate to save what it learned and then hand over; the page says so in plain words.
+- When a fresh session cannot start, the page says why instead: away or quiet mode, a merge under way, a handover already running, or an earlier press still waiting.
+
+The button only asks: `POST /api/fresh` hands each step to `bin/fm-primary-handoff.sh fresh`, which owns every refusal and its words ([primary-handoff.md](primary-handoff.md#fresh-session)).
+
 ### The chat
 
 The chat shows the primary session's conversation as you would read it: only your messages and the first mate's replies, as chat bubbles with Markdown rendered.
@@ -174,7 +184,7 @@ A button on a project's tab records no look, as a key in a factory's own tab doe
 A click and a key press on the same question are one answer, because both carry the same request id.
 A card the terminal has settled or asked again since the page drew it sends nothing.
 The page decides nothing and merges nothing: every button is a note to the first mate, who acts on it as it does from the terminal.
-There are no merge or spawn buttons.
+There are no merge or spawn buttons; the [Fresh session](#fresh-session) button is the one button that is not a pane key.
 
 ### Keys
 
