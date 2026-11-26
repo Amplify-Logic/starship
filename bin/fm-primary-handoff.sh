@@ -710,7 +710,7 @@ cmd_fresh() {
       fresh_detach env FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-primary-handoff.sh" \
         execute --fresh --delay "${FM_FRESH_GRACE_SECS:-10}"
       fresh_write_pending "pid=$FRESH_DETACHED_PID" "started_at=$(fm_handoff_now)" || true
-      printf 'started: A fresh session starts in a few seconds; this one closes once the new one is running.\n'
+      printf 'started: This session stops in a few seconds and a fresh one starts in its place; the window stays open until the new one is running.\n'
       ;;
   esac
 }

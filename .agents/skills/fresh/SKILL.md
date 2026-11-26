@@ -24,9 +24,10 @@ What only this session knows is the one thing that would be lost, so this skill 
    An inbox note from the web page or the desk is already the captain's confirmed press, so it needs no second confirmation.
 3. Save what this session learned: run the `stow` skill's full pass now, in this turn.
 4. Finish the turn's bookkeeping, because `go` ends this session:
-   acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>` and publish `Saved what I learned; a fresh session is starting.` with `bin/fm-inbox.sh reply <id>`, and run any `WAKE_ACK_REQUIRED` command this turn printed.
-5. Run `bin/fm-primary-handoff.sh fresh go` as the turn's last command.
+   acknowledge a handled inbox note with `bin/fm-inbox.sh drain --ack <id>`, and run any `WAKE_ACK_REQUIRED` command this turn printed.
+   Do not publish the inbox reply yet: it waits for what `go` prints, so the web page never shows a start that did not happen.
+5. Run `bin/fm-primary-handoff.sh fresh go`.
    It waits a few seconds before it starts, so the reply below still reaches the captain.
-6. On `started:`, end the turn with one line: the fresh session is starting, and everything under way carries over.
-   This session closes once the new one confirms it is running.
-   On `refused: <words>`, tell the captain those words instead.
+6. On `started:`, publish `Saved what I learned; this session stops and a fresh one starts in its place.` with `bin/fm-inbox.sh reply <id>` for an inbox note, then end the turn with one line: this session stops and a fresh one starts in its place, and everything under way carries over.
+   The window stays open until the new one is running.
+   On `refused: <words>`, publish those words with `bin/fm-inbox.sh reply <id>` for an inbox note, and tell the captain those words instead.

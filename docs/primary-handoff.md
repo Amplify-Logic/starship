@@ -160,6 +160,7 @@ One press runs one flow:
 3. The first mate saves what the session learned by running the `stow` skill's full pass, then runs `fresh go` as its turn's last command.
 4. `fresh go` starts `execute --fresh` in its own process session after a short grace, so the first mate's reply still lands and stopping the first mate never stops the handover.
 5. `execute --fresh` is the same atomic-lock protocol as a context rotation, from the live profile to itself: the old session closes, and the new one starts in the same place and acquires the lock.
+   The old session stops before the new one starts, but on tmux its window stays open until the new one holds the lock, so a first mate that is its tmux session's only window keeps that session.
    Work in progress needs no handover of its own: workers keep running, and the new session picks everything up from durable records at session start.
 
 The memory save runs in the outgoing session rather than as a note for the new one, because only the outgoing session holds what was learned in conversation; a new session running `/stow` could only re-read what is already on disk.
