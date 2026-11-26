@@ -522,6 +522,28 @@ PY
   pass "a large transcript is read from its end"
 }
 
+# Right after a restart the new session is recorded and its holder lives, but
+# Claude Code has not written the conversation yet: that reads as starting up,
+# while a dead holder or no recorded session keeps the offline wording.
+test_starting_up_before_the_conversation_is_written() {
+  local home out
+  home=$(make_home starting)
+  rm "$(transcript "$home")"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation)
+  assert_equals starting "$(jq -r .state <<<"$out")" "a live holder with no conversation yet reads as starting"
+  assert_not_contains "$(jq -r .note <<<"$out")" "not found"
+  python3 -c 'import subprocess; p=subprocess.Popen(["true"]); p.wait(); print(p.pid)' > "$home/state/.lock"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation)
+  assert_equals offline "$(jq -r .state <<<"$out")" "a dead holder reads as offline"
+  assert_equals "Firstmate's conversation file was not found." "$(jq -r .note <<<"$out")" "a dead holder keeps the offline wording"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  rm -f "$home/state/.lock-session"
+  out=$(FM_HOME="$home" HOME="$home" CLAUDE_CONFIG_DIR="$home/claude" "$LAUNCHER" conversation)
+  assert_equals offline "$(jq -r .state <<<"$out")" "no recorded session reads as offline"
+  assert_contains "$(jq -r .note <<<"$out")" "session is recorded" "no recorded session keeps the offline wording"
+  pass "a live holder before its conversation is written reads as starting up, not offline"
+}
+
 test_conversation_command_prints_versioned_json() {
   local home out
   home=$(make_home conversation-json)
@@ -1234,7 +1256,7 @@ test_a_prompt_after_startup_before_any_conversation_reaches_the_page() {
     sleep 0.2
     n=$((n + 1))
   done
-  assert_equals "$(jq -r '.state' <<<"$out")" "offline" "no conversation is written yet"
+  assert_equals "$(jq -r '.state' <<<"$out")" "starting" "no conversation is written yet, so it is starting up"
   assert_equals "$(jq -r '.prompt | [.kind, .question] | join("|")' <<<"$out")" \
     "yesno|Do you want to proceed?" "the prompt before the first conversation entry reaches the page"
   python3 -c 'import subprocess; p=subprocess.Popen(["true"]); p.wait(); print(p.pid)' > "$home/state/.lock"
@@ -2120,6 +2142,7 @@ test_a_message_typed_mid_turn_shows_as_waiting_until_it_is_read
 test_emphasis_around_code_renders
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
+test_starting_up_before_the_conversation_is_written
 test_conversation_command_prints_versioned_json
 test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice
