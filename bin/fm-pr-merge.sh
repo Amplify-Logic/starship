@@ -723,6 +723,8 @@ META="$STATE/$ID.meta"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-merge-running-lib.sh
+. "$SCRIPT_DIR/fm-merge-running-lib.sh"
 # Role partition: merging is MAIN-owned while attended; the Pi supervision
 # branch reports the green PR and never merges (contract: bin/fm-lease-lib.sh;
 # no-op in homes without a branch actor). While the away-posture record exists
@@ -776,8 +778,11 @@ merge_control_cleanup() {
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
   fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  fm_merge_running_end
 }
 trap merge_control_cleanup EXIT
+# A fresh first-mate session waits while this mark is held (bin/fm-merge-running-lib.sh).
+fm_merge_running_begin "$STATE"
 if [ "$NO_TASK" = false ]; then
   MERGE_CONTROL_LOCK="$STATE/.control-$ID.lock"
   fm_lock_acquire_wait "$MERGE_CONTROL_LOCK"

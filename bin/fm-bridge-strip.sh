@@ -10,12 +10,16 @@
 # config/night-shift-window, a Mothership room this Mac cannot reach from the
 # notes the room's listener keeps (bin/fm-procevent-mothership.sh,
 # state/mothership/<room>.unreachable), and the battery from `pmset -g batt` on
-# a Mac. It never steers, changes or drains anything; its one action is that a click on
+# a Mac. It never steers, changes or drains anything, save the one confirmed
+# fresh-session ask below; its one action is that a click on
 # the most urgent call opens the Factory pane on it (bin/fm-factory-pane.sh open
 # --item, beside the pane below the strip), and while the home keeps the Factory
 # pane hidden, a click on its `+ Factories` mark brings it back there
-# (bin/fm-factory-pane.sh show). docs/bridge-strip.md owns what the strip shows
-# and why; this header owns the commands.
+# (bin/fm-factory-pane.sh show). The `Fresh session` mark is the exception: a
+# click checks and a second click within seconds asks the first mate for a
+# fresh session (bin/fm-primary-handoff.sh fresh check, then ask --from desk).
+# docs/bridge-strip.md owns what the strip shows and why; this header owns the
+# commands.
 #
 # Usage:
 #   fm-bridge-strip.sh install   link the plugin into Herdr, remember this home,
@@ -77,6 +81,8 @@
 #                                 for no battery (default: pmset on a Mac only)
 #   FM_BRIDGE_STRIP_CONFIG_DIR    the plugin's config directory, instead of
 #                                 asking Herdr
+#   FM_BRIDGE_STRIP_FRESH_CMD     stands in for bin/fm-primary-handoff.sh
+#                                 behind the Fresh session mark
 #   FM_FLEET_STATE_*              see bin/fm-fleet-status-lib.sh; its
 #                                 FM_FLEET_STATE_NOW also sets the night
 #                                 shift's clock
@@ -524,6 +530,53 @@ read_factories() {  # <home>
   [ "$word" != hidden ] || FACTORIES=$FACTORIES_MARK
 }
 
+# --- a fresh first-mate session ---------------------------------------------------
+
+# FRESH_MARK: the strip's fresh-session control, last on the right when it
+# fits. A click asks bin/fm-primary-handoff.sh fresh check; when that is
+# ready, the strip asks for a second click within FRESH_CONFIRM_SECS, and only
+# that second click runs `fresh ask --from desk`. Each answer's words show in
+# place of the call for a few seconds. FM_BRIDGE_STRIP_FRESH_CMD stands in for
+# bin/fm-primary-handoff.sh in tests.
+# The glyph stays out of FRESH_TEXT, whose length is its columns, as with the lamps.
+FRESH_GLYPH=$'\342\206\273'   # U+21BB, a clockwise open circle arrow
+FRESH_TEXT='Fresh session'
+FRESH_FROM=0
+FRESH_TO=0
+FRESH_CONFIRM_SECS=8
+FRESH_ARMED_UNTIL=0
+# 1 while NOTICE holds a fresh-session answer rather than another notice.
+FRESH_NOTICE=0
+
+fresh_step() {  # <home> <check|ask>: the answer's first line
+  local cmd=${FM_BRIDGE_STRIP_FRESH_CMD:-$SCRIPT_DIR/fm-primary-handoff.sh} line
+  line=$(FM_HOME="$1" bash "$cmd" fresh "$2" --from desk </dev/null 2>/dev/null | head -n 1)
+  printf '%s' "${line:-failed: A fresh session could not be started; try again.}"
+}
+
+fresh_press() {  # <home>
+  local now answer
+  now=$(date +%s)
+  if [ "$FRESH_ARMED_UNTIL" -gt "$now" ]; then
+    FRESH_ARMED_UNTIL=0
+    answer=$(fresh_step "$1" ask)
+  else
+    answer=$(fresh_step "$1" check)
+    case "$answer" in
+      ready:*)
+        FRESH_ARMED_UNTIL=$((now + FRESH_CONFIRM_SECS))
+        NOTICE='Click again to start a fresh session'
+        NOTICE_UNTIL=$FRESH_ARMED_UNTIL
+        FRESH_NOTICE=1
+        return 0
+        ;;
+    esac
+  fi
+  NOTICE=${answer#*: }
+  NOTICE_UNTIL=$((now + 10))
+  FRESH_NOTICE=1
+}
+
 # --- the night shift ----------------------------------------------------------
 
 NIGHT_TEXT=
@@ -600,11 +653,13 @@ row_need() {  # <left width> <right width>
 compose() {  # <width>
   local width=$1 mark_form crew_form bat_form mark mark_w crew_s crew_w bat bat_w
   local alert_s alert_w left left_w right right_w text rest label sep room cut
-  local night_s night_w clickable fac_s fac_w
+  local night_s night_w clickable fac_s fac_w fresh_w
   LINK_FROM=0
   LINK_TO=0
   FAC_FROM=0
   FAC_TO=0
+  FRESH_FROM=0
+  FRESH_TO=0
   while read -r mark_form crew_form bat_form; do
     if [ "$bat_form" = none ] && battery_warns; then
       continue
@@ -641,7 +696,15 @@ compose() {  # <width>
         fac_w=${#FACTORIES}
         [ "$right_w" -eq 0 ] || fac_w=$((fac_w + 3))
       fi
-      room=$((width - $(row_need $((left_w + sep + 2)) $((right_w + fac_w)))))
+      # While the strip shows a fresh-session answer, the mark keeps its room
+      # too, so the notice never pushes out the mark a second click lands on.
+      fresh_w=0
+      if [ "$label" = "$NOTICE" ] && [ "$FRESH_NOTICE" = 1 ]; then
+        fresh_w=$((2 + ${#FRESH_TEXT}))
+        [ $((right_w + fac_w)) -eq 0 ] || fresh_w=$((fresh_w + 3))
+      fi
+      room=$((width - $(row_need $((left_w + sep + 2)) $((right_w + fac_w + fresh_w)))))
+      [ "$room" -ge "$cut" ] || room=$((width - $(row_need $((left_w + sep + 2)) $((right_w + fac_w)))))
       [ "$room" -ge "$cut" ] || room=$((width - $(row_need $((left_w + sep + 2)) "$right_w")))
       if [ "$room" -ge "$cut" ]; then
         [ "${#label}" -le "$room" ] || label="${label:0:$((room - 3))}..."
@@ -687,6 +750,16 @@ compose() {  # <width>
     [ "$bat_w" -eq 0 ] || right="${right}${right:+   }${bat}"
     [ -z "$fac_s" ] || right="${fac_s}${right:+   }${right}"
     right_w=$((right_w + fac_w + night_w))
+    # The fresh-session mark, last on the right, when it fits whole after
+    # everything else.
+    fresh_w=$((2 + ${#FRESH_TEXT}))
+    [ "$right_w" -eq 0 ] || fresh_w=$((fresh_w + 3))
+    if [ "$(row_need "$left_w" $((right_w + fresh_w)))" -le "$width" ]; then
+      right="${right}${right:+   }${CYAN}${FRESH_GLYPH} ${ICE}${FRESH_TEXT}"
+      right_w=$((right_w + fresh_w))
+      FRESH_TO=$((width - 1))
+      FRESH_FROM=$((FRESH_TO - 2 - ${#FRESH_TEXT} + 1))
+    fi
     if [ -n "$fac_s" ]; then
       FAC_FROM=$((width - right_w))
       FAC_TO=$((FAC_FROM + ${#FACTORIES} - 1))
@@ -937,6 +1010,7 @@ open_call() {  # <home> [show]
   now=$(date +%s)
   NOTICE='the Factory pane did not open'
   NOTICE_UNTIL=$((now + 5))
+  FRESH_NOTICE=0
 }
 
 # calls_moved: 0 when the owner's calls may have changed since the frame on
@@ -983,6 +1057,11 @@ wait_input() {  # <home> <seconds>
     if [ "$MOUSE_Y" -eq "$MIDDLE" ] && [ "$FAC_FROM" -gt 0 ] \
       && [ "$MOUSE_X" -ge "$FAC_FROM" ] && [ "$MOUSE_X" -le "$FAC_TO" ]; then
       open_call "$1" show
+      return 0
+    fi
+    if [ "$MOUSE_Y" -eq "$MIDDLE" ] && [ "$FRESH_FROM" -gt 0 ] \
+      && [ "$MOUSE_X" -ge "$FRESH_FROM" ] && [ "$MOUSE_X" -le "$FRESH_TO" ]; then
+      fresh_press "$1"
       return 0
     fi
   done

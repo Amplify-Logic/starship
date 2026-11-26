@@ -28,8 +28,9 @@ Each row is one purpose clause only: the script's own header comment is the auth
 | `fm-release-lib.sh`      | Release names and order, and the home's `config/update-channel` parser, shared by the update and the release cut |
 | `fm-routine-creator-watch.sh` | The creator-repo watch a scheduled Claude cloud routine runs: public git reads into one capped digest pushed to the dedicated reports repository, never to firstmate ([cloud-routines.md](cloud-routines.md)) |
 | `fm-primary.sh`          | Launch a verified primary profile from the tracked root, owning profile aliases and bypass flags |
-| `fm-primary-handoff.sh`  | Optional quota- and context-aware primary orchestrator handoff (docs/primary-handoff.md) |
-| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers, also executed by `fm-lock.sh release-stale` for the stale-lock release decision |
+| `fm-primary-handoff.sh`  | Optional quota- and context-aware primary orchestrator handoff, and a fresh session on the owner's word (`fresh`; docs/primary-handoff.md) |
+| `fm-primary-handoff-lib.sh` | Shared handoff state-machine and never-two-holders helpers and the custom, Herdr and tmux launch routes, also executed by `fm-lock.sh release-stale` for the stale-lock release decision |
+| `fm-merge-running-lib.sh` | The per-home mark that a merge is under way, held by `fm-pr-merge.sh` and `fm-merge-local.sh` and read by a fresh session's refusal |
 | `fm-account.sh`          | List and create the isolated vendor account homes named by `config/accounts.json`, printing the login command it never runs |
 | `fm-account-lib.sh`      | Shared named-account resolution, derived `data/accounts/<vendor>/<name>` homes, and the missing/logged-out/wrong-seat launch gate |
 | `fm-status-bar.sh`       | Render the canonical guarded primary status bar on native surfaces and on tmux or herdr companion panes (docs/status-bar.md) |

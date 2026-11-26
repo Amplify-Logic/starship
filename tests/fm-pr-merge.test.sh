@@ -242,6 +242,12 @@ case "${1:-} ${2:-}" in
     ;;
   "pr merge")
     [ -z "${FM_TEST_GH_MERGE_ARGS:-}" ] || printf '%s\0' "$@" > "$FM_TEST_GH_MERGE_ARGS"
+    if [ -n "${FM_TEST_MERGE_MARK_AT_MERGE:-}" ]; then
+      # Whether a fresh first-mate session would see a merge under way now.
+      bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-merge-running-lib.sh"
+        fm_merge_running_any "$2" && echo held || echo free' _ "$FM_TEST_ROOT" "$FM_STATE_OVERRIDE" \
+        > "$FM_TEST_MERGE_MARK_AT_MERGE"
+    fi
     if [ -n "${FM_TEST_META_AT_MERGE:-}" ] && [ -f "${FM_STATE_OVERRIDE:-}/task-x1.meta" ]; then
       cat "$FM_STATE_OVERRIDE/task-x1.meta" > "$FM_TEST_META_AT_MERGE"
     fi
@@ -821,6 +827,7 @@ run_pr_merge() {
   FM_TEST_GH_FILES="$case_dir/github-files.json" \
   FM_TEST_GH_FILES_FAIL="$case_dir/github-files-fail" \
   FM_TEST_META_AT_MERGE="$case_dir/meta-at-merge" \
+  FM_TEST_MERGE_MARK_AT_MERGE="$case_dir/merge-mark-at-merge" \
   FM_TEST_AWAY_RECORD_AFTER_VIEW="$case_dir/away-record-after-view" \
   FM_TEST_ROOT="$ROOT" \
   FM_TEST_AWAY_MUTATE_AT_MERGE="${FM_TEST_AWAY_MUTATE_AT_MERGE:-}" \
@@ -902,6 +909,27 @@ test_pr_metadata_is_recorded_before_the_forge_call() {
   assert_grep 'pr=https://github.com/example/repo/pull/62' "$case_dir/meta-at-merge" \
     "records-ahead-of-forge-call: the merge ran before pr= was recorded"
   pass "fm-pr-merge records pr= before the forge call can land the merge"
+}
+
+# A fresh first-mate session refuses while a merge is under way: the merge
+# holds its mark across the forge call and leaves none held once it exits.
+test_a_merge_holds_its_mark_across_the_forge_call() {
+  local case_dir rc
+  case_dir=$(make_case merge-mark)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 5252525252525252525252525252525252525252
+  : > "$case_dir/gh-axi.log"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/63 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "merge-mark: fm-pr-merge should succeed"
+  assert_equals held "$(cat "$case_dir/merge-mark-at-merge" 2>/dev/null)" "merge-mark: no mark was held during the forge call"
+  bash -c '. "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-merge-running-lib.sh"
+    ! fm_merge_running_any "$2"' _ "$ROOT" "$case_dir/state" \
+    || fail "merge-mark: a mark is still held after the merge exited"
+  pass "fm-pr-merge holds its merge-under-way mark across the forge call and releases it on exit"
 }
 
 test_merge_failure_propagates_after_recording() {
@@ -3608,6 +3636,7 @@ test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
 test_pr_metadata_is_recorded_before_the_forge_call
+test_a_merge_holds_its_mark_across_the_forge_call
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
 test_github_mergeable_unknown_retries_then_succeeds

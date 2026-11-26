@@ -51,6 +51,12 @@ The strip asks the terminal for mouse reports to see the click, so Herdr's own t
 While you keep the [Factory pane](factory-pane.md#hide-it-and-bring-it-back) hidden, the strip shows `+ Factories` after the most urgent call, when it fits.
 One click on it brings the pane back beside the pane below the strip, and keeps it shown for the next `starship`.
 
+### A fresh session
+
+`↻ Fresh session` sits last on the right whenever it fits whole after everything else.
+One click checks whether a fresh first-mate session can start and asks for a second click within 8 seconds; only that second click asks the first mate to save what it learned and start it ([primary-handoff.md](primary-handoff.md#fresh-session)).
+Each answer, including a refusal such as a merge under way, shows in place of the call for a few seconds, and while it shows the mark keeps its room.
+
 ### The red alert
 
 A red `■ 1 failed, 2 stopped` shows before the battery when work failed or a worker stopped, so trouble shows without the owner looking for it.
@@ -73,9 +79,10 @@ Work that was cleaned up before the reading and left no merged PR record is not 
 
 ## Read only
 
-The strip never steers, changes, or drains anything.
+The strip never steers, changes, or drains anything, save the one confirmed fresh-session ask below.
 Its only writes are its own record of the pane it runs in, kept in the plugin's Herdr config directory, and the shared fleet reading's cache that the status bar also refreshes.
 Its one action is opening the Factory pane when the owner clicks the most urgent call, or `+ Factories` while the pane is kept hidden; the pane it opens writes nothing until the owner presses one of its keys.
+The one exception is the confirmed second click on `↻ Fresh session`, which leaves the first mate one inbox note through `bin/fm-primary-handoff.sh fresh ask`.
 The call, the alert, and the night shift's count come from the same cached reading as the lamps, so they never disagree with them and cost the fleet nothing extra; a Mothership room's reach comes from its listener's note.
 `bin/fm-bridge-strip.sh fields` prints one such reading as `key=value` lines, the lamps' counts, the most urgent call, the alert, the night shift and the battery, for a second screen that lays the strip out its own way, such as the web page ([web.md](web.md)); the script's header owns the keys.
 

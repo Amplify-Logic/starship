@@ -206,7 +206,7 @@ fm_handoff_read_kv_file() {
         key=${line%%=*}
         value=${line#*=}
         case "$key" in
-          schema|phase|from|to|reason|token|outgoing_pid|outgoing_identity|shutdown_requested|incoming_pid|identity|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent)
+          schema|phase|from|to|reason|token|outgoing_pid|outgoing_identity|shutdown_requested|incoming_pid|identity|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent|route|herdr_session|herdr_pane|herdr_workspace)
             printf -v "$key" '%s' "$value"
             ;;
         esac
@@ -256,7 +256,11 @@ fm_handoff_write_record() {
     "updated_at=$updated" \
     "error=${error:-}" \
     "completed_at=${completed_at:-}" \
-    "cooldown_until=${cooldown_until:-}" || return 1
+    "cooldown_until=${cooldown_until:-}" \
+    "route=${route:-}" \
+    "herdr_session=${herdr_session:-}" \
+    "herdr_pane=${herdr_pane:-}" \
+    "herdr_workspace=${herdr_workspace:-}" || return 1
   if [ "${FM_HANDOFF_INJECT_CRASH:-}" = "${phase:-}" ]; then
     local current
     fm_current_pid current || return 1
@@ -281,6 +285,10 @@ fm_handoff_read_record() {
   error=''
   completed_at=''
   cooldown_until=''
+  route=''
+  herdr_session=''
+  herdr_pane=''
+  herdr_workspace=''
   fm_handoff_read_kv_file "$path"
 }
 
@@ -577,6 +585,197 @@ fm_handoff_release_session_lock_stale() {
   FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-lock.sh" release-stale
 }
 
+# --- launch routes ----------------------------------------------------------
+#
+# The incoming primary starts where the outgoing one runs, chosen at planning
+# from the outgoing process and kept in the record (route, herdr_session,
+# herdr_pane, herdr_workspace) so recovery after the outgoing has exited
+# still knows the way:
+#   custom  FM_HANDOFF_LAUNCH_CMD is set.
+#   herdr   the outgoing process's own environment names a Herdr pane
+#           (HERDR_ENV=1 and HERDR_PANE_ID, with no TMUX_PANE, so a tmux pane
+#           nested in Herdr stays tmux), and Herdr confirms that pane's shell
+#           is the outgoing's ancestor. The session is HERDR_SESSION, else
+#           Herdr's `default`. The incoming starts by `pane run` in that same
+#           pane once it is back at an idle shell prompt (its shell is the
+#           foreground process group), else in a new focused tab of the same
+#           workspace, else, when that workspace closed with its only pane, in
+#           a new focused workspace. Every Herdr call names the recorded
+#           session.
+#   tmux    anything else: a new tmux window, as before this route existed.
+# A process environment that names a Herdr pane Herdr cannot confirm refuses
+# rather than falling through to tmux.
+
+fm_handoff_herdr_bin() {
+  printf '%s\n' "${FM_HANDOFF_HERDR_BIN:-herdr}"
+}
+
+fm_handoff_herdr() {  # <session> <herdr-args...>
+  local session=$1
+  shift
+  "$(fm_handoff_herdr_bin)" "$@" --session "$session"
+}
+
+# The outgoing process's own environment, one KEY=VALUE per line. Linux
+# exposes it in /proc; macOS ps -E prints argv then the environment.
+fm_handoff_proc_env() {  # <pid>
+  if [ -n "${FM_HANDOFF_PROC_ENV_CMD:-}" ]; then
+    # shellcheck disable=SC2086
+    $FM_HANDOFF_PROC_ENV_CMD "$1"
+    return $?
+  fi
+  if [ -r "/proc/$1/environ" ]; then
+    tr '\0' '\n' < "/proc/$1/environ"
+  else
+    ps -E -ww -o command= -p "$1" 2>/dev/null | tr ' ' '\n'
+  fi
+}
+
+fm_handoff_env_value() {  # <env-lines> <name>  (the last occurrence wins)
+  printf '%s\n' "$1" | awk -v key="$2=" '
+    index($0, key) == 1 { value = substr($0, length(key) + 1) }
+    END { if (value != "") print value }
+  '
+}
+
+fm_handoff_pid_within() {  # <pid> <ancestor>
+  local pid=$1 root=$2 hops=0
+  case "$root" in ''|*[!0-9]*) return 1 ;; esac
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] && [ "$hops" -lt 64 ]; do
+    [ "$pid" = "$root" ] && return 0
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+# Print "<shell-pid> <foreground-group>" for a live Herdr pane.
+fm_handoff_herdr_pane_shell() {  # <session> <pane>
+  local info
+  info=$(fm_handoff_herdr "$1" pane process-info --pane "$2" 2>/dev/null) || return 1
+  printf '%s\n' "$info" | jq -er --arg pane "$2" '
+    .result.process_info | select(.pane_id == $pane)
+    | [.shell_pid, .foreground_process_group_id]
+    | select(all(type == "number" and . > 1)) | map(floor | tostring) | join(" ")
+  ' 2>/dev/null
+}
+
+# Choose the launch route for <outgoing-pid> and set route and herdr_*.
+fm_handoff_route_detect() {  # <outgoing-pid>
+  local pid=$1 env shell _group pane_info
+  route=
+  herdr_session=
+  herdr_pane=
+  herdr_workspace=
+  if [ -n "${FM_HANDOFF_LAUNCH_CMD:-}" ]; then
+    route=custom
+    return 0
+  fi
+  env=$(fm_handoff_proc_env "$pid" 2>/dev/null) || env=
+  if [ "$(fm_handoff_env_value "$env" HERDR_ENV)" != 1 ] \
+    || [ -z "$(fm_handoff_env_value "$env" HERDR_PANE_ID)" ] \
+    || [ -n "$(fm_handoff_env_value "$env" TMUX_PANE)" ]; then
+    route=tmux
+    return 0
+  fi
+  herdr_pane=$(fm_handoff_env_value "$env" HERDR_PANE_ID)
+  herdr_session=$(fm_handoff_env_value "$env" HERDR_SESSION)
+  [ -n "$herdr_session" ] || herdr_session=default
+  case "$herdr_session$herdr_pane" in
+    *[!A-Za-z0-9_:.-]*)
+      fm_handoff_die "the first mate's Herdr pane has an unexpected name; refusing"
+      return 1
+      ;;
+  esac
+  if ! command -v jq >/dev/null 2>&1 || ! command -v "$(fm_handoff_herdr_bin)" >/dev/null 2>&1; then
+    fm_handoff_die "the first mate runs in Herdr, but herdr or jq is not on PATH"
+    return 1
+  fi
+  read -r shell _group < <(fm_handoff_herdr_pane_shell "$herdr_session" "$herdr_pane") || shell=
+  fm_handoff_pid_within "$pid" "$shell" || {
+    fm_handoff_die "Herdr does not confirm the first mate runs in pane $herdr_pane; refusing"
+    return 1
+  }
+  pane_info=$(fm_handoff_herdr "$herdr_session" pane get "$herdr_pane" 2>/dev/null) || pane_info=
+  herdr_workspace=$(printf '%s\n' "$pane_info" | jq -r '.result.pane.workspace_id // empty' 2>/dev/null)
+  [ -n "$herdr_workspace" ] || {
+    fm_handoff_die "Herdr did not name the first mate's workspace; refusing"
+    return 1
+  }
+  route=herdr
+}
+
+# Start this generation's launcher in the recorded Herdr pane when it is back
+# at an idle shell prompt, else in a new tab of the recorded workspace.
+fm_handoff_herdr_launch() {  # <profile>
+  local profile=$1 cmd shell group out pane
+  cmd="cd $(printf '%q' "$FM_ROOT") && env FM_HOME=$(printf '%q' "$FM_HOME") $(printf '%q' "$FM_ROOT/bin/fm-primary-handoff.sh") launch $(printf '%q' "$token") $(printf '%q' "$profile")"
+  pane=$herdr_pane
+  if ! read -r shell group < <(fm_handoff_herdr_pane_shell "$herdr_session" "$pane") \
+    || [ "$shell" != "$group" ]; then
+    # A workspace whose only pane closed with the first mate is gone too.
+    out=$(fm_handoff_herdr "$herdr_session" tab create --workspace "$herdr_workspace" \
+      --cwd "$FM_ROOT" --label FIRSTMATE --focus 2>/dev/null) \
+      || out=$(fm_handoff_herdr "$herdr_session" workspace create \
+        --cwd "$FM_ROOT" --label FIRSTMATE --focus 2>/dev/null) || {
+      fm_handoff_die "Herdr could not open a tab or a workspace for the incoming first mate"
+      return 1
+    }
+    pane=$(printf '%s\n' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+    [ -n "$pane" ] || {
+      fm_handoff_die "Herdr opened a tab without naming its pane"
+      return 1
+    }
+  fi
+  fm_handoff_herdr "$herdr_session" pane run "$pane" "$cmd" </dev/null >/dev/null 2>&1 || {
+    fm_handoff_die "Herdr could not start the incoming first mate in pane $pane"
+    return 1
+  }
+}
+
+# The primary profile a live harness process was launched as, read back from
+# its argv (the launch lines bin/fm-primary.sh owns). For a home without
+# state/.primary-active, which handoff config writes only when enabled.
+fm_handoff_profile_from_pid() {  # <pid>
+  local line
+  line=$(ps -ww -o command= -p "$1" 2>/dev/null) || return 1
+  fm_handoff_profile_from_argv "$line"
+}
+
+fm_handoff_profile_from_argv() {  # <command-line>
+  local cli model='' prev='' word
+  local -a words
+  read -r -a words <<< "$1"
+  [ "${#words[@]}" -gt 0 ] || return 1
+  cli=${words[0]##*/}
+  case "$cli" in
+    node|bun)
+      [ "${#words[@]}" -gt 1 ] || return 1
+      words=("${words[@]:1}")
+      cli=${words[0]##*/}
+      ;;
+  esac
+  for word in "${words[@]:1}"; do
+    [ "$prev" != --model ] || model=$word
+    case "$word" in --model=*) model=${word#--model=} ;; esac
+    prev=$word
+  done
+  case "$cli:$model" in
+    claude:claude-fable-5-1) printf 'claude-fable\n' ;;
+    claude:claude-fable-5-2) printf 'claude-fable52\n' ;;
+    claude:claude-opus-5-5) printf 'claude-opus\n' ;;
+    codex:gpt-6-astra) printf 'astra\n' ;;
+    codex:) printf 'codex\n' ;;
+    pi:) printf 'pi\n' ;;
+    opencode:) printf 'opencode\n' ;;
+    grok:) printf 'grok\n' ;;
+    agent:cursor-grok-4.6-high) printf 'cursor-grok\n' ;;
+    agent:cursor-grok-4.5-high) printf 'cursor-grok45\n' ;;
+    *) return 1 ;;
+  esac
+}
+
 # Run the same non-mutating gates as a real primary launch, including explicit
 # --to profiles. Custom runtime routes must supply their own preflight command.
 fm_handoff_preflight() {
@@ -593,6 +792,15 @@ fm_handoff_preflight() {
     }
     # shellcheck disable=SC2086
     $FM_HANDOFF_PREFLIGHT_CMD "$profile" || return 1
+  elif [ "${route:-}" = herdr ]; then
+    command -v "$(fm_handoff_herdr_bin)" >/dev/null 2>&1 || {
+      fm_handoff_die "no launch route: the first mate runs in Herdr, but herdr is not on PATH"
+      return 1
+    }
+    [ -n "${herdr_session:-}" ] && [ -n "${herdr_pane:-}" ] && [ -n "${herdr_workspace:-}" ] || {
+      fm_handoff_die "no launch route: the recorded Herdr pane is incomplete"
+      return 1
+    }
   else
     if [ -z "${TMUX:-}" ] || ! command -v tmux >/dev/null 2>&1 \
       || ! tmux display-message -p '#S' >/dev/null 2>&1; then
@@ -624,6 +832,10 @@ fm_handoff_launch_incoming() {
     "$FM_ROOT/bin/fm-primary-handoff.sh" launch "$token" "$profile" \
       </dev/null >/dev/null 2>&1 &
     return 0
+  fi
+  if [ "${route:-}" = herdr ]; then
+    fm_handoff_herdr_launch "$profile"
+    return $?
   fi
   tmux new-window -d -n "FIRSTMATE" \
     "cd $(printf '%q' "$FM_ROOT") && env FM_HOME=$(printf '%q' "$FM_HOME") $(printf '%q' "$FM_ROOT/bin/fm-primary-handoff.sh") launch $(printf '%q' "$token") $(printf '%q' "$profile")" \

@@ -126,7 +126,21 @@ case "$1" in
   *) exit 2 ;;
 esac
 SH
-  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh" "$root/bin/fm-peek.sh" "$root/bin/fm-speak.sh"
+  # A stand-in for the fresh-session command: it records each call and
+  # answers with fresh.<step> from the home, else `ready:` or `asked:`.
+  cat > "$root/bin/fm-primary-handoff.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s FM_HOME=%s\n' "$*" "$FM_HOME" >> "$FM_HOME/fresh.asks"
+[ "$1" = fresh ] || exit 2
+if [ -f "$FM_HOME/fresh.$2" ]; then cat "$FM_HOME/fresh.$2"; exit 3; fi
+case "$2" in
+  check) echo 'ready: The first mate can save what it learned and start a fresh session.' ;;
+  ask) echo 'asked: The first mate saves what it learned, then starts the fresh session.' ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$root/bin/fm-factory.py" "$root/bin/fm-bridge-strip.sh" "$root/bin/fm-status-bar.sh" "$root/bin/fm-peek.sh" "$root/bin/fm-speak.sh" \
+    "$root/bin/fm-primary-handoff.sh"
   cat > "$root/bin/fm-desk-voice.sh" <<SH
 #!/usr/bin/env bash
 if [ "\$*" = suggestion ]; then
@@ -1637,6 +1651,40 @@ test_the_voice_in_settings_is_the_homes_through_fm_speak() {
 # Factories can be taken off Control Centre with one click and brought back
 # with one more, and the choice is the home's: it is kept in state/web/, so a
 # reload, another browser and a restarted server all draw the page the same way.
+# The Fresh session button asks first, then hands the press to
+# bin/fm-primary-handoff.sh fresh, which owns every refusal; the page shows its
+# words, behind the same POST guards as a send.
+test_fresh_session_asks_first_and_shows_plain_refusals() {
+  local home root port cookie csrf url bad out
+  home=$(make_home fresh)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/fresh"
+  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")
+  assert_contains "$out" 'id="freshBtn"' "the chat carries the Fresh session button"
+  assert_contains "$out" 'id="freshAsk"' "the page carries the confirm step"
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"step":"ask"}' "$url")" "no CSRF header"
+  assert_absent "$home/fresh.asks" "a refused request reaches nothing"
+  for bad in '{"step":"go"}' '{"step":"ask","x":1}' '{}' 'nope'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  assert_absent "$home/fresh.asks" "a malformed request reaches nothing"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"step":"check"}' "$url")
+  assert_equals "true ready" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "check reads ready"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"step":"ask"}' "$url")
+  assert_equals "true asked" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "ask reads asked"
+  assert_contains "$(jq -r .said <<<"$out")" 'saves what it learned' "the ask's own words reach the page"
+  assert_equals "fresh check --from web FM_HOME=$home
+fresh ask --from web FM_HOME=$home" "$(cat "$home/fresh.asks")" "each step runs once, for this home, from the web"
+  printf 'refused: A merge is under way. Try again once it has finished.\n' > "$home/fresh.check"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"step":"check"}' "$url")
+  assert_equals "false refused" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "a refusal reads refused"
+  assert_equals "A merge is under way. Try again once it has finished." "$(jq -r .said <<<"$out")" "the refusal's plain words reach the page"
+  pass "the Fresh session button asks first and shows each refusal in plain words"
+}
+
 test_factories_hide_and_come_back_for_the_whole_home() {
   local home root port cookie csrf url bad out
   home=$(make_home facs)
@@ -2144,6 +2192,7 @@ test_a_button_is_handed_to_the_factory_script_and_nowhere_else
 test_settings_are_kept_in_the_browser
 test_the_voice_in_settings_is_the_homes_through_fm_speak
 test_factories_hide_and_come_back_for_the_whole_home
+test_fresh_session_asks_first_and_shows_plain_refusals
 test_a_page_in_front_marks_the_home_for_the_floater
 test_the_front_beats_keep_arriving_for_hours
 test_the_floater_quiet_switch_is_kept_for_the_home

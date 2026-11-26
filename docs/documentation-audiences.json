@@ -334,6 +334,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/fresh/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/quiet/SKILL.md",
       "audience": "agent-runtime"
     },

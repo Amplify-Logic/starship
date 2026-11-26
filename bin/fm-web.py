@@ -108,7 +108,11 @@ drawn with it and POST /api/factories {"hidden": true|false} keeps it in
 state/web/factories (factories_hidden, factories_change). So does the desk
 floater's "Quiet while I'm on Starship" switch: GET /api/floater reads and POST
 /api/floater {"quiet": true|false} changes it, kept in the floater's own
-state/desk-voice/bubble-on-starship (starship_quiet, floater_change). VIEW_JS, served as /view.js, owns the page's
+state/desk-voice/bubble-on-starship (starship_quiet, floater_change). The Fresh session
+button asks first, then POST /api/fresh {"step": "check"|"ask"} hands the
+press to `bin/fm-primary-handoff.sh fresh <step> --from web`, which owns every
+refusal and the ask itself (fresh_change); the page only shows its words.
+VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
 the act of the button it stands for.
@@ -2195,6 +2199,33 @@ def voice_change(home: Path, root: Path, body: bytes) -> Tuple[int, Dict[str, An
     return 200, {"ok": True, "said": said, "voice": voice_state(home, root)}
 
 
+FRESH_TIMEOUT_SECONDS = 30
+FRESH_STATES = ("ready", "refused", "asked")
+
+
+def fresh_change(home: Path, root: Path, body: bytes) -> Tuple[int, Dict[str, Any]]:
+    """{"step": "check"|"ask"} from the Fresh session button, handed to
+    bin/fm-primary-handoff.sh fresh, whose first line is `<state>: <words>`."""
+    try:
+        ask = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 400, {"ok": False, "said": "The request was not JSON."}
+    if not isinstance(ask, dict) or set(ask) != {"step"} or ask["step"] not in ("check", "ask"):
+        return 400, {"ok": False, "said": "Send which step of a fresh session to take."}
+    env = dict(os.environ)
+    env["FM_HOME"] = str(home)
+    try:
+        proc = subprocess.run([str(root / "bin" / "fm-primary-handoff.sh"), "fresh", ask["step"], "--from", "web"],
+                              env=env, capture_output=True, encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, timeout=FRESH_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return 502, {"ok": False, "state": "failed", "said": "Starship could not be reached; try again."}
+    state, _, words = (proc.stdout.splitlines() or [""])[0].partition(": ")
+    if state not in FRESH_STATES or not words:
+        return 502, {"ok": False, "state": "failed", "said": "Starship could not start a fresh session; try again."}
+    return 200, {"ok": state != "refused", "state": state, "said": words}
+
+
 def decode_send_body(body: bytes) -> Tuple[str, List[bytes], str]:
     """The message's words, its pictures, and the mate it is for ("" for the first mate)."""
     try:
@@ -2819,7 +2850,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories", "/api/floater"):
+        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories", "/api/floater", "/api/fresh"):
             self._text(404, "not found", close=True)
             return
         limit = {"/api/send": SEND_BODY_MAX, "/api/front": FRONT_BODY_MAX}.get(path, ACT_BODY_MAX)
@@ -2848,6 +2879,11 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/voice":
             with STATE.act_lock:
                 status, answer = voice_change(STATE.home, STATE.root, body)
+            self._json(status, answer)
+            return
+        if path == "/api/fresh":
+            with STATE.act_lock:
+                status, answer = fresh_change(STATE.home, STATE.root, body)
             self._json(status, answer)
             return
         if path == "/api/act":
@@ -3048,7 +3084,11 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 #home[data-facs="hidden"] #chatPane{display:flex}
 .facs-btn{flex:none;align-self:center;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:.1rem .65rem;font-size:.78rem;line-height:1.4;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
 .facs-btn:hover,.facs-btn:focus-visible{color:var(--ink);border-color:var(--edge);background:var(--surface-2)}
-#facsShow{margin-left:auto}
+#freshBtn{margin-left:auto}
+#facsShow{margin-left:.25rem}
+.fresh-ask{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.5rem 1rem;border-bottom:1px solid var(--line);background:var(--surface-2);font-size:.88rem}
+.fresh-ask[hidden]{display:none}
+.fresh-ask #freshWords{flex:1 1 16rem;min-width:0}
 #facsHide{margin-left:.25rem}
 
 #log{flex:1;min-height:0;overflow-y:auto;padding:.25rem 1rem .75rem}
@@ -4333,6 +4373,29 @@ async function keepFacs(hide){
     ok=r.ok;}catch(e){}
   if(!ok){facsHidden=was;draw();$('result').textContent=hide?'Factories could not be hidden for this home; try again.':'Factories could not be shown again for this home; try again.';}
 }
+/* Fresh session: the page asks first, then asks the first mate to save what it learned and
+   start a fresh session. bin/fm-primary-handoff.sh fresh owns every refusal and its words. */
+async function freshCall(step){
+  try{const r=await fetch('/api/fresh',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({step:step})});
+    return await r.json();}catch(e){return {state:'failed',said:'Starship could not be reached; try again.'};}
+}
+function freshShow(words,ask){
+  $('freshAsk').hidden=false;$('freshWords').textContent=words;
+  $('freshYes').hidden=!ask;$('freshNo').textContent=ask?'Cancel':'Close';
+  (ask?$('freshYes'):$('freshNo')).focus();
+}
+async function freshStart(){
+  freshShow('Checking whether a fresh session can start…',false);
+  const a=await freshCall('check');
+  if(a.state==='ready')freshShow('Start a fresh first mate session? It saves what this one learned first, and everything under way carries over.',true);
+  else freshShow(a.said||'Starship could not start a fresh session; try again.',false);
+}
+async function freshGo(){
+  freshShow('Asking the first mate…',false);
+  const a=await freshCall('ask');
+  freshShow(a.said||'Starship could not start a fresh session; try again.',false);
+}
 const sent={},asked={};  /* answers and re-checks this page sent that the record does not show yet */
 const oldSent={};  /* older questions this page asked about that the record does not show yet */
 const full=new Set();    /* the clipped titles opened in full */
@@ -4854,6 +4917,9 @@ async function perform(d){
     case 'move':move(Number(d.step));return;
     case 'keys':openKeys($('keysSheet').hidden);return;
     case 'facs':keepFacs(d.hidden==='true');return;
+    case 'fresh':freshStart();return;
+    case 'freshyes':freshGo();return;
+    case 'freshno':$('freshAsk').hidden=true;$('freshBtn').focus();return;
     case 'hint':say(false,d.text);draw();return;
     case 'more':if(full.has(d.key))full.delete(d.key);else full.add(d.key);draw();return;
     case 'call':if(need(d.id))show(d.id,true);else{tab='home';setSide('projects');draw();}return;
@@ -4915,6 +4981,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     if(!$('keysSheet').hidden){openKeys(false);$('keysBtn').focus();return;}
     if(!$('settings').hidden){closeSettings();return;}
+    if(!$('freshAsk').hidden){perform({act:'freshno'});return;}
     if(confirming||talk){perform({act:'cancel'});return;}
     if(typing(t))return;
   }
@@ -5167,7 +5234,11 @@ def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = F
 <div class="pane-head"><h2>Firstmate</h2>
 <div class="seg mate-switch" id="mateSwitch" role="group" aria-label="Who you talk to" hidden></div>
 <span id="state" class="state offline"><span class="label">Connecting</span></span>
+<button class="facs-btn" id="freshBtn" type="button" data-act="fresh" title="Save what the first mate learned and start a fresh session; it asks first">Fresh session</button>
 <button class="facs-btn" id="facsShow" type="button" data-act="facs" data-hidden="false" title="Show Factories beside the chat">Show Factories</button></div>
+<div class="fresh-ask" id="freshAsk" role="group" aria-label="Fresh session" hidden><span id="freshWords" role="status"></span>
+<button class="btn small primary" id="freshYes" type="button" data-act="freshyes">Start fresh</button>
+<button class="btn small" id="freshNo" type="button" data-act="freshno">Cancel</button></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div>

@@ -156,9 +156,15 @@ field() {  # <fields output> <key>
 }
 
 # The row a pane of <width> columns should get: one column of margin each side,
-# the left side flush left and the battery flush right.
+# the left side flush left and the battery flush right, then the fresh-session
+# mark last on the right whenever it fits whole with three columns between the
+# two sides.
+FRESH_MARK=$'\342\206\273 Fresh session'
 row_of() {  # <width> <left> [right]
-  local left=$2 right=${3:-} fill
+  local left=$2 right=${3:-} fill with gap=0
+  with="${right}${right:+   }${FRESH_MARK}"
+  [ -z "$left" ] || gap=3
+  [ $((2 + $(columns "$left") + gap + $(columns "$with"))) -gt "$1" ] || right=$with
   fill=$(($1 - 2 - $(columns "$left") - $(columns "$right")))
   printf ' %s%*s%s ' "$left" "$fill" '' "$right"
 }
@@ -167,7 +173,7 @@ row_of() {  # <width> <left> [right]
 # are counted as one character whatever the ambient locale counts bytes as.
 columns() {  # <plain row>
   local row
-  row=$(printf '%s' "$1" | sed $'s/\342\226\240/#/g; s/\342\224\202/|/g; s/\342\226\270/>/g')
+  row=$(printf '%s' "$1" | sed $'s/\342\226\240/#/g; s/\342\224\202/|/g; s/\342\226\270/>/g; s/\342\206\273/@/g')
   printf '%s' "${#row}"
 }
 
@@ -359,8 +365,9 @@ test_a_title_is_shown_as_plain_text() {
 
 # click_strip <label|column> <width>: run the live strip under a pty of 3 rows,
 # click a column of its middle row the way Herdr reports a click to a pane that
-# asked for mouse reports, and save what it drew. `label` clicks the call, and
-# `factories` the mark that brings a hidden Factory pane back.
+# asked for mouse reports, and save what it drew. `label` clicks the call,
+# `factories` the mark that brings a hidden Factory pane back, `fresh` the
+# fresh-session mark, and `fresh-twice` that mark twice, two seconds apart.
 click_strip() {
   python3 - "$STRIP" "$1" "$2" "$TMP_ROOT/case$CASE/screen" <<'PY'
 import fcntl, os, pty, re, select, signal, struct, sys, termios, time
@@ -385,8 +392,12 @@ drain(0.5)
 text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", seen.decode("utf-8", "replace"))
 middle = [line for line in text.split("\n") if "▸" in line][-1]
 column = (middle.index("▸") + 1 if where == "label"
-          else middle.index("+ Factories") + 3 if where == "factories" else int(where))
+          else middle.index("+ Factories") + 3 if where == "factories"
+          else middle.index("Fresh session") + 3 if where.startswith("fresh") else int(where))
 os.write(fd, ("\x1b[<0;%d;2M\x1b[<0;%d;2m" % (column, column)).encode())
+if where == "fresh-twice":
+    drain(2)
+    os.write(fd, ("\x1b[<0;%d;2M\x1b[<0;%d;2m" % (column, column)).encode())
 drain(4)
 open(screen, "wb").write(seen)
 os.kill(pid, signal.SIGTERM)
@@ -479,6 +490,45 @@ test_a_hidden_factory_pane_comes_back_with_one_click() {
   assert_no_grep "FM_FACTORY_ITEM" "$CALLS" "the mark opened the pane on a call"
   assert_absent "$HOME_FIX/config/factory-pane" "the mark left the pane hidden for the next desk"
   pass "bridge strip: a hidden Factory pane shows a mark that brings it back with one click"
+}
+
+# The fresh-session mark sits last on the right. One click asks whether a
+# fresh session can start; only a second click within a few seconds asks the
+# first mate for it, and every answer's words show in place of the call.
+test_a_fresh_session_takes_two_clicks() {
+  local screen
+  reset_case
+  held pick-design 'Which of two designs'
+  assert_contains "$(frame 130 | plain)" $'\342\206\273 Fresh session ' "the strip has no fresh-session mark"
+  cat > "$BINDIR/fresh-stand-in" <<'SH'
+#!/usr/bin/env bash
+printf '%s FM_HOME=%s\n' "$*" "$FM_HOME" >> "$FM_BRIDGE_TEST_FRESH"
+if [ -f "$FM_BRIDGE_TEST_FRESH.$2" ]; then cat "$FM_BRIDGE_TEST_FRESH.$2"; exit 3; fi
+case "$2" in
+  check) echo 'ready: The first mate can save what it learned and start a fresh session.' ;;
+  ask) echo 'asked: The first mate saves what it learned, then starts the fresh session.' ;;
+esac
+SH
+  chmod +x "$BINDIR/fresh-stand-in"
+  export FM_BRIDGE_STRIP_FRESH_CMD="$BINDIR/fresh-stand-in" FM_BRIDGE_TEST_FRESH="$TMP_ROOT/case$CASE/fresh"
+  (live_click fresh 200) || fail "the live strip could not be driven"
+  assert_equals "fresh check --from desk FM_HOME=$HOME_FIX" "$(cat "$FM_BRIDGE_TEST_FRESH")" "one click did more than check"
+  screen=$(sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' "$TMP_ROOT/case$CASE/screen")
+  assert_contains "$screen" "Click again to start a fresh session" "one click did not ask for the second"
+  rm -f "$FM_BRIDGE_TEST_FRESH"
+  (live_click fresh-twice 200) || fail "the live strip could not be driven"
+  assert_equals "fresh check --from desk FM_HOME=$HOME_FIX
+fresh ask --from desk FM_HOME=$HOME_FIX" "$(cat "$FM_BRIDGE_TEST_FRESH")" "two clicks did not check, then ask"
+  screen=$(sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' "$TMP_ROOT/case$CASE/screen")
+  assert_contains "$screen" "The first mate saves what it learned" "the ask's words did not show"
+  rm -f "$FM_BRIDGE_TEST_FRESH"
+  printf 'refused: A merge is under way. Try again once it has finished.\n' > "$FM_BRIDGE_TEST_FRESH.check"
+  (live_click fresh-twice 200) || fail "the live strip could not be driven"
+  assert_no_grep "fresh ask" "$FM_BRIDGE_TEST_FRESH" "a refused check went on to ask"
+  screen=$(sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' "$TMP_ROOT/case$CASE/screen")
+  assert_contains "$screen" "A merge is under way." "the refusal's words did not show"
+  unset FM_BRIDGE_STRIP_FRESH_CMD FM_BRIDGE_TEST_FRESH
+  pass "bridge strip: a fresh session takes two clicks, and each answer shows in plain words"
 }
 
 # --- the next call, as soon as one is settled -------------------------------
@@ -1247,6 +1297,7 @@ fm_test_run \
   test_a_title_is_shown_as_plain_text \
   test_a_click_on_the_call_opens_the_factory_pane_on_it \
   test_a_hidden_factory_pane_comes_back_with_one_click \
+  test_a_fresh_session_takes_two_clicks \
   test_a_parked_decision_gives_way_to_the_next_call \
   test_a_title_never_runs_into_fields_a_newer_reading_adds \
   test_the_live_strip_draws_the_next_call_within_seconds \
