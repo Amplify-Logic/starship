@@ -1703,6 +1703,95 @@ test_a_page_in_front_marks_the_home_for_the_floater() {
   pass "a page in front marks the home for the desk floater, and only while one is"
 }
 
+# The reported failure: the floater showed replies while the page was in
+# front, because the page's beats stopped reaching its server after a couple
+# of hours. Chrome holds every request sent with keepalive against a fixed
+# 64 KiB allowance per page until its answer is read, and refuses every later
+# one once that is spent; the page never read the answers. Here a stand-in
+# fetch keeps that same rule (tests/fm-web-front-chrome-live-e2e.test.sh
+# proves it against the real Chrome), and hours of beats must all arrive.
+test_the_front_beats_keep_arriving_for_hours() {
+  command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
+  local home out
+  home=$(make_home frontjs)
+  serve_home "$home"
+  curl -sS --cookie "$(cat "$home/web.test-cookie")" "http://127.0.0.1:$(cat "$home/web.test-port")/front.js" > "$home/front.js"
+  out=$(node - "$home/front.js" <<'JS'
+const F = require(process.argv[2]);
+const ALLOWANCE = 64 * 1024;
+let held = 0, arrived = [], refused = 0;
+const fetch = (url, ask) => {
+  const bytes = ask.keepalive ? ask.body.length : 0;
+  if (held + bytes > ALLOWANCE) { refused++; return Promise.reject(new TypeError('Failed to fetch')); }
+  held += bytes;
+  arrived.push({ url, keepalive: !!ask.keepalive, csrf: ask.headers['X-FM-CSRF'], word: JSON.parse(ask.body) });
+  let read = false;
+  return Promise.resolve({ ok: true, text: () => { if (!read) { read = true; held -= bytes; } return Promise.resolve('{}'); } });
+};
+const on = {};
+const target = () => ({ addEventListener: (name, fn) => { on[name] = fn; } });
+const doc = Object.assign(target(), { visibilityState: 'visible', hasFocus: () => focused });
+const win = target();
+let focused = true, beat = null, every = null;
+(async () => {
+  const front = F.start({ doc, win, fetch, csrf: 'c1', beatMs: 5000, page: 'pagetest1', every: (fn, ms) => { beat = fn; every = ms; } });
+  await new Promise(r => setImmediate(r));
+  const out = ['first word: ' + JSON.stringify(arrived[0].word) + ' every ' + every + ' ms'];
+  let ok = 0;
+  for (let i = 0; i < 3 * 3600 / 5; i++) if (await beat()) ok++;
+  out.push('three hours of beats: ' + ok + ' arrived, ' + refused + ' refused, all plain: ' + arrived.every(a => !a.keepalive));
+  on.pagehide();
+  await new Promise(r => setImmediate(r));
+  const last = arrived[arrived.length - 1];
+  out.push('closing in front: ' + JSON.stringify(last.word) + ' keepalive ' + last.keepalive + ' to ' + last.url + ' with ' + last.csrf);
+  on.focus();
+  await new Promise(r => setImmediate(r));
+  out.push('back in front: ' + JSON.stringify(arrived[arrived.length - 1].word));
+  focused = false; on.blur();
+  await new Promise(r => setImmediate(r));
+  const gone = arrived[arrived.length - 1];
+  out.push('losing focus: ' + JSON.stringify(gone.word) + ' keepalive ' + gone.keepalive + ', a beat then sends: ' + (await beat()));
+  console.log(out.join('\n'));
+})();
+JS
+) || fail "the front script did not run: $out"
+  assert_equals "$out" 'first word: {"page":"pagetest1","front":true} every 5000 ms
+three hours of beats: 2160 arrived, 0 refused, all plain: true
+closing in front: {"page":"pagetest1","front":false} keepalive true to /api/front with c1
+back in front: {"page":"pagetest1","front":true}
+losing focus: {"page":"pagetest1","front":false} keepalive false, a beat then sends: false' "what the page says while in front, and as it leaves"
+  pass "a page in front keeps telling its server for hours, and only its goodbye asks the browser to keep it going"
+}
+
+# The owner's "Quiet while I'm on Starship" switch, in Settings: the same file
+# the desk floater keeps, so either side can change it.
+test_the_floater_quiet_switch_is_kept_for_the_home() {
+  local home root port cookie csrf url file out bad
+  home=$(make_home floater)
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/floater"
+  file="$home/state/desk-voice/bubble-on-starship"
+  assert_contains "$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")" "Quiet while I'm on Starship" "Settings show the switch"
+  assert_equals "true" "$(curl -sS --cookie "$cookie" "$url" | jq -r .quiet)" "a home that never touched it stays quiet"
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"quiet":false}' "$url")" "no CSRF header"
+  assert_absent "$file" "a refused change keeps nothing"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"quiet":false}' "$url")
+  assert_equals "true false" "$(jq -r '"\(.ok) \(.quiet)"' <<<"$out")" "switching it off is kept"
+  [ -f "$file" ] || fail "off must leave the floater's file"
+  assert_equals "false" "$(curl -sS --cookie "$cookie" "$url" | jq -r .quiet)" "a reload reads it off"
+  for bad in '{"quiet":"no"}' '{"quiet":false,"x":1}' '{}' 'nope'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  [ -f "$file" ] || fail "a refused change keeps the choice"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"quiet":true}' "$url")
+  assert_equals "true true" "$(jq -r '"\(.ok) \(.quiet)"' <<<"$out")" "switching it on again is kept"
+  assert_absent "$file" "on leaves no file behind"
+  pass "the floater's quiet on Starship is a yes or no switch in Settings, kept for the whole home"
+}
+
 test_settings_are_kept_in_the_browser() {
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
   local home out
@@ -2056,6 +2145,8 @@ test_settings_are_kept_in_the_browser
 test_the_voice_in_settings_is_the_homes_through_fm_speak
 test_factories_hide_and_come_back_for_the_whole_home
 test_a_page_in_front_marks_the_home_for_the_floater
+test_the_front_beats_keep_arriving_for_hours
+test_the_floater_quiet_switch_is_kept_for_the_home
 test_colours_are_kept_and_kept_readable
 test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes
 test_the_live_line_says_what_is_happening_in_plain_words

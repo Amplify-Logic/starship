@@ -24,7 +24,9 @@ final class VoiceVolumeTests: XCTestCase {
                                        clickCount: 1, pressure: 1)!
         let menu = hosting.hitTest(point)?.menu(for: event)
         XCTAssertEqual(menu?.items.map(\.title), ["Voice volume", "Mute voice", "Turn reply bubble off",
-                                                  "Reply motion", "Reply stays"])
+                                                  "Quiet while I'm on Starship", "Reply motion", "Reply stays"])
+        let quiet = menu?.items.first { $0.title == "Quiet while I'm on Starship" }
+        XCTAssertEqual(quiet?.state, .on, "a yes or no switch, yes for a home that never touched it")
         let levels = menu?.items.first?.submenu?.items.map(\.title) ?? []
         XCTAssertTrue(levels.contains("100% (system volume)"), "the levels are offered: \(levels)")
         XCTAssertTrue(levels.contains("200%"))
@@ -417,6 +419,36 @@ extension VoiceVolumeTests {
         XCTAssertTrue(FloaterModel(repoRoot: home.path, fmHome: home.path).bubbleOn)
         restarted.readOffer()
         try await waitUntil { restarted.bubbleShown }
+    }
+
+    /// The owner asked for the quiet on Starship as a yes or no switch: off,
+    /// a reply shows while a Starship page is in front as anywhere else, and
+    /// the choice is kept for the home, whether the floater's menu or the web
+    /// page's Settings made it.
+    @MainActor
+    func testQuietOnStarshipIsASwitchKeptForTheHome() async throws {
+        let home = try makeDesk()
+        defer { try? FileManager.default.removeItem(at: home.root) }
+        let model = FloaterModel(repoRoot: home.path, fmHome: home.path)
+        XCTAssertTrue(model.quietOnStarship, "a home that never touched the switch stays quiet on Starship")
+        model.setQuietOnStarship(false)
+        XCTAssertFalse(FloaterModel(repoRoot: home.path, fmHome: home.path).quietOnStarship,
+                       "the switch is kept across a restart")
+        try await follow(model, home)
+        try pageInFront(home)
+        try reply(home, 1)
+        try await waitUntil { model.caption?.id == 1 }
+        XCTAssertFalse(model.lookingAtStarship)
+        XCTAssertTrue(model.bubbleShown, "with the quiet off, a reply shows on Starship too")
+
+        // The web page's Settings keep the same file, which counts at once.
+        let file = URL(fileURLWithPath: Bubble.quietSwitchPath(home: home.path))
+        try FileManager.default.removeItem(at: file)
+        model.checkScreen()
+        try await waitUntil { model.caption == nil }
+        XCTAssertTrue(model.lookingAtStarship)
+        model.refreshQuietOnStarship()
+        XCTAssertTrue(model.quietOnStarship, "the menu follows a change made on the web page")
     }
 
     func testOnlyAFreshMarkerSaysAStarshipPageIsInFront() {
