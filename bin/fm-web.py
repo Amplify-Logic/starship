@@ -74,7 +74,7 @@ carries the code it runs as `build`, and the page reloads on a new one.
 document (schema fm-web-conversation.v1), for another page that shows a
 home's conversation without this server: the Deck reads every local crew home
 this way. Its fields are schema, home, generated_at, session, state (busy,
-idle or offline), since (when the turn under way began, while busy and known), note,
+idle, starting or offline), since (when the turn under way began, while busy and known), note,
 older, version, items and waiting (the owner's messages still queued), each
 item exactly as the page receives it, so its html is already escaped and safe
 to insert.
@@ -1278,13 +1278,17 @@ class TranscriptCache:
         session, path = resolve_transcript(self.home)
         alive = lock_pid_alive(self.home)
         if path is None:
-            reason = (
-                f"No {self.name} session is recorded for this home yet."
-                if session is None
-                else f"{self.name[:1].upper()}{self.name[1:]}'s conversation file was not found."
-            )
-            return {"session": session, "state": "offline", "items": [], "waiting": [], "older": False, "note": reason,
-                    "version": f"none:{session}"}
+            title = f"{self.name[:1].upper()}{self.name[1:]}"
+            if session is not None and alive is True:
+                # A restart records the new session before Claude Code writes
+                # its conversation, so a live holder is still starting up.
+                state, reason = "starting", f"{title} is starting up."
+            elif session is None:
+                state, reason = "offline", f"No {self.name} session is recorded for this home yet."
+            else:
+                state, reason = "offline", f"{title}'s conversation file was not found."
+            return {"session": session, "state": state, "items": [], "waiting": [], "older": False, "note": reason,
+                    "version": f"none:{session}:{state}"}
         stat = path.stat()
         key = (str(path), stat.st_size, stat.st_mtime_ns)
         with self.lock:
@@ -4204,7 +4208,7 @@ function setState(state,started){
   if(state==='busy'&&!working)seenAt=Date.now();
   working=state==='busy';since=working?started||null:null;chatState=state;
   stateEl.className='state '+state;
-  stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':'Not running';
+  stateEl.querySelector('.label').textContent=state==='busy'?'Working':state==='idle'?'Ready':state==='starting'?'Starting up':'Not running';
   drawAsking();
 }
 /* The header says the first mate waits for a person while the terminal does. */
