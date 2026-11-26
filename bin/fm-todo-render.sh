@@ -189,7 +189,9 @@
 #                     fold (default false)
 #   colleague_headings  true to head the front page's non-partner asks
 #                     "Colleagues asking you" rather than "Waiting on you",
-#                     for a work home (default false)
+#                     for a work home (default false); a work home adds
+#                     colleague_headings = true after updating to keep
+#                     "Colleagues asking you"
 # A value this renderer rejects for one of those exits 2, as it does for
 # a missing template. Every other key belongs to bin/fm-channel-intake.sh,
 # which owns that file.
