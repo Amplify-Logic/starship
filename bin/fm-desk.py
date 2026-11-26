@@ -72,7 +72,10 @@ What `open` does, in this order, re-reading Herdr after every step:
      running worker beside the page. A factory tab is the tab open-tab
      recorded for that factory in this session, else the tab with its label.
   6. Opens windows until as many Herdr clients show the session as the layout
-     names views, each with its font size, in the layout's `terminal` app:
+     names views, counting a Ghostty instance the desk opened whose client has
+     not started yet as one of them, so a slow window is never opened twice.
+     It waits for each new window's client before opening the next. Each view
+     opens with its font size, in the layout's `terminal` app:
      Terminal through AppleScript (with the view's profile, or Starship's
      cream profile while bin/fm-theme.sh has the workspace in light and
      Terminal has that profile), or a new Ghostty
@@ -104,8 +107,8 @@ Test seams:
                           fm-primary-handoff.sh,
                           fm-factory.py and fm-web.sh (default: this script's
                           directory)
-  FM_DESK_PS              process lister printing `pid tty command` lines
-                          (default: ps -axo pid=,tty=,command=)
+  FM_DESK_PS              process lister printing `pid ppid tty command` lines
+                          (default: ps -axo pid=,ppid=,tty=,command=)
   FM_DESK_OSASCRIPT       AppleScript runner (default: osascript)
   FM_DESK_OPEN            macOS app launcher for Ghostty views (default: open)
   FM_DESK_MACOS           macOS version, for the Terminal color note and
@@ -378,25 +381,25 @@ def installed_plugins(herdr: "Herdr") -> Optional[set]:
 # Reading the desk as it is
 # --------------------------------------------------------------------------
 
-def processes() -> List[Tuple[str, List[str]]]:
-    """(tty, command words) of every process running now."""
+def processes() -> List[Tuple[str, str, str, List[str]]]:
+    """(pid, parent pid, tty, command words) of every process running now."""
     lister = os.environ.get("FM_DESK_PS")
-    argv = shlex.split(lister) if lister else ["ps", "-axo", "pid=,tty=,command="]
+    argv = shlex.split(lister) if lister else ["ps", "-axo", "pid=,ppid=,tty=,command="]
     try:
         out = subprocess.run(argv, capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     found = []
     for line in out.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) < 3:
+        parts = line.split(None, 3)
+        if len(parts) < 4:
             continue
         try:
-            words = shlex.split(parts[2])
+            words = shlex.split(parts[3])
         except ValueError:
             continue
         if words:
-            found.append((parts[1], words))
+            found.append((parts[0], parts[1], parts[2], words))
     return found
 
 
@@ -406,22 +409,53 @@ def attaches(words: List[str]) -> bool:
         words[1:] in ([], ["--session", SESSION], ["session", "attach", SESSION])
 
 
+def client_pids(procs: List[Tuple[str, str, str, List[str]]]) -> Dict[str, str]:
+    """pid -> tty of the Herdr clients showing the default session in <procs>."""
+    return {pid: tty for pid, _, tty, words in procs if tty not in ("??", "?", "-") and attaches(words)}
+
+
 def herdr_clients() -> List[str]:
     """ttys of the Herdr clients showing the default session right now."""
-    return [tty for tty, words in processes() if tty not in ("??", "?", "-") and attaches(words)]
+    return list(client_pids(processes()).values())
 
 
-def ghostty_views() -> List[str]:
-    """The font size of each Ghostty instance the desk opened as a view ("" when it set none)."""
-    sizes = []
-    for _, words in processes():
+def ghostty_instances(procs: List[Tuple[str, str, str, List[str]]]) -> List[Tuple[str, str]]:
+    """(pid, font size) of each Ghostty instance the desk opened as a view ("" when it set no size)."""
+    found = []
+    for pid, _, _, words in procs:
         if os.path.basename(words[0]) != "ghostty" or "-e" not in words:
             continue
         if not attaches(words[words.index("-e") + 1:] or ["-"]):
             continue
         size = next((w.split("=", 1)[1] for w in words if w.startswith("--font-size=")), "")
-        sizes.append(size.split(".")[0])
-    return sizes
+        found.append((pid, size.split(".")[0]))
+    return found
+
+
+def ghostty_views() -> List[str]:
+    """The font size of each Ghostty instance the desk opened as a view ("" when it set none)."""
+    return [size for _, size in ghostty_instances(processes())]
+
+
+def view_count() -> int:
+    """How many views show the session, or are about to: every Herdr client, plus every
+    Ghostty instance the desk opened whose Herdr client has not started yet.
+
+    A new Ghostty instance can take a while to start its client, so counting clients
+    alone would see one view too few and open it again.
+    """
+    procs = processes()
+    parent = {pid: ppid for pid, ppid, _, _ in procs}
+    clients = client_pids(procs)
+    above_a_client = set()
+    for pid in clients:
+        seen = set()
+        while pid in parent and pid not in seen:
+            seen.add(pid)
+            pid = parent[pid]
+            above_a_client.add(pid)
+    waiting = [pid for pid, _ in ghostty_instances(procs) if pid not in above_a_client]
+    return len(clients) + len(waiting)
 
 
 def bare_shell(cmdline: str) -> bool:
@@ -525,7 +559,7 @@ def factory_tab(tabs: List[Dict[str, Any]], records: Dict[str, str], tab: Dict[s
 def survey(herdr: Herdr, layout: Dict[str, Any], home: str) -> Dict[str, Any]:
     """Everything the plan needs, read from Herdr, the factory tab records and the process list."""
     found: Dict[str, Any] = {"running": False, "socket": "", "workspace": None, "tabs": [], "main": None,
-                             "factory_tabs": {}, "panes": {}, "clients": herdr_clients(), "plugins": None,
+                             "factory_tabs": {}, "panes": {}, "views": view_count(), "plugins": None,
                              "factory_hidden": factory_hidden(home)}
     entry = herdr.session_entry()
     if not entry or not entry.get("running"):
@@ -688,7 +722,7 @@ def plan(layout: Dict[str, Any], found: Dict[str, Any],
             notes.append("the %s tab is showing something else; it was left as it is" % tab["label"])
 
     terminal = layout["terminal"]
-    for index in range(len(found["clients"]), len(layout["views"])):
+    for index in range(found["views"], len(layout["views"])):
         view = layout["views"][index]
         item = step("view", "open " + view_text(index, view, terminal), view=index)
         item["held"] = True
