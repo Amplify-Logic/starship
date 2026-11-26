@@ -206,7 +206,7 @@ fm_handoff_read_kv_file() {
         key=${line%%=*}
         value=${line#*=}
         case "$key" in
-          schema|phase|from|to|reason|token|outgoing_pid|outgoing_identity|shutdown_requested|incoming_pid|identity|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent|route|herdr_session|herdr_pane|herdr_workspace)
+          schema|phase|from|to|reason|token|outgoing_pid|outgoing_identity|shutdown_requested|incoming_pid|identity|started_at|updated_at|error|profile|pid|completed_at|cooldown_until|trigger|remaining_percent|used_percent|route|herdr_session|herdr_pane|herdr_workspace|tmux_pane)
             printf -v "$key" '%s' "$value"
             ;;
         esac
@@ -260,7 +260,8 @@ fm_handoff_write_record() {
     "route=${route:-}" \
     "herdr_session=${herdr_session:-}" \
     "herdr_pane=${herdr_pane:-}" \
-    "herdr_workspace=${herdr_workspace:-}" || return 1
+    "herdr_workspace=${herdr_workspace:-}" \
+    "tmux_pane=${tmux_pane:-}" || return 1
   if [ "${FM_HANDOFF_INJECT_CRASH:-}" = "${phase:-}" ]; then
     local current
     fm_current_pid current || return 1
@@ -289,6 +290,7 @@ fm_handoff_read_record() {
   herdr_session=''
   herdr_pane=''
   herdr_workspace=''
+  tmux_pane=''
   fm_handoff_read_kv_file "$path"
 }
 
@@ -603,6 +605,11 @@ fm_handoff_release_session_lock_stale() {
 #           a new focused workspace. Every Herdr call names the recorded
 #           session.
 #   tmux    anything else: a new tmux window, as before this route existed.
+#           The outgoing's own pane (found by process ancestry, kept as
+#           tmux_pane) stays open after the outgoing exits, so a first mate
+#           that was its session's only window does not close the session the
+#           new window opens in; that dead pane closes once the incoming
+#           acknowledges.
 # A process environment that names a Herdr pane Herdr cannot confirm refuses
 # rather than falling through to tmux.
 
@@ -668,6 +675,7 @@ fm_handoff_route_detect() {  # <outgoing-pid>
   herdr_session=
   herdr_pane=
   herdr_workspace=
+  tmux_pane=
   if [ -n "${FM_HANDOFF_LAUNCH_CMD:-}" ]; then
     route=custom
     return 0
@@ -677,6 +685,7 @@ fm_handoff_route_detect() {  # <outgoing-pid>
     || [ -z "$(fm_handoff_env_value "$env" HERDR_PANE_ID)" ] \
     || [ -n "$(fm_handoff_env_value "$env" TMUX_PANE)" ]; then
     route=tmux
+    tmux_pane=$(fm_handoff_tmux_pane_of "$pid") || tmux_pane=
     return 0
   fi
   herdr_pane=$(fm_handoff_env_value "$env" HERDR_PANE_ID)
@@ -704,6 +713,37 @@ fm_handoff_route_detect() {  # <outgoing-pid>
     return 1
   }
   route=herdr
+}
+
+# The tmux pane whose process tree holds <pid>, or 1 when tmux names none.
+fm_handoff_tmux_pane_of() {  # <pid>
+  local pane_pid pane_id
+  command -v tmux >/dev/null 2>&1 && [ -n "${TMUX:-}" ] || return 1
+  while read -r pane_pid pane_id; do
+    case "$pane_id" in %[0-9]*) ;; *) continue ;; esac
+    if fm_handoff_pid_within "$1" "$pane_pid"; then
+      printf '%s\n' "$pane_id"
+      return 0
+    fi
+  done < <(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null)
+  return 1
+}
+
+# Keep the outgoing's tmux pane open after it exits (see the tmux route above).
+fm_handoff_tmux_hold_outgoing() {
+  [ "${route:-}" = tmux ] && [ -n "${tmux_pane:-}" ] || return 0
+  tmux set-option -p -t "$tmux_pane" remain-on-exit on </dev/null >/dev/null 2>&1 || true
+}
+
+# Close the held pane once its process has exited; a pane still running
+# (a shell that outlived the first mate) only drops the hold.
+fm_handoff_tmux_close_outgoing() {
+  [ "${route:-}" = tmux ] && [ -n "${tmux_pane:-}" ] || return 0
+  if [ "$(tmux display-message -p -t "$tmux_pane" '#{pane_dead}' 2>/dev/null)" = 1 ]; then
+    tmux kill-pane -t "$tmux_pane" </dev/null >/dev/null 2>&1 || true
+  else
+    tmux set-option -p -u -t "$tmux_pane" remain-on-exit </dev/null >/dev/null 2>&1 || true
+  fi
 }
 
 # Start this generation's launcher in the recorded Herdr pane when it is back

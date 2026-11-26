@@ -177,6 +177,7 @@ complete_record() {
   phase=complete
   fm_handoff_write_record || return 1
   clear_launch_lock
+  fm_handoff_tmux_close_outgoing
   fm_handoff_log "handed off primary $from -> $to (reason=$reason trigger=$trigger)"
   printf 'handed_off: %s -> %s\n' "$from" "$to"
 }
@@ -211,7 +212,9 @@ release_and_launch() {
   fm_handoff_write_record || return 1
   shutdown_requested=yes
   fm_handoff_write_record || return 1
+  fm_handoff_tmux_hold_outgoing
   if ! fm_handoff_signal_outgoing "$outgoing_pid"; then
+    fm_handoff_tmux_close_outgoing
     abort_record "failed to signal outgoing pid $outgoing_pid"
     return 1
   fi
@@ -326,6 +329,7 @@ cmd_execute() (
   herdr_session=''
   herdr_pane=''
   herdr_workspace=''
+  tmux_pane=''
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -593,7 +597,7 @@ fresh_ask_age() {
 fresh_refusal() {  # <step> <from>
   local step=$1 from=$2 coord age profile
   # fm_handoff_route_detect sets these; they stay this function's own.
-  local route='' herdr_session='' herdr_pane='' herdr_workspace=''
+  local route='' herdr_session='' herdr_pane='' herdr_workspace='' tmux_pane=''
   if fm_handoff_afk_active; then
     printf 'The first mate is in away or quiet mode. Come back first, then start a fresh session.\n'
     return 0

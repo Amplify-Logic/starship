@@ -1415,6 +1415,54 @@ SH
   pass "tmux dispatch through the real primary launcher carries a bound acquisition acknowledgement"
 }
 
+# A first mate that is the only window of its tmux session: stopping it must
+# not close the session before the new one starts there. Runs a real tmux
+# server on a private socket, since the session's lifetime is tmux's own rule.
+test_tmux_route_survives_a_lone_first_mate_window() {
+  local out status=0 sock real_tmux server_tmux windows
+  real_tmux=$(command -v tmux 2>/dev/null) || {
+    printf 'skip: tmux absent; lone-window tmux handover not run\n'
+    return 0
+  }
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  write_quota "$TMP_ROOT/quota.json" 90
+  sock="$TMP_ROOT/lone.sock"
+  ln -sf "$real_tmux" "$FAKEBIN/tmux"
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/pi"
+  # shellcheck disable=SC2016 # the holder expands its own $$ and $HOME_FIX
+  PATH="$FAKEBIN:/usr/bin:/bin" "$real_tmux" -S "$sock" -f /dev/null new-session -d -s lone \
+    'exec bash -c '\''printf "%s\n" "$$" > "$HOME_FIX/state/.lock"; while :; do sleep 1; done'\'' claude-primary-handoff-test'
+  for _ in {1..50}; do [ -s "$HOME_FIX/state/.lock" ] && break; sleep 0.1; done
+  cat "$HOME_FIX/state/.lock" >> "$HOME_FIX/holders"
+  server_tmux="$sock,$("$real_tmux" -S "$sock" display-message -p '#{pid}'),0"
+  out=$(run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX_PANE -u HERDR_PANE_ID TMUX="$server_tmux" \
+    "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  windows=$("$real_tmux" -S "$sock" list-windows -t lone -F '#{window_name}:#{pane_dead}' 2>&1)
+  "$real_tmux" -S "$sock" kill-server 2>/dev/null || true
+  cleanup_holders
+  rm -f "$FAKEBIN/tmux" "$sock"
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  expect_code 0 "$status" "a lone first-mate window left no first mate: $out"
+  [ "$(cat "$LAUNCH_LOG")" = 'launch pi' ] || fail "expected one pi launch: $(cat "$LAUNCH_LOG")"
+  case "$windows" in
+    FIRSTMATE*:0) ;;
+    *) fail "the session should hold only the new, live first mate window: $windows" ;;
+  esac
+  pass "the tmux route keeps a lone first mate's session until the new one runs, then closes the old pane"
+}
+
 test_recovery_waits_for_inflight_ack_publication() {
   local out recovery_pid i
   : > "$LAUNCH_LOG"
@@ -1816,6 +1864,7 @@ test_profile_reads_back_from_every_launch_line
 test_recovery_waits_for_inflight_ack_publication
 
 test_tmux_route_carries_acknowledgement
+test_tmux_route_survives_a_lone_first_mate_window
 
 test_pending_startup_reuses_launcher
 test_reused_outgoing_identity_is_not_signalled
