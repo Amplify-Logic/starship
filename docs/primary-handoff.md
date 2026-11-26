@@ -172,8 +172,11 @@ Each step refuses, in plain words, while:
 
 - the first mate is in away or quiet mode;
 - a merge is under way: `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh` each hold a mark for as long as they run (`bin/fm-merge-running-lib.sh`), because stopping the session that started a merge part way through can strand it;
-- a handover is already running, or an earlier press is still waiting for the first mate (check and ask only);
+- a handover is already running, or an earlier press from the web page or the desk is still waiting for the first mate (presses from those two only);
 - no first mate is running, its profile cannot be read, or there is no launch route.
+
+The first mate's own `check` and `go` never wait behind a press, so a press from the web page or the desk can finish, and `/fresh` still works while an earlier press waits.
+When the first mate's own step is refused, it clears the waiting press, so the refusal the owner saw is the only result.
 
 `bin/fm-primary-handoff.sh`'s header owns the exact commands, words, and test seams.
 

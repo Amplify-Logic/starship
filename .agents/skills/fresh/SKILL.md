@@ -17,7 +17,7 @@ What only this session knows is the one thing that would be lost, so this skill 
 
 ## Steps
 
-1. Run `bin/fm-primary-handoff.sh fresh check`.
+1. Run `bin/fm-primary-handoff.sh fresh check`, with no `--from`: it is the first mate's own check, so a waiting press from the web page or the desk never refuses it.
    On `refused: <words>`, tell the captain those words in plain chat and stop; for an inbox note, also acknowledge it and publish the same words with `bin/fm-inbox.sh reply <id>`.
 2. Confirm with the captain when the ask came from chat: one plain question, such as "Start a fresh session now? I save what I learned first, and everything under way carries over."
    Go on only on a clear yes.

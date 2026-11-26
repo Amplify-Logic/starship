@@ -1572,10 +1572,39 @@ test_fresh_ask_reaches_the_first_mate_once() {
   [ "$(find "$HOME_FIX/state/inbox" -name '*.note' | wc -l | tr -d ' ')" = 1 ] || fail "a second press sent a second note"
   [ ! -s "$SIGNAL_LOG" ] || fail "an ask stopped the first mate before it saved anything"
   kill -0 "$FAKE_HOLDER_PID" || fail "an ask stopped the live first mate"
-  out=$(FM_FRESH_ASK_WAIT_SECS=0 fresh check 2>&1) || fail "an ask past its wait still refuses: $out"
+  out=$(FM_FRESH_ASK_WAIT_SECS=0 fresh check --from desk 2>&1) || fail "an ask past its wait still refuses: $out"
   cleanup_holders
   rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
   pass "a press asks the first mate once, through one inbox note, and stops nothing"
+}
+
+test_fresh_first_mate_never_waits_behind_a_press() {
+  local out status=0
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  rm -f "$HOME_FIX/config/primary-handoff"
+  start_opus_holder
+  fresh ask --from web >/dev/null 2>&1 || fail "the ask failed"
+  out=$(fresh check 2>&1) || status=$?
+  expect_code 0 "$status" "the first mate's own check waited behind the press it answers: $out"
+  assert_contains "$out" 'ready: ' "the first mate's own check should say ready"
+  out=$(fresh check --from desk 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a press from the desk should still wait behind the web press"
+  assert_contains "$out" 'refused: A fresh session was asked for just now.' "waiting ask words"
+
+  # The first mate's go refused by away mode ends the press there.
+  : > "$HOME_FIX/state/.afk"
+  out=$(fresh go 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "go should refuse away mode"
+  assert_contains "$out" 'refused: The first mate is in away or quiet mode.' "away words"
+  rm -f "$HOME_FIX/state/.afk"
+  out=$(fresh check --from web 2>&1) || fail "a refused go left the press waiting: $out"
+  assert_contains "$out" 'ready: ' "the next press should be ready once go was refused"
+  [ ! -s "$SIGNAL_LOG" ] && [ ! -s "$LAUNCH_LOG" ] || fail "a refusal signalled or launched"
+  cleanup_holders
+  rm -rf "$HOME_FIX/state/inbox" "$HOME_FIX/state/.primary-fresh"
+  pass "the first mate's own check never waits behind a press, and its refused go clears that press"
 }
 
 test_fresh_go_hands_over_from_its_own_session() {
@@ -1777,6 +1806,7 @@ test_profile_reads_back_from_every_launch_line() {
 test_fresh_session_needs_no_handoff_config
 test_fresh_session_refuses_in_plain_words
 test_fresh_ask_reaches_the_first_mate_once
+test_fresh_first_mate_never_waits_behind_a_press
 test_fresh_go_hands_over_from_its_own_session
 test_herdr_route_reuses_the_first_mates_pane
 test_herdr_route_opens_a_tab_when_the_pane_closed

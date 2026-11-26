@@ -27,13 +27,16 @@
 #                   exit 3. Refusals: away or quiet mode, a merge under way
 #                   (bin/fm-merge-running-lib.sh), a handover already running,
 #                   an ask still waiting (FM_FRESH_ASK_WAIT_SECS, default
-#                   1800), no live first mate, a profile it cannot read, or
-#                   no launch route.
+#                   1800; --from web or desk only), no live first mate, a
+#                   profile it cannot read, or no launch route. --from names
+#                   where the press came from; the default, terminal, is the
+#                   first mate's own step, which a waiting ask never refuses
+#                   and whose refusal clears that ask.
 #            ask    the same refusals, then one captain inbox note asking the
-#                   first mate to load the fresh skill; --from names where the
-#                   press came from. Prints `asked: <words>`.
+#                   first mate to load the fresh skill. Prints
+#                   `asked: <words>`.
 #            go     run by the first mate itself once it has saved what it
-#                   learned: the same refusals except an ask still waiting,
+#                   learned: the same refusals,
 #                   then `execute --fresh --delay FM_FRESH_GRACE_SECS` (default
 #                   10, so its caller can finish its reply) in its own process
 #                   session, so stopping this session
@@ -585,9 +588,10 @@ fresh_ask_age() {
 }
 
 # Print why a fresh session cannot start now, or nothing. <step> is check,
-# ask or go; only check and ask wait behind an earlier ask.
-fresh_refusal() {  # <step>
-  local step=$1 coord age profile
+# ask or go; only a press from the web page or the desk waits behind an
+# earlier ask, never the first mate's own step.
+fresh_refusal() {  # <step> <from>
+  local step=$1 from=$2 coord age profile
   # fm_handoff_route_detect sets these; they stay this function's own.
   local route='' herdr_session='' herdr_pane='' herdr_workspace=''
   if fm_handoff_afk_active; then
@@ -604,7 +608,7 @@ fresh_refusal() {  # <step>
     printf 'A handover to a fresh session is already running.\n'
     return 0
   fi
-  if [ "$step" != go ] && age=$(fresh_ask_age); then
+  if [ "$from" != terminal ] && age=$(fresh_ask_age); then
     printf 'A fresh session was asked for %s. The first mate starts it as soon as it has saved what it learned.\n' \
       "$(fresh_age_words "$age")"
     return 0
@@ -671,8 +675,11 @@ cmd_fresh() {
   case "$from" in web|desk|terminal) ;; *) fm_handoff_log "--from must be web, desk or terminal"; return 2 ;; esac
   fm_handoff_load_config || return 1
   mkdir -p "$STATE" || return 1
-  refusal=$(fresh_refusal "$step")
+  refusal=$(fresh_refusal "$step" "$from")
   if [ -n "$refusal" ]; then
+    if [ "$from" = terminal ] && fresh_ask_age >/dev/null; then
+      rm -f "$(fresh_pending_path)"
+    fi
     printf 'refused: %s\n' "$refusal"
     return 3
   fi
