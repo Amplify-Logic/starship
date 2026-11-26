@@ -66,7 +66,7 @@ It stays wherever you put it, even pushed almost wholly off the screen into a co
 | Talk (the larger round button) | Talk to Firstmate: hold, speak, release; or click once to start and click again to send. Double-click also toggles. An orange "!" on it means the Accessibility permission is missing, and clicking the "!" asks again. |
 | Show (the smaller round button) | Shows Firstmate the screen: tap it and the display under the pointer goes on its own; hold it and speak, and the picture taken as you pressed goes with your words. See [Screenshots](#screenshots). A number on it counts the pictures waiting to be sent; an orange "!" means the Screen Recording permission is missing, and clicking Show asks again. |
 | Status line | One line beside the buttons, shown only while there is something to say about what is happening: listening, transcribing, `Sent`, `Saved for Firstmate`, a stack of shots, a retry, or a missing permission. Hover it to read a message cut short. |
-| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else), Mute or Unmute, Turn reply bubble off or on, Reply motion (Off, Calm or Full) and Reply stays (8 s, 15 s, 30 s or 1 min); see [Reply bubble](#reply-bubble). The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
+| Right-click the card | A menu with the voice volume (25% to 200% of the system volume, 100% being as loud as everything else), Mute or Unmute, Turn reply bubble off or on, Quiet while I'm on Starship (a tick while on), Reply motion (Off, Calm or Full) and Reply stays (8 s, 15 s, 30 s or 1 min); see [Reply bubble](#reply-bubble). The level and the mute are per home and survive restarting the floater; the web page's Settings set the same ones. Runs `bin/fm-speak.sh --volume <percent>`, `--mute` and `--unmute`. |
 | Bell badge on Talk | Shown only while the reply bubble is off (see [Reply bubble](#reply-bubble)); blue while an offer waits behind it. Click it to turn the bubble back on. |
 
 Everything else appears on the reply bubble while it means something, below.
@@ -97,13 +97,17 @@ The last 10 replies, with their audio and their words for the eye, are kept in t
 
 The bubble stays quiet while you are already looking at Starship, where it would only repeat what is on screen:
 
-- the Starship web page is in front, on any of its tabs, in any browser ([web.md](web.md)): the page tells its server while it is the focused, visible tab, and the server keeps `state/desk-voice/web-front` while one does, which the floater counts only for 15 seconds after the page last said so;
+- the Starship web page is in front, on any of its tabs, in any browser ([web.md](web.md)): the page tells its server while it is the focused, visible tab, again every 5 seconds for as long as it stays in front, and the server keeps `state/desk-voice/web-front` while one does, which the floater counts only for 15 seconds after the page last said so;
 - or Terminal is in front showing the primary Firstmate's own chat, checked exactly the way [dictation](#dictating-into-the-firstmate-chat) checks it (`bin/fm-desk-voice.sh front`), only once you have already allowed Automation for Terminal; the floater never asks for it here.
 
 A reply that arrives while you are looking at Starship is never shown, not even after you look away, and a reply already up goes when you turn to Starship.
 A reply you opened in full and an offer waiting for your tap are not lost: they wait behind the quiet bubble and show again as soon as you look away.
 A newer reply replaces a reply you opened in full, even one that arrives while you are looking at Starship, so the bubble never brings back an older reply.
 The voice is unchanged either way.
+
+That quiet is a yes or no switch, on by default: **Quiet while I'm on Starship** in the right-click menu, ticked while it is on, or the same switch in the web page's Settings ([web.md](web.md#settings)).
+Off, replies and offers show while you are on Starship as they do anywhere else.
+It is per home and survives restarting the floater, kept as the file `state/desk-voice/bubble-on-starship` while it is off; a change made on the web page counts at once.
 
 The bubble has a switch of its own: **Turn reply bubble off** in the right-click menu, or the bell mark on the bubble itself, turns it off in one click.
 Off means no bubble anywhere, for replies and offers alike, until you turn it back on: a bell badge on Talk says it is off, turning blue while an offer waits, and clicking the badge, or **Turn reply bubble on** in the menu, turns it on again.

@@ -10,7 +10,7 @@ visit, or as a ?code= that `fm-web.py signin-code` made and that works once
 within SIGNIN_CODE_SECONDS, either of which sets an HttpOnly SameSite=Strict
 cookie and redirects to a clean URL, and as that cookie afterwards. The only
 exceptions are the files that hold nothing private: the page's look and rules
-(/settings.js, /view.js), its icons and its web app manifest, so a browser can
+(/settings.js, /view.js, /front.js), its icons and its web app manifest, so a browser can
 install the page as its own app; and the address itself, which without the
 cookie shows a page saying what this is and how to get in. The Host header must name this loopback
 port on 127.0.0.1, so a rebound DNS name cannot reach the page.
@@ -105,7 +105,10 @@ belongs to the home, not the browser, so GET /api/voice reads and POST
 each only through bin/fm-speak.sh (voice_state, voice_change). Whether
 Factories is hidden on Control Centre belongs to the home too: the page is
 drawn with it and POST /api/factories {"hidden": true|false} keeps it in
-state/web/factories (factories_hidden, factories_change). VIEW_JS, served as /view.js, owns the page's
+state/web/factories (factories_hidden, factories_change). So does the desk
+floater's "Quiet while I'm on Starship" switch: GET /api/floater reads and POST
+/api/floater {"quiet": true|false} changes it, kept in the floater's own
+state/desk-voice/bubble-on-starship (starship_quiet, floater_change). VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
 the act of the button it stands for.
@@ -113,7 +116,7 @@ the act of the button it stands for.
 While a page is what the owner is looking at (its tab visible and its window
 focused), it says so with POST /api/front {"page": <its own random id>,
 "front": true}, again every FRONT_BEAT_SECONDS, and {"front": false} as it
-loses focus or closes. The server keeps state/desk-voice/web-front while any
+loses focus or closes; FRONT_JS, served as /front.js, owns that side. The server keeps state/desk-voice/web-front while any
 page has said so within FRONT_SECONDS, touched on every beat, and removes it
 when none has (Presence). The Mac desk floater reads it as "the owner is
 looking at Starship" and keeps its reply bubble quiet (docs/desk-floater.md);
@@ -358,6 +361,44 @@ def factories_change(home: Path, body: bytes) -> Tuple[int, Dict[str, Any]]:
     except OSError as exc:
         return 500, {"ok": False, "said": f"Not kept: {exc.strerror or exc}."}
     return 200, {"ok": True, "hidden": factories_hidden(home)}
+
+
+# --- the desk floater's quiet on Starship -------------------------------------
+
+
+def starship_quiet_path(home: Path) -> Path:
+    """Present while the desk floater's "Quiet while I'm on Starship" is off;
+    the floater keeps the same file (docs/desk-floater.md)."""
+    return home / "state" / "desk-voice" / "bubble-on-starship"
+
+
+def starship_quiet(home: Path) -> bool:
+    """Whether the floater keeps its reply bubble quiet while Starship is in
+    front: yes unless the home switched it off."""
+    return not starship_quiet_path(home).exists()
+
+
+def floater_change(home: Path, body: bytes) -> Tuple[int, Dict[str, Any]]:
+    """{"quiet": true|false} from the page's "Quiet while I'm on Starship" switch."""
+    try:
+        ask = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 400, {"ok": False, "said": "The request was not JSON."}
+    if not isinstance(ask, dict) or set(ask) != {"quiet"} or not isinstance(ask["quiet"], bool):
+        return 400, {"ok": False, "said": "Send whether the floater stays quiet on Starship."}
+    path = starship_quiet_path(home)
+    try:
+        if ask["quiet"]:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+    except OSError as exc:
+        return 500, {"ok": False, "said": f"Not kept: {exc.strerror or exc}."}
+    quiet = starship_quiet(home)
+    return 200, {"ok": True, "quiet": quiet,
+                 "said": "The floater stays quiet while Starship is in front." if quiet
+                 else "The floater shows replies on Starship too."}
 
 
 def derive(token: str, purpose: str) -> str:
@@ -2600,6 +2641,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._send(200, SETTINGS_JS.encode("utf-8"), "text/javascript; charset=utf-8")
         elif path == "/view.js":
             self._send(200, VIEW_JS.encode("utf-8"), "text/javascript; charset=utf-8")
+        elif path == "/front.js":
+            self._send(200, FRONT_JS.encode("utf-8"), "text/javascript; charset=utf-8")
         elif path == "/manifest.webmanifest":
             self._send(200, manifest_json().encode("utf-8"), "application/manifest+json")
         elif path == "/icon.svg":
@@ -2694,6 +2737,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._worker(query.get("job", [""])[0])
         elif parsed.path == "/api/voice":
             self._json(200, voice_state(STATE.home, STATE.root))
+        elif parsed.path == "/api/floater":
+            self._json(200, {"quiet": starship_quiet(STATE.home)})
         else:
             self._text(404, "not found")
 
@@ -2774,7 +2819,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories"):
+        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories", "/api/floater"):
             self._text(404, "not found", close=True)
             return
         limit = {"/api/send": SEND_BODY_MAX, "/api/front": FRONT_BODY_MAX}.get(path, ACT_BODY_MAX)
@@ -2789,6 +2834,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._json(400, {"error": str(exc)})
                 return
             self._json(200, {"front": STATE.front.mark(page, front)})
+            return
+        if path == "/api/floater":
+            with STATE.act_lock:
+                status, answer = floater_change(STATE.home, body)
+            self._json(status, answer)
             return
         if path == "/api/factories":
             with STATE.act_lock:
@@ -3963,6 +4013,61 @@ VIEW_JS = r"""
 })(typeof window !== 'undefined' ? window : this);
 """
 
+# How a page tells its server it is in front (Presence): a script of its own,
+# so it can be run without a browser.
+FRONT_JS = r"""
+/* While this page is what the owner is looking at (its tab visible and its
+   window focused) it tells its server so, again on every beat, and says it is
+   not as it loses focus or closes; the desk floater keeps its reply bubble
+   quiet meanwhile. Each answer is read to its end, and only the word sent as
+   the page closes asks the browser to keep it going: a browser holds every
+   request sent that way against a small fixed allowance per page until its
+   answer is read, and Chrome refuses every later one once it is spent, which
+   after a couple of hours of beats silenced the page for good. */
+(function (root) {
+  'use strict';
+
+  function pageId(cryptoApi) {
+    try { return cryptoApi.randomUUID().replace(/-/g, ''); } catch (e) {
+      return (Math.random().toString(36).slice(2) + Date.now().toString(36)).replace(/[^a-z0-9]/g, '') + 'page';
+    }
+  }
+
+  /* o: doc, win, fetch, csrf, beatMs, and optionally page and every (setInterval).
+     Returns the page's own say, inFront and beat. */
+  function start(o) {
+    var doc = o.doc, win = o.win, page = o.page || pageId(win.crypto);
+    var said = null;
+    function inFront() { return doc.visibilityState === 'visible' && doc.hasFocus(); }
+    /* Resolves true once the server took the word. */
+    function say(front, beat, leaving) {
+      if (!beat && front === said) return Promise.resolve(false);
+      said = front;
+      var ask = { method: 'POST', credentials: 'same-origin',
+                  headers: { 'Content-Type': 'application/json', 'X-FM-CSRF': o.csrf },
+                  body: JSON.stringify({ page: page, front: front }) };
+      if (leaving) ask.keepalive = true;
+      return o.fetch('/api/front', ask)
+        .then(function (r) { return r.text().then(function () { return r.ok; }); })
+        .catch(function () { return false; });
+    }
+    function check() { say(inFront(), false, false); }
+    function beat() { return inFront() ? say(true, true, false) : Promise.resolve(false); }
+    win.addEventListener('focus', check);
+    win.addEventListener('blur', check);
+    doc.addEventListener('visibilitychange', check);
+    win.addEventListener('pagehide', function () { say(false, false, true); });
+    (o.every || win.setInterval.bind(win))(beat, o.beatMs);
+    check();
+    return { page: page, say: say, inFront: inFront, beat: beat };
+  }
+
+  var api = { start: start };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.FMFront = api;
+})(typeof window !== 'undefined' ? window : this);
+"""
+
 PAGE_JS = r"""
 (function(){
 'use strict';
@@ -4916,9 +5021,17 @@ $('voiceLevel').addEventListener('input',e=>{$('voiceNow').textContent=e.target.
 $('voiceLevel').addEventListener('change',e=>voiceSend({volume:parseInt(e.target.value,10)}));
 $('voiceReset').addEventListener('click',()=>voiceSend({volume:100}));
 $('voiceMute').addEventListener('change',e=>voiceSend({mute:e.target.checked}));
+/* ---- the desk floater's quiet on Starship: the home's, through /api/floater ---- */
+async function loadFloater(){try{const r=await fetch('/api/floater',{credentials:'same-origin'});
+  if(r.ok)$('floaterQuiet').checked=!!(await r.json()).quiet;}catch(e){}}
+$('floaterQuiet').addEventListener('change',async e=>{
+  try{const r=await fetch('/api/floater',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({quiet:e.target.checked})});
+    const a=await r.json();$('floaterSaid').textContent=a.said||'';if(typeof a.quiet==='boolean')$('floaterQuiet').checked=a.quiet;}
+  catch(err){$('floaterSaid').textContent='Not saved: the page could not reach this computer.';}});
 function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
 $('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
-  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();loadVoice();$('textSize').focus();}});
+  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();loadVoice();loadFloater();$('textSize').focus();}});
 $('settingsClose').addEventListener('click',closeSettings);
 $('textSize').addEventListener('input',e=>change('text',Number(e.target.value)));
 $('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
@@ -4965,16 +5078,8 @@ function divider(node,main,name){
 const homeDivider=divider($('divHome'),$('home'),'split');
 
 /* ---- in front: while this page is what the owner looks at, the desk floater keeps its reply bubble quiet ---- */
-{const PAGE=(()=>{try{return crypto.randomUUID().replace(/-/g,'');}catch(e){return (Math.random().toString(36).slice(2)+Date.now().toString(36)).replace(/[^a-z0-9]/g,'')+'page';}})();
-  let said=null;
-  const inFront=()=>document.visibilityState==='visible'&&document.hasFocus();
-  const say=(front,beat)=>{if(!beat&&front===said)return;said=front;
-    fetch('/api/front',{method:'POST',credentials:'same-origin',keepalive:true,
-      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({page:PAGE,front:front})}).catch(()=>{});};
-  const check=()=>say(inFront(),false);
-  window.addEventListener('focus',check);window.addEventListener('blur',check);
-  document.addEventListener('visibilitychange',check);window.addEventListener('pagehide',()=>say(false,false));
-  setInterval(()=>{if(inFront())say(true,true);},1000*(Number(document.body.dataset.frontBeat)||5));check();}
+window.FMFront.start({doc:document,win:window,fetch:window.fetch.bind(window),csrf:CSRF,
+  beatMs:1000*(Number(document.body.dataset.frontBeat)||5)});
 
 document.querySelectorAll('.brand').forEach(b=>b.prepend(ship()));
 setSide(facsHidden?'chat':'projects',true);poll();mirror();
@@ -5044,7 +5149,7 @@ def weekly_page(home: Path) -> Optional[str]:
 def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = False) -> str:
     weekly_link = ('<a class="qbtn" href="/weekly" target="_blank" rel="noopener" '
                    'title="What changed this week">This week</a>\n') if weekly else ""
-    return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script>
+    return head_html(nonce, "Starship") + f"""<script nonce="{nonce}" src="/view.js"></script><script nonce="{nonce}" src="/front.js"></script>
 </head>
 <body data-csrf="{html.escape(csrf, quote=True)}" data-build="{html.escape(BUILD, quote=True)}" data-front-beat="{FRONT_BEAT_SECONDS}">{ship_symbol()}
 <div class="app">
@@ -5140,7 +5245,11 @@ def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = F
 <div class="lbl">Recent replies</div>
 <ul class="replies" id="voiceReplies"></ul>
 <p class="hint" id="voiceSaid" role="status"></p></div>
-<p class="hint">The voice is kept for this home; everything else in this browser only.</p>
+<div class="set"><div class="lbl">Desk floater</div>
+<label class="switch"><input id="floaterQuiet" type="checkbox">Quiet while I'm on Starship</label>
+<p class="hint">The floater on the Mac shows no reply beside it while this page or the first mate's chat is in front; the voice is unchanged.</p>
+<p class="hint" id="floaterSaid" role="status"></p></div>
+<p class="hint">The voice and the desk floater are kept for this home; everything else in this browser only.</p>
 </section>
 <section class="sheet" id="keysSheet" role="dialog" aria-modal="true" aria-label="Keyboard keys" hidden>
 <h2>Keyboard keys<button class="btn small plain" id="keysClose" type="button" aria-label="Close the keys"></button></h2>

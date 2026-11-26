@@ -213,6 +213,8 @@ The Settings button opens one small panel:
 - **Put the panels back**: returns the line between Firstmate and Factories to where it started.
 - **Voice**, shown only when the home speaks its replies: the voice volume, from 0 to 200% of the computer's own volume, with Back to 100%; Mute the voice; and the recent replies, each as the desk floater's bubble shows it, with Hear again.
   These belong to the home rather than the browser: they are read and changed through `bin/fm-speak.sh` (`--volume`, `--mute`, `--unmute`, `--history`, `--caption`, `--replay`), so the floater's right-click menu and every browser see the same level ([desk-floater.md](desk-floater.md#controls)).
+- **Desk floater**: **Quiet while I'm on Starship**, on by default, keeps the desk floater's reply bubble quiet while this page or the first mate's chat is in front; off, replies show beside the floater there too.
+  It belongs to the home as well: it is the same switch as the floater's right-click menu, kept in the same file ([desk-floater.md](desk-floater.md#reply-bubble)).
 
 Every other setting and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.
@@ -300,7 +302,7 @@ The page lists only the mates `bin/fm-direct-line.sh list` shows with the direct
 - A button reaches the same guards as a send, then only `bin/fm-factory.py act`, with only the fields the pane's keys take; the server writes no note itself.
 - A worker's screen is served only with the cookie, only for a job name the screen marks `live`, and only by a GET that reads through `bin/fm-peek.sh`; nothing on the page can type into a worker.
 - The server never takes the session lock, never drains wakes, and never writes backlog or fleet state.
-  Its only writes are its own `state/web/` files, one-time codes included, the pasted images, and `state/desk-voice/web-front`, kept while a page is in front so the desk floater keeps its reply bubble quiet ([desk-floater.md](desk-floater.md#reply-bubble)); a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
+  Its only writes are its own `state/web/` files, one-time codes included, the pasted images, `state/desk-voice/web-front`, kept while a page is in front so the desk floater keeps its reply bubble quiet, and `state/desk-voice/bubble-on-starship`, the Quiet while I'm on Starship switch ([desk-floater.md](desk-floater.md#reply-bubble)); a button's note, and the look that pressing it records, are written by `bin/fm-factory.py` as they are for the pane.
 
 To revoke access, stop the server, delete `state/web/token`, and start it again; old cookies stop working.
 

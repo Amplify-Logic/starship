@@ -1289,7 +1289,11 @@ struct Offer: Equatable, Decodable {
 /// The bubble also stays quiet while the captain is already looking at
 /// Starship, where it would only repeat what is on screen: a Starship web
 /// page in front, or Terminal's front tab showing the primary Firstmate's own
-/// chat (FloaterModel.lookingAtStarship).
+/// chat (FloaterModel.lookingAtStarship). That quiet has a switch of its own,
+/// "Quiet while I'm on Starship", kept per home in
+/// state/desk-voice/bubble-on-starship: present means off, so a home that
+/// never touched it stays quiet on Starship. bin/fm-web.py's Settings keep
+/// the same file.
 enum Bubble {
     static func switchPath(home: String) -> String {
         (home as NSString).appendingPathComponent("state/desk-voice/bubble-off")
@@ -1302,9 +1306,26 @@ enum Bubble {
     /// Keeps the switch; false when it could not be kept.
     @discardableResult
     static func set(_ on: Bool, home: String) -> Bool {
-        let file = switchPath(home: home)
+        keep(file: switchPath(home: home), present: !on)
+    }
+
+    static func quietSwitchPath(home: String) -> String {
+        (home as NSString).appendingPathComponent("state/desk-voice/bubble-on-starship")
+    }
+
+    static func quietOnStarship(home: String) -> Bool {
+        !FileManager.default.fileExists(atPath: quietSwitchPath(home: home))
+    }
+
+    /// Keeps the quiet switch; false when it could not be kept.
+    @discardableResult
+    static func setQuietOnStarship(_ quiet: Bool, home: String) -> Bool {
+        keep(file: quietSwitchPath(home: home), present: !quiet)
+    }
+
+    private static func keep(file: String, present: Bool) -> Bool {
         let manager = FileManager.default
-        if on {
+        if !present {
             guard manager.fileExists(atPath: file) else { return true }
             return (try? manager.removeItem(atPath: file)) != nil
         }
@@ -1670,6 +1691,9 @@ final class FloaterModel: ObservableObject {
     @Published var dismissedOffer: Offer?
     /// The reply bubble's switch (Bubble), kept per home.
     @Published private(set) var bubbleOn: Bool
+    /// "Quiet while I'm on Starship" (Bubble), kept per home; off, the
+    /// bubble shows on Starship as anywhere else.
+    @Published private(set) var quietOnStarship: Bool
     /// How the reply card moves and how long it stays (ReplyMotion), kept
     /// per home.
     @Published private(set) var motion: ReplyMotion
@@ -1755,11 +1779,13 @@ final class FloaterModel: ObservableObject {
         historyDir = (fmHome as NSString).appendingPathComponent("state/speak-history")
         offerFile = (fmHome as NSString).appendingPathComponent("state/desk-voice/offer.json")
         bubbleOn = Bubble.isOn(home: fmHome)
+        quietOnStarship = Bubble.quietOnStarship(home: fmHome)
         motion = ReplyMotion.load(home: fmHome)
         muteTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshMute()
                 self?.refreshVolume()
+                self?.refreshQuietOnStarship()
             }
         }
     }
@@ -2219,6 +2245,25 @@ final class FloaterModel: ObservableObject {
         }
     }
 
+    /// One click on "Quiet while I'm on Starship" turns that quiet off or
+    /// back on, kept across restarts. Off, a reply shows on Starship too.
+    func setQuietOnStarship(_ quiet: Bool) {
+        quietOnStarship = quiet
+        let kept = Bubble.setQuietOnStarship(quiet, home: fmHome)
+        if mode == .idle {
+            flash(kept ? (quiet ? "Quiet on Starship" : "Shows on Starship") : "Quiet switch not kept")
+        }
+        checkScreen()
+    }
+
+    /// The web page's Settings keep the same switch, so the menu follows it.
+    func refreshQuietOnStarship() {
+        let quiet = Bubble.quietOnStarship(home: fmHome)
+        if quietOnStarship != quiet {
+            quietOnStarship = quiet
+        }
+    }
+
     // MARK: the reply card's motion
 
     /// One click turns the card's motion off, or back to what it was, kept
@@ -2292,9 +2337,12 @@ final class FloaterModel: ObservableObject {
     /// A Starship web page in front (bin/fm-web.py's web-front marker, still
     /// fresh), or the frontmost Terminal tab showing the primary's own chat,
     /// checked as dictation checks it (bin/fm-desk-voice.sh front) and only
-    /// once Automation for Terminal is already allowed; it never asks.
+    /// once Automation for Terminal is already allowed; it never asks. Never
+    /// while "Quiet while I'm on Starship" is off, read from its file each
+    /// time so a change from the web page's Settings counts at once.
     nonisolated static func lookingAtStarship(repoRoot: String, fmHome: String,
                                               front app: NSRunningApplication?) -> Bool {
+        guard Bubble.quietOnStarship(home: fmHome) else { return false }
         if Bubble.webInFront(modified: modified(Bubble.webFrontPath(home: fmHome)), now: Date()) {
             return true
         }
@@ -3146,6 +3194,10 @@ struct FloaterView: View {
             }
             Button(model.muted ? "Unmute voice" : "Mute voice", action: model.toggleMute)
             Button(model.bubbleOn ? "Turn reply bubble off" : "Turn reply bubble on", action: model.toggleBubble)
+            Toggle("Quiet while I'm on Starship", isOn: Binding(
+                get: { model.quietOnStarship },
+                set: { model.setQuietOnStarship($0) }
+            ))
             Picker("Reply motion", selection: Binding(
                 get: { model.motion.style },
                 set: { model.setMotionStyle($0) }
