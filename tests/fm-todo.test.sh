@@ -89,6 +89,10 @@
 #     wait past one working day), the Today list, partners then colleagues
 #     waiting, later this week, one count line each for unchecked lines and
 #     held questions, and a link to the back room, which keeps every line.
+#   - The front page heads the non-partner asks "Waiting on you" and never
+#     names colleagues, unless the home sets colleague_headings, which brings
+#     back "Colleagues asking you" without changing the back room; a value
+#     other than true or false is refused by the renderer and the intake gate.
 # shellcheck disable=SC2016
 set -u
 
@@ -1547,6 +1551,53 @@ front_section() {  # <page file> <heading>
   sed -n "/<h2>$2<\/h2>/,/<\/[ou]l>/p" "$1" | grep -o 'class="who">[^<]*' | sed 's/^class="who">//'
 }
 
+test_a_home_without_colleagues_reads_waiting_on_you() {
+  local h t front room before code
+  h="$TMP_ROOT/front-neutral"
+  new_home "$h"
+  t=$T_0900
+  sidecar "$h" 2026-09-10 \
+'{"key":"k-bill","source":"mail","ref":"bill","class":"obligation","title":"Pay the water bill","asked_at":'"$((t - 2 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-bike","source":"mail","ref":"bike","class":"obligation","kind":"reply","title":"Answer the bike rental","asked_at":'"$((t - 86400))"',"updated":'"$t"'}'
+  render_at "$h" "$T_1000"
+  front="$h/.lavish/today-2026-09-10.html"
+  room="$h/.lavish/today-2026-09-10-all.html"
+  assert_equals 'Pay the water bill|Answer the bike rental|' \
+    "$(front_section "$front" 'Waiting on you' | tr '\n' '|')" 'the open asks are not under Waiting on you'
+  assert_not_contains "$(cat "$front")" 'Colleagues' 'a home without colleagues was told colleagues are asking'
+  assert_not_contains "$(cat "$front")" 'Partners waiting on you' 'a partners heading showed with no partner lines'
+
+  sidecar "$h" 2026-09-10 \
+'{"key":"k-bill","source":"mail","ref":"bill","class":"obligation","title":"Pay the water bill","asked_at":'"$((t - 2 * 86400))"',"updated":'"$t"'},'\
+'{"key":"k-bike","source":"mail","ref":"bike","class":"obligation","kind":"reply","title":"Answer the bike rental","asked_at":'"$((t - 86400))"',"updated":'"$t"'},'\
+'{"key":"k-shop","source":"mail","ref":"shop","class":"obligation","title":"Customer asks about an order","partner":true,"asked_at":'"$((t - 86400))"',"updated":'"$t"'}'
+  render_at "$h" "$T_1000"
+  assert_equals 'Customer asks about an order|' \
+    "$(front_section "$front" 'Partners waiting on you' | tr '\n' '|')" 'a partner line lost its own heading'
+  assert_equals 'Pay the water bill|Answer the bike rental|' \
+    "$(front_section "$front" 'Waiting on you' | tr '\n' '|')" 'the other asks are not under Waiting on you'
+  assert_not_contains "$(cat "$front")" 'Colleagues' 'a home without the setting was told colleagues are asking'
+
+  # The setting brings the colleague wording back on the front page and leaves the back room alone.
+  before=$(cat "$room")
+  printf 'colleague_headings = true\n' >>"$h/config/channel-intake"
+  intake_at "$h" "$T_1000" status >/dev/null || fail 'the intake gate refused the colleague headings setting'
+  render_at "$h" "$T_1000"
+  assert_equals 'Pay the water bill|Answer the bike rental|' \
+    "$(front_section "$front" 'Colleagues asking you' | tr '\n' '|')" 'the setting did not bring back Colleagues asking you'
+  assert_equals 'Customer asks about an order|' \
+    "$(front_section "$front" 'Partners waiting on you' | tr '\n' '|')" 'the setting moved the partner line'
+  assert_not_contains "$(cat "$front")" '<h2>Waiting on you</h2>' 'the neutral heading stayed with the setting on'
+  assert_equals "$before" "$(cat "$room")" 'the setting changed the back room'
+
+  sed -i.bak 's/^colleague_headings = true$/colleague_headings = maybe/' "$h/config/channel-intake"
+  render_at "$h" "$T_1000" 2>/dev/null && code=0 || code=$?
+  expect_code 2 "$code" 'the renderer accepted a colleague headings value that is not true or false'
+  intake_at "$h" "$T_1000" status >/dev/null 2>&1 && code=0 || code=$?
+  expect_code 2 "$code" 'the intake gate accepted a colleague headings value that is not true or false'
+  pass 'a home without colleagues reads Waiting on you, and the setting brings Colleagues back on the front page only'
+}
+
 test_the_today_list_keeps_the_captains_order() {
   local h out id front code
   h="$TMP_ROOT/today-list"
@@ -1645,6 +1696,7 @@ test_the_front_page_is_calm() {
   local h t front room
   h="$TMP_ROOT/front"
   new_home "$h"
+  printf 'colleague_headings = true\n' >>"$h/config/channel-intake"
   t=$T_0900
   sidecar "$h" 2026-09-10 \
 '{"key":"k-down","source":"helpdesk","ref":"down","class":"outage","title":"Machine down at a customer","partner":true,"updated":'"$t"'},'\
@@ -1688,6 +1740,7 @@ test_the_front_page_is_calm() {
 test_the_today_list_keeps_the_captains_order
 test_quiet_lines_leave_after_14_days_and_come_back
 test_the_front_page_is_calm
+test_a_home_without_colleagues_reads_waiting_on_you
 test_done_on_a_held_decision_files_a_reconcile_request
 test_the_recheck_rolls_through_every_line_in_three_working_days
 test_lines_a_pass_could_not_read_do_not_hold_the_share

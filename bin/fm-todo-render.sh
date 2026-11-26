@@ -36,8 +36,10 @@
 #     or longest wait first. A colleague ask never rises.
 #   - Today: the captain's own list, numbered, in his order (bin/fm-todo.sh
 #     owns the Today list), with one box to queue "add X" or "X first".
-#   - Partners waiting on you, then Colleagues asking you: the other open
-#     asks re-checked in the last day, oldest first, ten at most between them.
+#   - Partners waiting on you, then Waiting on you: the other open asks
+#     re-checked in the last day, oldest first, ten at most between them. A
+#     home that sets colleague_headings (below) reads "Colleagues asking you"
+#     in place of "Waiting on you".
 #   - Later this week: up to five asks ending after today and by Sunday 23:59
 #     of this calendar week; an ask ending later stays in its waiting list.
 #   - Any short add-on section that asked for the front page (ADD-ON SECTIONS
@@ -176,7 +178,7 @@
 # installed and no visual tool running.
 #
 # Configuration is read - never written - from the private, gitignored
-# config/channel-intake, and only the four keys this renderer needs:
+# config/channel-intake, and only the five keys this renderer needs:
 #   timezone          IANA zone for the local day and every rendered time
 #   sources_file      private inventory, read only for a source's coverage label
 #   captain_names     words naming the captain; a closure whose actor is one of
@@ -185,6 +187,11 @@
 #   held_decisions_need_you  true to list the home's captain-held backlog
 #                     decisions in "Needs you now" rather than the tooling
 #                     fold (default false)
+#   colleague_headings  true to head the front page's non-partner asks
+#                     "Colleagues asking you" rather than "Waiting on you",
+#                     for a work home (default false); a work home adds
+#                     colleague_headings = true after updating to keep
+#                     "Colleagues asking you"
 # A value this renderer rejects for one of those exits 2, as it does for
 # a missing template. Every other key belongs to bin/fm-channel-intake.sh,
 # which owns that file.
@@ -208,6 +215,7 @@ CFG_TIMEZONE=
 CFG_SOURCES_FILE=
 CFG_CAPTAIN_NAMES=
 CFG_HELD_NEED_YOU=false
+CFG_COLLEAGUE_HEADINGS=false
 
 usage() {
   awk '
@@ -276,6 +284,12 @@ load_config() {
         case "$value" in
           true|false) CFG_HELD_NEED_YOU=$value ;;
           *) die "held_decisions_need_you must be true or false: $value" ;;
+        esac
+        ;;
+      colleague_headings)
+        case "$value" in
+          true|false) CFG_COLLEAGUE_HEADINGS=$value ;;
+          *) die "colleague_headings must be true or false: $value" ;;
         esac
         ;;
     esac
@@ -354,7 +368,7 @@ render_page() {
   fi
   python3 "$SCRIPT_DIR/fm-todo-compose.py" "$STORE" "$morning" "$day" "$epoch" "$CFG_TIMEZONE" \
     "$FM_HOME" "$sidecar" "$INTAKE_DIR" "$CFG_SOURCES_FILE" "$CFG_CAPTAIN_NAMES" "$sections" "$CFG_HELD_NEED_YOU" \
-    "$mode" "$other" || return 1
+    "$CFG_COLLEAGUE_HEADINGS" "$mode" "$other" || return 1
   if [ "$mode" = front ]; then
     printf '</div></body></html>\n'
   else
