@@ -38,6 +38,7 @@ The terminal's Factory pane has its own `h` ([factory-pane.md](factory-pane.md#h
 ### The chat
 
 The chat shows the primary session's conversation as you would read it: only your messages and the first mate's replies, as chat bubbles with Markdown rendered.
+Each bubble carries a small time, in your browser's local time, of when the message landed in the conversation; hover it for the full date and time.
 Everything the first mate did between two messages folds into one quiet line, such as `Looked at 4 things`, that opens on a plain list of those steps.
 Notices typed into the chat by the machinery, such as the desk voice's mailbox ring, are steps in that line, never your messages.
 A picture you pasted, or a screenshot the desk voice sent, shows as a small picture you can click to see in full, never as its file path.

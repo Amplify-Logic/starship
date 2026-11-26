@@ -1923,6 +1923,7 @@ own colours: {"accent":"#47707f","bg":"#ece8e1","ink":"#2a2a28"}, scheme put bac
 }
 
 # The page's rules, fetched as the browser fetches them and run without a page:
+# each message's landing time as a quiet local HH:MM (none when unknown),
 # the chat folded into messages and one quiet line per run of steps, links as
 # short labels, and every key naming the button it stands for, so a key sends
 # the note that button sends, with no look from a project's tab. On 2026-11-22
@@ -1935,9 +1936,11 @@ test_the_page_folds_the_chat_labels_links_and_keys_send_the_buttons_notes() {
   root=$(make_root "$home" "sent: tmux %1")
   port=$(start_web "$home" "$root")
   curl -sS "http://127.0.0.1:$port/view.js" > "$home/view.js"
-  out=$(node - "$home/view.js" <<'JS'
+  out=$(TZ=UTC node - "$home/view.js" <<'JS'
 const V = require(process.argv[2]);
 const out = [];
+const at = V.msgTime('2026-10-06T09:05:30.123Z');
+out.push('time: ' + at.short + ' ' + (at.full.indexOf('2026') >= 0) + ' ' + JSON.stringify([V.msgTime(''), V.msgTime('not a time')]));
 const rows = V.foldChat([
   { kind: 'user', id: 'u1' },
   { kind: 'tool', id: 't1', name: 'Bash', summary: 'ls -la', about: 'List files' },
@@ -1985,7 +1988,8 @@ out.push('tabs: ' + [V.tabScroll(0, 300, 20, 120), V.tabScroll(0, 300, 420, 120)
 console.log(out.join('\n'));
 JS
 ) || fail "the page's rules did not run: $out"
-  assert_equals "$out" 'rows: user / Looked at 4 things (one failed) / assistant / Looking at 1 thing…
+  assert_equals "$out" 'time: 09:05 true [null,null]
+rows: user / Looked at 4 things (one failed) / assistant / Looking at 1 thing…
 steps: List files; Read notes.md; A message waited in the mailbox; Ran a command
 links: the pull request is ready to merge | See the merge request, the issue and example.org.
 link parts: [{"text":"Open "},{"text":"the pull request","url":"https://github.com/a/b/pull/7"},{"text":"."}]
@@ -2003,7 +2007,7 @@ strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read
 beside a call: Garden Journal · waiting 3 h | waiting 3 h | checking | Garden Journal, from near · ready 53 min | from near · ready 53 min | -
 tabs: 0 252 88 0 250' \
     "how the page folds the chat, labels links, what each key sends, what sits beside a call and where the tabs scroll to"
-  pass "the chat folds into messages and quiet lines, links read as short labels, keys send the buttons' notes, a call on its own project's tab does not repeat the project, and a chosen tab is brought into sight"
+  pass "each message shows when it landed, the chat folds into messages and quiet lines, links read as short labels, keys send the buttons' notes, a call on its own project's tab does not repeat the project, and a chosen tab is brought into sight"
 }
 
 # The live line while the first mate works: what it is doing now in plain
