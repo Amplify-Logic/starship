@@ -64,3 +64,4 @@ It starts the server before any view attaches, because a Herdr client attaching 
 - Terminal shows 24-bit color only from macOS 26 on, so on an older macOS the colored badges of the bridge strip and the Factory pane show as blank boxes; set `terminal = Ghostty` there, and the desk says so in a note when it opens a Terminal view.
 - The desk fills in one workspace, the one the layout names.
 - A view opens only when fewer Herdr clients show the session than the layout names views, whatever app those clients run in.
+  A Ghostty window the desk opened counts as a view even before its Herdr client has started, so running `starship` again while a new window is still slow to start never opens a second copy of it.

@@ -207,7 +207,7 @@ if "do script" in script:
     words[0] = "herdr"
     with open(os.environ["FAKE_PS"], "a") as ps:
         n = sum(1 for _ in open(os.environ["FAKE_PS"]))
-        ps.write("%d ttys%03d %s\n" % (900 + n, 100 + n, " ".join(words)))
+        ps.write("%d 1 ttys%03d %s\n" % (900 + n, 100 + n, " ".join(words)))
     print("/dev/ttys%03d" % (100 + n))
 else:
     print(open(os.environ["FAKE_TERMINAL_TABS"]).read(), end="")
@@ -226,10 +226,20 @@ with open(os.environ["FAKE_HERDR_CALLS"], "a") as log:
 with open(os.environ["FAKE_HERDR_CALLS"] + ".env", "a") as log:
     log.write("".join("%s=%s\n" % item for item in sorted(os.environ.items())) + "--\n")
 ghostty = args[args.index("--args") + 1:]
+later_path = os.environ["FAKE_PS"] + ".later"
+# Every process line so far, a slow client's included, so no pid is used twice.
+n = sum(1 for path in (os.environ["FAKE_PS"], later_path) if os.path.exists(path) for _ in open(path))
 with open(os.environ["FAKE_PS"], "a") as ps:
-    n = sum(1 for _ in open(os.environ["FAKE_PS"]))
-    ps.write("%d ?? /Applications/Ghostty.app/Contents/MacOS/ghostty %s\n" % (800 + n, shlex.join(ghostty)))
-    ps.write("%d ttys%03d herdr\n" % (801 + n, 200 + n))
+    ps.write("%d 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty %s\n" % (800 + n, shlex.join(ghostty)))
+    client = "%d %d ttys%03d herdr\n" % (802 + n, 801 + n, 200 + n)
+    # Ghostty starts its command through login(1), so the client sits one process below it.
+    ps.write("%d %d ttys%03d login -flp someone herdr\n" % (801 + n, 800 + n, 200 + n))
+    if not os.environ.get("FAKE_GHOSTTY_SLOW"):
+        ps.write(client)
+if os.environ.get("FAKE_GHOSTTY_SLOW"):
+    # A slow new instance: its window is up, but its Herdr client starts only later.
+    with open(later_path, "a") as later:
+        later.write(client)
 PY
 chmod +x "$FAKE/bin/open"
 
@@ -369,7 +379,7 @@ test_a_restored_session_gets_its_dead_panes_started_in_place() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n3 ?? herdr server\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n3 1 ?? herdr server\n' > "$FAKE_PS"
   local out
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "start the Starship bridge again in its pane" "the dead bridge pane was not restarted"
@@ -409,7 +419,7 @@ test_a_factory_pane_kept_hidden_stays_away() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n3 ?? herdr server\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n3 1 ?? herdr server\n' > "$FAKE_PS"
   printf 'hidden\n' > "$FM_HOME/config/factory-pane"
   out=$(desk open) || fail "open failed: $out"
   assert_contains "$out" "start the Starship bridge again in its pane" "the dead bridge pane was not restarted"
@@ -439,7 +449,7 @@ test_a_session_that_is_not_running_is_started_before_any_view() {
 test_views_count_the_clients_already_showing_the_session() {
   new_case true
   layout
-  printf '7 ttys007 /opt/bin/herdr --session default\n8 ttys008 herdr --session other\n9 ?? herdr server\n' > "$FAKE_PS"
+  printf '7 1 ttys007 /opt/bin/herdr --session default\n8 1 ttys008 herdr --session other\n9 1 ?? herdr server\n' > "$FAKE_PS"
   desk open >/dev/null || fail "open failed"
   assert_no_grep "Big Profile" "$FAKE_HERDR_CALLS" "view 1 was opened although a client already shows the session"
   assert_grep "terminal open exec $FAKE/bin/herdr|Small Profile|10" "$FAKE_HERDR_CALLS" "the missing second view was not opened"
@@ -485,7 +495,7 @@ test_a_pane_with_input_typed_after_its_prompt_is_left_alone() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n' > "$FAKE_PS"
   python3 - "$FAKE_HERDR_STATE" <<'PY'
 import json, sys
 st = json.load(open(sys.argv[1]))
@@ -515,7 +525,7 @@ test_a_shell_still_starting_is_left_alone() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n' > "$FAKE_PS"
   set_screens "w1:p3=" "w1:p4=Last login: Sun Nov 15 09:12:01 on ttys004
 
 "
@@ -535,7 +545,7 @@ test_a_restored_shell_is_given_time_to_reach_its_prompt() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n' > "$FAKE_PS"
   # Just after a restart every restored shell runs its startup at once: the
   # bridge's pane shows nothing for its first reads, then its prompt.
   python3 - "$FAKE_HERDR_STATE" <<'PY'
@@ -598,7 +608,7 @@ test_a_restored_factory_tab_gets_its_worker_copies_back() {
   new_case true
   layout
   restored_session
-  printf '1 ttys001 herdr\n2 ttys002 herdr --session default\n' > "$FAKE_PS"
+  printf '1 1 ttys001 herdr\n2 1 ttys002 herdr --session default\n' > "$FAKE_PS"
   printf 'sample-shop=shop-search\n' > "$FAKE_FACTORY_JOBS"
   python3 - "$FAKE_HERDR_STATE" <<'PY'
 import json, sys
@@ -767,7 +777,7 @@ test_views_open_in_ghostty_with_a_clean_environment() {
   out=$(desk open) || fail "second open failed"
   assert_contains "$out" "nothing changed" "a second open did not count the Ghostty views"
   # A Terminal tab on a Ghostty view's tty would show up if layout asked Terminal.
-  awk 'NR == 2 { printf "/dev/%s\tBasic\t11\n", $2 }' "$FAKE_PS" > "$FAKE_TERMINAL_TABS"
+  awk 'NR == 3 { printf "/dev/%s\tBasic\t11\n", $3 }' "$FAKE_PS" > "$FAKE_TERMINAL_TABS"
   [ -s "$FAKE_TERMINAL_TABS" ] || fail "the fake Terminal tab for a Ghostty view was not written"
   out=$(desk layout) || fail "layout failed"
   assert_contains "$out" "terminal = Ghostty" "layout did not keep the terminal app"
@@ -775,6 +785,31 @@ test_views_open_in_ghostty_with_a_clean_environment() {
 view = | 10" "layout did not read the Ghostty views back with their font sizes"
   assert_not_contains "$out" "Basic" "layout asked Terminal about Ghostty views"
   pass "desk: views open in Ghostty with their font size and without the Herdr pane's environment"
+}
+
+# A new Ghostty instance can be slow to start its Herdr client. Its window is
+# already a view, so a run that meets it opens only the views still missing,
+# rather than a second copy of the slow one: three views stay three windows.
+test_a_slow_ghostty_view_is_never_opened_twice() {
+  new_case true
+  layout "terminal = ghostty
+view = | 11"
+  local out
+  out=$(FAKE_GHOSTTY_SLOW=1 FM_DESK_WAIT=1 desk open 2>&1) && fail "open did not report the slow view: $out"
+  assert_contains "$out" "view 1 in Ghostty (size 13) opened, but no Herdr client showed up in it" \
+    "open did not name the view whose client is slow"
+  [ "$(grep -c 'ghostty open' "$FAKE_HERDR_CALLS")" = 1 ] || fail "the first run did not open exactly one view"
+  # Run again while that first window's client has still not started.
+  out=$(desk open) || fail "the second open failed: $out"
+  assert_not_contains "$out" "open view 1 " "a second run opened the slow view again"
+  assert_contains "$out" "done: open view 2 in Ghostty (size 10)
+  done: open view 3 in Ghostty (size 11)" "a second run did not open only the missing views"
+  [ "$(grep -c 'ghostty open' "$FAKE_HERDR_CALLS")" = 3 ] || fail "three views did not open exactly three windows"
+  cat "$FAKE_PS.later" >> "$FAKE_PS"
+  out=$(desk open) || fail "the third open failed: $out"
+  assert_contains "$out" "nothing changed" "a run after the slow client started changed something"
+  [ "$(grep -c 'ghostty open' "$FAKE_HERDR_CALLS")" = 3 ] || fail "a window opened once every view was there"
+  pass "desk: a Ghostty view whose client is slow to start is never opened twice"
 }
 
 test_terminal_without_24_bit_color_is_named_in_a_note() {
@@ -1079,6 +1114,7 @@ fm_test_run \
   test_layout_save_writes_the_file_only_on_success \
   test_missing_plugins_are_installed_before_their_panes_show \
   test_views_open_in_ghostty_with_a_clean_environment \
+  test_a_slow_ghostty_view_is_never_opened_twice \
   test_terminal_without_24_bit_color_is_named_in_a_note \
   test_a_factory_tab_is_found_by_its_record_whatever_its_label \
   test_a_workspace_the_desk_creates_gets_its_main_tab_named \
