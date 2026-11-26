@@ -1463,6 +1463,62 @@ SH
   pass "the tmux route keeps a lone first mate's session until the new one runs, then closes the old pane"
 }
 
+# A slow start leaves the old pane held open. A later press from the web page
+# or the desk, outside the first mate's tmux, settles it and closes that pane
+# on the server the handover recorded.
+test_settling_a_slow_tmux_start_closes_the_held_pane() {
+  local out status=0 sock real_tmux server_tmux windows
+  real_tmux=$(command -v tmux 2>/dev/null) || {
+    printf 'skip: tmux absent; settled slow-start pane check not run\n'
+    return 0
+  }
+  : > "$SIGNAL_LOG"
+  : > "$LAUNCH_LOG"
+  write_enabled_config
+  write_active claude-fable
+  write_quota "$TMP_ROOT/quota.json" 90
+  sock="$TMP_ROOT/slow.sock"
+  ln -sf "$real_tmux" "$FAKEBIN/tmux"
+  cat > "$FAKEBIN/pi" <<'SH'
+#!/bin/bash
+printf 'launch pi\n' >> "$LAUNCH_LOG"
+printf '%s\n' "$$" >> "$HOME_FIX/holders"
+exec "$HOLDER_BIN" -c '
+  sleep 3
+  "$ROOT/bin/fm-lock.sh" || exit 1
+  while :; do sleep 1; done
+'
+SH
+  chmod +x "$FAKEBIN/pi"
+  # shellcheck disable=SC2016 # the holder expands its own $$ and $HOME_FIX
+  PATH="$FAKEBIN:/usr/bin:/bin" "$real_tmux" -S "$sock" -f /dev/null new-session -d -s slow \
+    'exec bash -c '\''printf "%s\n" "$$" > "$HOME_FIX/state/.lock"; while :; do sleep 1; done'\'' claude-primary-handoff-test'
+  for _ in {1..50}; do [ -s "$HOME_FIX/state/.lock" ] && break; sleep 0.1; done
+  cat "$HOME_FIX/state/.lock" >> "$HOME_FIX/holders"
+  server_tmux="$sock,$("$real_tmux" -S "$sock" display-message -p '#{pid}'),0"
+  out=$(run_execute env -u FM_HANDOFF_LAUNCH_CMD -u TMUX_PANE -u HERDR_PANE_ID TMUX="$server_tmux" \
+    FM_HANDOFF_STARTUP_SECS=1 "$ROOT/bin/fm-primary-handoff.sh" execute --to pi 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the slow start should time out: $out"
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=launching' "the slow start left no launching record"
+  for _ in {1..80}; do
+    grep -q '^pid=' "$HOME_FIX/state/.lock-handoff" 2>/dev/null && break
+    sleep 0.1
+  done
+  rm -f "$HOME_FIX/config/primary-handoff"
+  out=$(run_execute env -u TMUX -u TMUX_PANE "$ROOT/bin/fm-primary-handoff.sh" fresh check --from desk 2>&1) || true
+  assert_contains "$(cat "$HOME_FIX/state/.primary-handoff")" 'phase=complete' "the press did not settle the slow start: $out"
+  windows=$("$real_tmux" -S "$sock" list-windows -t slow -F '#{window_name}:#{pane_dead}' 2>&1)
+  "$real_tmux" -S "$sock" kill-server 2>/dev/null || true
+  cleanup_holders
+  rm -f "$FAKEBIN/tmux" "$sock" "$HOME_FIX/state/.primary-fresh"
+  printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/pi"
+  case "$windows" in
+    FIRSTMATE*:0) ;;
+    *) fail "settling the slow start should leave only the new, live first mate window: $windows" ;;
+  esac
+  pass "settling a slow tmux start from outside tmux closes the old held pane"
+}
+
 test_recovery_waits_for_inflight_ack_publication() {
   local out recovery_pid i
   : > "$LAUNCH_LOG"
@@ -1928,6 +1984,7 @@ test_recovery_waits_for_inflight_ack_publication
 
 test_tmux_route_carries_acknowledgement
 test_tmux_route_survives_a_lone_first_mate_window
+test_settling_a_slow_tmux_start_closes_the_held_pane
 
 test_pending_startup_reuses_launcher
 test_reused_outgoing_identity_is_not_signalled

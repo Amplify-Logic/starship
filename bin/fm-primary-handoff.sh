@@ -336,6 +336,7 @@ cmd_execute() (
   herdr_pane=''
   herdr_workspace=''
   tmux_pane=''
+  tmux_socket=''
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -603,7 +604,7 @@ fresh_ask_age() {
 fresh_refusal() {  # <step> <from>
   local step=$1 from=$2 coord age profile
   # fm_handoff_route_detect sets these; they stay this function's own.
-  local route='' herdr_session='' herdr_pane='' herdr_workspace='' tmux_pane=''
+  local route='' herdr_session='' herdr_pane='' herdr_workspace='' tmux_pane='' tmux_socket=''
   if fm_handoff_afk_active; then
     printf 'The first mate is in away or quiet mode. Come back first, then start a fresh session.\n'
     return 0
