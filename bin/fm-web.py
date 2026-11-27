@@ -935,8 +935,12 @@ def _starts_turn(text: str) -> bool:
     return not (tag and tag.group(1) in BASH_MODE_TAGS)
 
 
+def _unpasted(text: str) -> str:
+    return PASTED_CONTENT_RE.sub(lambda m: m.group(1), text)
+
+
 def _words(text: str) -> str:
-    return " ".join(text.split())
+    return " ".join(_unpasted(text).split())
 
 
 class Conversation:
@@ -1060,7 +1064,7 @@ class Conversation:
         return waiting
 
     def _render_user(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
-        text = PASTED_CONTENT_RE.sub(lambda m: m.group(1), item.pop("_text")).strip()
+        text = _unpasted(item.pop("_text")).strip()
         text, paths = owner_pictures(FRONT_LINE_RE.sub("", text, count=1), self.shots)
         item["html"] = render_markdown(text) if text.strip() else ""
         for index, (media, data) in enumerate(blobs or []):

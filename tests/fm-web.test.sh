@@ -1601,6 +1601,13 @@ test_the_owners_line_breaks_show_and_the_paste_wrapper_does_not() {
   assert_contains "$(jq -r '.items[0].html' <<<"$out")" "merge the PR" "a typed multi-line message shows"
   assert_equals "$(jq -r '.items[1].html' <<<"$out")" "<p>First part.</p><p>Second part</p>" \
     "a folded paste shows its words with the blank line, without the wrapper"
+  {
+    jq -nc '{type:"queue-operation",operation:"enqueue",timestamp:"2026-11-27T17:19:00Z",content:"Third part.\n\nFourth part"}'
+    jq -nc '{type:"user",uuid:"u3",origin:{kind:"human"},message:{role:"user",content:"<pasted_content id=\"9950\">\nThird part.\n\nFourth part\n</pasted_content id=\"9950\">"}}'
+  } >> "$(transcript "$home")"
+  out=$(conversation "$home") || fail "conversation read failed"
+  assert_equals "$(jq -r '.waiting | length' <<<"$out")" "0" \
+    "a queued message read in as a folded paste no longer waits"
   pass "the owner's line breaks show, and Claude's paste wrapper does not"
 }
 
