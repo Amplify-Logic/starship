@@ -1552,6 +1552,11 @@ test_a_promise_stays_its_own_line_and_closes_with_evidence() {
   out=$(page "$h" 2026-09-13)
   assert_not_contains "$(needs_order "$out")" 'you promised the repair report' 'a closed promise is still in the main list'
   assert_contains "$out" 'report sent in reply to Quinn on 13 Sep' 'the closing evidence is not shown'
+  out=$(printf '%s\n' "$out" | grep "id=\"item-$promise\"")
+  assert_contains "$out" 'class="closed"' 'the closed promise has no closed row'
+  assert_not_contains "$out" 'overdue' 'a closed promise is still labelled overdue'
+  assert_not_contains "$out" 'due Fri' 'a closed promise still shows its due day'
+  assert_not_contains "$out" '2026-09-11' 'a closed promise shows its raw due mark'
   todo_at "$h" "$T_1500" list --state open | cut -f1 | grep -qx "$ask" || fail 'closing the promise closed the ask'
   # A follow-up agreed in chat goes on the captain's own list, then closes with evidence.
   todo_at "$h" "$T_1000" today add 'send Quinn the service manual' >/dev/null || fail 'today add failed'

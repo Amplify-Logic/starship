@@ -430,11 +430,18 @@ def due_label(day):
 
 def marks(rec):
     """The lines an add-on put on the row (fm-todo.sh mark), in name order; a
-    `due` day shows as a label, never as its raw text."""
+    `due` day shows as a label, never as its raw text, and only while the line
+    is still owed."""
     day = due_day(rec)
-    return ''.join(due_label(day) if name == 'due' and day
-                   else f'<span class="prov unv">{brief((m or {}).get("text") or "", 120)}</span>'
-                   for name, m in sorted((rec.get('marks') or {}).items()) if (m or {}).get('text'))
+    owed = rec.get('state') in ('open', 'waiting')
+    out = []
+    for name, m in sorted((rec.get('marks') or {}).items()):
+        text = (m or {}).get('text')
+        if not text or (name == 'due' and not owed):
+            continue
+        out.append(due_label(day) if name == 'due' and day
+                   else f'<span class="prov unv">{brief(text, 120)}</span>')
+    return ''.join(out)
 
 
 def row(rec, reply=True):
