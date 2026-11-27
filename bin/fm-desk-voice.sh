@@ -1172,7 +1172,7 @@ prompt() (
 # PRIMARY_SUBMIT_EXPECT_HOME counts the pane proven only when the lock holder
 # runs for that home (holder_home_is). Its subshell scopes the pane environment and writer lock.
 primary_submit() (  # <line> [<app> <tty> | --focused]
-  local backend target root verdict draft claude composer tries words=$1
+  local backend target root verdict draft claude composer tries typed=$1
   local writer_lock
   writer_lock=$(fm_pane_writer_lock_path "$STATE")
   prove_primary_pane "${PRIMARY_SUBMIT_EXPECT_HOME:-}" || return 1
@@ -1196,18 +1196,18 @@ primary_submit() (  # <line> [<app> <tty> | --focused]
   esac
   ! shows_selection_dialog "$backend" "$target" || return 2
   # The captain's own line breaks reach only a Claude primary (plain_lines).
-  [ -z "${PRIMARY_SUBMIT_LINES:-}" ] || [ "$claude" != 1 ] || words=$PRIMARY_SUBMIT_LINES
+  [ -z "${PRIMARY_SUBMIT_LINES:-}" ] || [ "$claude" != 1 ] || typed=$PRIMARY_SUBMIT_LINES
   if [ "${PRIMARY_SUBMIT_RING:-0}" = 1 ]; then
     ! shows_stash "$backend" "$target" || return 2
     verdict=$(submit_ring "$backend" "$target" "$1") || verdict=send-failed
   elif [ "$draft" = 1 ] && [ "$claude" = 1 ]; then
-    verdict=$(send_past_draft "$backend" "$target" "$words") || verdict=send-failed
-  elif [ "$words" != "$1" ] && [ "${PRIMARY_SUBMIT_PASTE:-0}" = 1 ]; then
-    verdict=$(paste_submit "$backend" "$target" "$words") || verdict=send-failed
+    verdict=$(send_past_draft "$backend" "$target" "$typed") || verdict=send-failed
+  elif [ "$typed" != "$1" ] && [ "${PRIMARY_SUBMIT_PASTE:-0}" = 1 ]; then
+    verdict=$(paste_submit "$backend" "$target" "$typed") || verdict=send-failed
   else
     tries=3
     [ "$claude" != 1 ] || ! shows_stash "$backend" "$target" || tries=1
-    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$words" "$tries" 0.4 0.5) || verdict=send-failed
+    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$typed" "$tries" 0.4 0.5) || verdict=send-failed
   fi
   printf '%s\t%s\t%s\n' "${verdict:-send-failed}" "$backend" "$target"
 )
