@@ -60,7 +60,9 @@ transcript() {  # <home> [<session>]
 }
 
 # A root with the real server linked in and stand-ins for what it runs:
-# fm-desk-voice.sh records its arguments, and for suggestion prints the home's
+# fm-desk-voice.sh records its arguments; for stop it records the call in
+# stop.asks, prints stop.out (else a stopped outcome) and appends stop.writes,
+# when there is one, to the transcript, as Claude records a cancelled turn; for suggestion it prints the home's
 # suggestion file (each waiting the seconds in send.delay or suggestion.delay,
 # when there is one, after reading), and for prompt the home's prompt file,
 # logging each read in prompt.reads; fm-factory.py prints the home's
@@ -156,6 +158,12 @@ if [ "\$*" = prompt ]; then
   cat "$home/prompt" 2>/dev/null
   exit 0
 fi
+if [ "\$*" = stop ]; then
+  printf 'stop FM_HOME=%s\n' "\$FM_HOME" >> "$home/stop.asks"
+  if [ -f "$home/stop.out" ]; then cat "$home/stop.out"; else printf 'stopped: tmux %%1\n'; fi
+  [ ! -f "$home/stop.writes" ] || cat "$home/stop.writes" >> "$home/claude/projects/-fake-project/$SESSION.jsonl"
+  exit 0
+fi
 cat > "$home/desk-voice.stdin"
 printf '%s\n' "\$@" > "$home/desk-voice.args"
 printf 'FM_HOME=%s\n' "\$FM_HOME" >> "$home/desk-voice.args"
@@ -206,6 +214,10 @@ serve_home() {  # <home>
   port=$(start_web "$1" "$root")
   printf '%s\n' "$port" > "$1/web.test-port"
   sign_in "$1" "$port" > "$1/web.test-cookie"
+}
+
+conversation_of() {  # <port> <cookie>
+  curl -sS --cookie "$2" "http://127.0.0.1:$1/api/conversation"
 }
 
 conversation() {  # <home>
@@ -1704,6 +1716,55 @@ fresh ask --from web FM_HOME=$home" "$(cat "$home/fresh.asks")" "each step runs 
   pass "the Fresh session button asks first and shows each refusal in plain words"
 }
 
+# Esc stops the first mate's running turn: there is no Stop button, and the
+# press goes only through bin/fm-desk-voice.sh stop, behind the same POST guards
+# as a send, and only while a turn runs; the page is told in plain words whether
+# the conversation then shows the turn stopped.
+test_esc_stops_a_running_turn_and_says_so() {
+  local home root port cookie csrf url bad out file
+  home=$(make_home stop)
+  file=$(transcript "$home")
+  root=$(make_root "$home" "sent: tmux %1")
+  port=$(FM_WEB_STOP_CONFIRM_SECONDS=1 start_web "$home" "$root")
+  cookie=$(sign_in "$home" "$port")
+  csrf=$(csrf_of "$port" "$cookie")
+  url="http://127.0.0.1:$port/api/stop"
+  out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")
+  assert_contains "$out" 'id="escStop"' "the live line says esc stops it"
+  case "$out" in *'>Stop</button>'*) fail "the page must carry no Stop button" ;; esac
+  assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{}' "$url")" "no CSRF header"
+  for bad in '{"x":1}' 'nope' '[]'; do
+    assert_equals "400" "$(status_of -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data "$bad" "$url")" "refused: $bad"
+  done
+  assert_absent "$home/stop.asks" "a refused request presses nothing"
+  write_basic_transcript "$file"
+  printf '%s\n' '{"type":"system","subtype":"turn_duration","uuid":"s9"}' >> "$file"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{}' "$url")
+  assert_equals "true idle" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "an idle first mate has nothing to stop"
+  assert_absent "$home/stop.asks" "nothing is pressed while no turn runs"
+  {
+    printf '%s\n' '{"type":"user","uuid":"u1","timestamp":"2026-10-06T10:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"a long ask"}}'
+    printf '%s\n' '{"type":"assistant","uuid":"a1","timestamp":"2026-10-06T10:00:09Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 99","description":"Wait"}}]}}'
+  } > "$file"
+  assert_equals "busy" "$(conversation_of "$port" "$cookie" | jq -r .state)" "the turn runs"
+  printf '%s\n' '{"type":"user","uuid":"r1","timestamp":"2026-10-06T10:00:12Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"The user doesn'"'"'t want to proceed.","is_error":true},{"type":"text","text":"[Request interrupted by user for tool use]"}]}}' > "$home/stop.writes"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{}' "$url")
+  assert_equals "true stopped" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "Esc stops the running turn"
+  assert_equals "Stopped. The first mate is waiting for you." "$(jq -r .said <<<"$out")" "the page says it stopped"
+  assert_equals "stop FM_HOME=$home" "$(cat "$home/stop.asks")" "the press goes once through desk-voice stop, for this home"
+  assert_equals "idle" "$(conversation_of "$port" "$cookie" | jq -r .state)" "the conversation shows the turn ended"
+  rm -f "$home/stop.writes" "$home/stop.asks"
+  printf '%s\n' '{"type":"user","uuid":"u2","timestamp":"2026-10-06T10:01:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"another ask"}}' >> "$file"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{}' "$url")
+  assert_equals "false unconfirmed" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "a turn that keeps running is not called stopped"
+  assert_contains "$(jq -r .said <<<"$out")" "still shows as working" "the page says plainly it did not see it stop"
+  printf 'unreachable\n' > "$home/stop.out"
+  out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{}' "$url")
+  assert_equals "false unreachable" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "an unreachable terminal is said plainly"
+  assert_contains "$(jq -r .said <<<"$out")" "could not reach the first mate's terminal" "in plain words"
+  pass "Esc stops a running turn through desk-voice alone and says whether it stopped"
+}
+
 # Factories can be taken off Control Centre with one click and brought back
 # with one more, and the choice is the home's: it is kept in state/web/, so a
 # reload, another browser and a restarted server all draw the page the same way.
@@ -2220,6 +2281,7 @@ test_settings_are_kept_in_the_browser
 test_the_voice_in_settings_is_the_homes_through_fm_speak
 test_factories_hide_and_come_back_for_the_whole_home
 test_fresh_session_asks_first_and_shows_plain_refusals
+test_esc_stops_a_running_turn_and_says_so
 test_a_page_in_front_marks_the_home_for_the_floater
 test_the_front_beats_keep_arriving_for_hours
 test_the_floater_quiet_switch_is_kept_for_the_home

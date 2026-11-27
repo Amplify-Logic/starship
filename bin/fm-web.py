@@ -112,6 +112,11 @@ state/desk-voice/bubble-on-starship (starship_quiet, floater_change). The Fresh 
 button asks first, then POST /api/fresh {"step": "check"|"ask"} hands the
 press to `bin/fm-primary-handoff.sh fresh <step> --from web`, which owns every
 refusal and the ask itself (fresh_change); the page only shows its words.
+While the first mate works, Esc (where it takes no typed words; there is no
+button) cancels its turn as Esc in the terminal does: POST /api/stop hands the
+press to `bin/fm-desk-voice.sh stop`, which presses the interrupt key into the
+first mate's own pane and types no text, then reads the conversation until it
+shows the turn ended, and says plainly whether it stopped (stop_turn).
 VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
 steps, links shown as short labels, and what each key does, which is always
@@ -164,6 +169,10 @@ SEND_BODY_MAX = 24 * 1024 * 1024
 SEND_IMAGES_MAX = 8
 SEND_TEXT_MAX = 200000
 SEND_TIMEOUT_SECONDS = 90
+STOP_TIMEOUT_SECONDS = 20
+# How long a Stop waits for the conversation to show the turn ended.
+STOP_CONFIRM_SECONDS = float(os.environ.get("FM_WEB_STOP_CONFIRM_SECONDS") or 10.0)
+STOP_POLL_SECONDS = 0.25
 # A direct-line send waits up to 120 seconds to type, 60 to finish, and 60 to
 # close a held call (bin/fm-direct-line.sh); this bounds it with room to spare.
 DIRECT_SEND_TIMEOUT_SECONDS = 300
@@ -2148,6 +2157,47 @@ def desk_voice_send(home: Path, root: Path, text: str, images: List[Path]) -> Di
     return {"outcome": "failed", "detail": outcome}
 
 
+STOP_WORDS = {
+    "unreachable": "Not stopped: Starship could not reach the first mate's terminal.",
+    "unsupported": "Not stopped: this first mate cannot be stopped from the page; press Esc in its terminal.",
+    "contended": "Not stopped: a message was being typed into the first mate's chat. Press Esc again.",
+}
+
+
+def stop_turn(home: Path, root: Path, reading: Any) -> Tuple[int, Dict[str, Any]]:
+    """Stop the first mate's turn, as Esc in the terminal does.
+
+    Only a turn the conversation shows under way is stopped. The key goes
+    through bin/fm-desk-voice.sh stop, the one path into the first mate's
+    pane, whose first line is its outcome. Then <reading> (the conversation,
+    read afresh each call) must show the turn ended within
+    STOP_CONFIRM_SECONDS, or the page says it did not see it stop."""
+    if reading().get("state") != "busy":
+        return 200, {"ok": True, "state": "idle", "said": "The first mate was not working on anything, so there was nothing to stop."}
+    env = dict(os.environ)
+    env["FM_HOME"] = str(home)
+    env["FM_ROOT_OVERRIDE"] = str(root)
+    try:
+        proc = subprocess.run([str(root / "bin" / "fm-desk-voice.sh"), "stop"], env=env, capture_output=True,
+                              encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                              timeout=STOP_TIMEOUT_SECONDS)
+        outcome = (proc.stdout.splitlines() or [""])[0].strip() if proc.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        outcome = ""
+    if outcome in STOP_WORDS:
+        return 200, {"ok": False, "state": outcome, "said": STOP_WORDS[outcome]}
+    if not outcome.startswith("stopped:"):
+        return 502, {"ok": False, "state": "failed", "said": "Not stopped: Esc could not be pressed in the first mate's terminal."}
+    deadline = time.monotonic() + STOP_CONFIRM_SECONDS
+    while True:
+        if reading().get("state") != "busy":
+            return 200, {"ok": True, "state": "stopped", "said": "Stopped. The first mate is waiting for you."}
+        if time.monotonic() >= deadline:
+            return 200, {"ok": False, "state": "unconfirmed",
+                         "said": "Esc was pressed, but the first mate still shows as working. Press Esc again, or check its terminal."}
+        time.sleep(STOP_POLL_SECONDS)
+
+
 VOICE_TIMEOUT_SECONDS = 15
 
 
@@ -2574,6 +2624,7 @@ class WebState:
         self.prompt = prompt_reader(home, root)
         self.send_lock = threading.Lock()
         self.act_lock = threading.Lock()
+        self.stop_lock = threading.Lock()
         self.front = Presence(home)
 
 
@@ -2854,7 +2905,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self._text(403, "forbidden", close=True)
             return
         path = urlparse(self.path).path
-        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories", "/api/floater", "/api/fresh"):
+        if path not in ("/api/send", "/api/act", "/api/voice", "/api/front", "/api/factories", "/api/floater", "/api/fresh",
+                        "/api/stop"):
             self._text(404, "not found", close=True)
             return
         limit = {"/api/send": SEND_BODY_MAX, "/api/front": FRONT_BODY_MAX}.get(path, ACT_BODY_MAX)
@@ -2893,6 +2945,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/act":
             self._act(body)
             return
+        if path == "/api/stop":
+            self._stop(body)
+            return
         try:
             text, blobs, mate = decode_send_body(body)
             to_mate = next((m for m in STATE.mates.list() if m["id"] == mate), None) if mate else None
@@ -2913,6 +2968,26 @@ class WebHandler(BaseHTTPRequestHandler):
             except (OSError, subprocess.SubprocessError) as exc:
                 result = {"outcome": "failed", "detail": str(exc)}
             self._json(200 if result["outcome"] != "failed" else 502, result)
+
+    def _stop(self, body: bytes) -> None:
+        try:
+            ask = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            ask = None
+        if ask != {}:
+            self._json(400, {"ok": False, "state": "failed", "said": "Send an empty request to stop."})
+            return
+        # One Stop at a time: a second press while one is under way waits for nothing.
+        if not STATE.stop_lock.acquire(blocking=False):
+            self._json(200, {"ok": False, "state": "stopping", "said": "Already stopping the first mate."})
+            return
+        try:
+            status, answer = stop_turn(STATE.home, STATE.root, STATE.transcript.get)
+        except OSError:
+            status, answer = 502, {"ok": False, "state": "failed", "said": "Not stopped: the conversation could not be read."}
+        finally:
+            STATE.stop_lock.release()
+        self._json(status, answer)
 
     def _act(self, body: bytes) -> None:
         try:
@@ -3139,6 +3214,8 @@ details.quiet.err summary{color:var(--you)}
 .msg.waiting .wait{margin-top:.25rem;font-size:.78rem;color:var(--ink-2)}
 .live .what{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .live .took{flex:none;font-variant-numeric:tabular-nums}
+.live .esc{flex:none;color:var(--ink-2)}
+.live .esc[hidden]{display:none}
 .live .ask{display:none}
 .live.asks{flex-wrap:wrap;color:var(--you);font-weight:600}
 .live.asks .dots i{background:var(--you)}
@@ -3945,7 +4022,7 @@ VIEW_JS = r"""
     ['r', 'Read the report'],
     ['s', 'Switch who steers the project'],
     ['h', 'Hide Factories on Control Centre, or show it again'],
-    ['esc', 'Back, or cancel'],
+    ['esc', 'Back, or cancel; while the first mate works, stop it'],
     ['?', 'Show or hide this list']];
 
   /* The one line of keys at the bottom, for what is open now. */
@@ -4140,6 +4217,8 @@ let shown=[],since=null,working=false,seenAt=0;
 let waiting=[],chatState='offline';
 /* The prompt the terminal waits on a person for, or null. */
 let asking=null;
+/* Whether a Stop is under way (stopTurn). */
+let stopping=false;
 const KEY_NAMES={Enter:'↵',Escape:'esc'};
 
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;
@@ -4216,6 +4295,7 @@ function render(items){
 function drawLive(){
   const live=$('live');
   const ask=V.promptWords(asking);
+  drawStop();
   if(!working&&!ask){if(!live.hidden)live.hidden=true;return;}
   const stick=live.hidden&&atBottom();
   const start=Date.parse(since||'');
@@ -4225,6 +4305,30 @@ function drawLive(){
   live.querySelector('.took').textContent=working?V.took(Date.now()-(isNaN(start)?seenAt:start)):'';
   if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
 }
+/* Esc stops the first mate's turn, as Esc does in its terminal; there is no button. Only
+   while the first mate itself works (not a second mate's chat) and its chat is on screen.
+   The server presses Esc there (bin/fm-desk-voice.sh stop) and says, in plain words,
+   whether the conversation then shows the turn stopped. */
+function canStop(){return working&&!talkTo&&!stopping&&!!$('chatPane').offsetParent&&!$('home').hidden;}
+function drawStop(){
+  const h=$('escStop'),show=working&&!talkTo;
+  if(h.hidden===show)h.hidden=!show;
+  h.textContent=stopping?'stopping…':'esc to stop';
+}
+async function stopTurn(){
+  if(!canStop())return;
+  stopping=true;drawStop();result.className='';result.textContent='Stopping the first mate…';
+  let a=null;
+  try{const r=await fetch('/api/stop',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:'{}'});
+    a=await r.json();}catch(e){a={ok:false,said:'Not stopped: the page lost its connection.'};}
+  stopping=false;
+  result.className=a&&a.ok?'':'failed';result.textContent=(a&&a.said)||'Not stopped.';
+  drawStop();
+  if(!polling){clearTimeout(pollTimer);pollTimer=setTimeout(poll,0);}
+}
+/* Esc never stops where typed words sit: only outside a typing box, or in an empty message box. */
+function escStops(t){return canStop()&&(!typing(t)||(t===input&&!input.value));}
 /* Each waiting message as a faded bubble below the live line; the transcript
    showing it read in drops it here as its normal bubble appears above. */
 function renderWaiting(){
@@ -5001,6 +5105,7 @@ document.addEventListener('keydown',e=>{
     if(!$('settings').hidden){closeSettings();return;}
     if(!$('freshAsk').hidden){perform({act:'freshno'});return;}
     if(confirming||talk){perform({act:'cancel'});return;}
+    if(escStops(t)){e.preventDefault();stopTurn();return;}
     if(typing(t))return;
   }
   /* Keys work only when no typing box has the keyboard, so typing is never taken. */
@@ -5261,7 +5366,8 @@ def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = F
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div>
 <div id="live" class="live" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
-<span class="what" role="status"></span><span class="took" aria-hidden="true"></span><span class="ask"></span></div>
+<span class="what" role="status"></span><span class="took" aria-hidden="true"></span>
+<span class="esc" id="escStop" hidden>esc to stop</span><span class="ask"></span></div>
 <div id="waiting"></div>
 <p id="note" class="note"></p></div></div>
 <div id="compose"><div class="wrap">
@@ -5411,9 +5517,11 @@ def watch_code(port: int) -> None:
         argv = restart_argv(port)
         STATE.send_lock.acquire()
         STATE.act_lock.acquire()
+        STATE.stop_lock.acquire()
         try:
             os.execv(argv[0], argv)
         except OSError as exc:
+            STATE.stop_lock.release()
             STATE.act_lock.release()
             STATE.send_lock.release()
             refused = now

@@ -66,6 +66,10 @@ The same rule holds for that question. A yes or no is a permission and never sho
 A question Claude Code shows before the session starts, such as the folder trust question, is not covered yet: the page cannot find the first mate's terminal until Starship's startup has run, so it still says `Not running` then.
 The page reads that prompt from the first mate's own terminal screen every second or two through `bin/fm-desk-voice.sh prompt`, which types nothing, so the line clears within a couple of seconds of the answer.
 The page only shows the prompt; answer it in the terminal.
+Esc stops the first mate's turn from the page, as Esc does in its terminal; there is no Stop button, and the live line says `esc to stop` while it works.
+Esc stops only while the first mate itself is working and its chat is on screen, and never where typed words would be lost: it does nothing in a message box that holds words, and an open sheet, confirmation or project tab takes Esc first.
+The page then says in plain words whether it stopped, or that Esc was pressed but the first mate still shows as working, or why nothing was pressed.
+`POST /api/stop` hands the press to `bin/fm-desk-voice.sh stop`, which presses the interrupt key into the first mate's own pane and types no text, and the page counts it stopped only once the conversation shows the turn ended.
 A message you send while the first mate works, from the page, the terminal or the desk floater, shows at once below that line as a faded bubble marked `Waiting, Firstmate will read it next`.
 When the first mate reads it in, it becomes an ordinary message in the chat, shown once.
 If it is still not read in after two minutes, or the first mate is no longer working, the mark says `Still waiting, Firstmate has not read it yet` and the bubble stays.
