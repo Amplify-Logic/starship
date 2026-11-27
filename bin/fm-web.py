@@ -119,8 +119,10 @@ first mate's own pane and types no text, then reads the conversation until it
 shows the turn ended, and says plainly whether it stopped (stop_turn).
 VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
-steps, links shown as short labels, and what each key does, which is always
-the act of the button it stands for.
+steps, links shown as short labels, what each key does, which is always
+the act of the button it stands for, and when the chat follows its end: only
+while the reader sits at its very end, so a reader scrolled up even a little
+stays put as new words arrive below.
 
 While a page is what the owner is looking at (its tab visible and its window
 focused), it says so with POST /api/front {"page": <its own random id>,
@@ -4129,6 +4131,12 @@ VIEW_JS = r"""
     return left;
   }
 
+  /* Whether the chat is scrolled to its very end, so what arrives below may keep it there.
+     A reader scrolled up by even a little is left where they are. */
+  function atEnd(height, top, client) {
+    return height - top - client <= 2;
+  }
+
   /* A note sent from a project's own tab is no look, as a key in a factory's tab is not. */
   function withLook(ask, tab) {
     if (tab === 'home') return ask;
@@ -4140,7 +4148,7 @@ VIEW_JS = r"""
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, msgTime: msgTime, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
-              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
+              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMView = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -4254,7 +4262,13 @@ function linked(text,live){const frag=document.createDocumentFragment();
 function urls(text){return V.linkParts(text).filter(p=>p.url);}
 
 /* ---- the first mate's conversation ---- */
-function atBottom(){return log.scrollHeight-log.scrollTop-log.clientHeight<80;}
+/* The chat follows what arrives below only while the reader is at its very end: scrolling up
+   even a little stops that, and only scrolling back to the end starts it again. While it does
+   not follow, nothing that arrives or grows below moves the view. */
+let following=true;
+log.addEventListener('scroll',()=>{following=V.atEnd(log.scrollHeight,log.scrollTop,log.clientHeight);},{passive:true});
+log.addEventListener('wheel',e=>{if(e.deltaY<0)following=false;},{passive:true});
+function toEnd(){log.scrollTop=log.scrollHeight;following=true;}
 function pictures(item){
   const box=el('div','pics');
   (item.pictures||[]).forEach(id=>{const a=el('a');a.href='/api/picture/'+encodeURIComponent(id);a.target='_blank';a.rel='noopener';
@@ -4263,7 +4277,7 @@ function pictures(item){
 }
 function render(items){
   const open=new Set(Array.from(wrap.querySelectorAll('details[open]')).map(d=>d.dataset.id));
-  const stick=atBottom();
+  const stick=following,top=log.scrollTop;
   const frag=document.createDocumentFragment();
   for(const row of V.foldChat(items)){
     if(row.kind==='quiet'){
@@ -4290,20 +4304,20 @@ function render(items){
     }
   }
   wrap.replaceChildren(frag);
-  if(stick)log.scrollTop=log.scrollHeight;
+  if(stick)toEnd();else log.scrollTop=top;
 }
 function drawLive(){
   const live=$('live');
   const ask=V.promptWords(asking);
   drawStop();
   if(!working&&!ask){if(!live.hidden)live.hidden=true;return;}
-  const stick=live.hidden&&atBottom();
+  const stick=live.hidden&&following;
   const start=Date.parse(since||'');
   live.classList.toggle('asks',!!ask);
   live.querySelector('.what').textContent=ask?ask.what:V.nowWords(shown);
   live.querySelector('.ask').textContent=ask?ask.ask:'';
   live.querySelector('.took').textContent=working?V.took(Date.now()-(isNaN(start)?seenAt:start)):'';
-  if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
+  if(live.hidden){live.hidden=false;if(stick)toEnd();}
 }
 /* Esc stops the first mate's turn, as Esc does in its terminal; there is no button. Only
    while the first mate itself works (not a second mate's chat) and its chat is on screen.
@@ -4332,14 +4346,14 @@ function escStops(t){return canStop()&&(!typing(t)||(t===input&&!input.value));}
 /* Each waiting message as a faded bubble below the live line; the transcript
    showing it read in drops it here as its normal bubble appears above. */
 function renderWaiting(){
-  const box=$('waiting');const stick=atBottom();const frag=document.createDocumentFragment();
+  const box=$('waiting');const stick=following,top=log.scrollTop;const frag=document.createDocumentFragment();
   for(const item of waiting){
     const msg=el('div','msg user waiting');const b=el('div','bubble');b.innerHTML=item.html||'';
     if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
     msg.appendChild(b);msg.appendChild(el('div','wait',V.waitingWords(item,chatState,Date.now())));frag.appendChild(msg);
   }
   box.replaceChildren(frag);
-  if(stick)log.scrollTop=log.scrollHeight;
+  if(stick)toEnd();else log.scrollTop=top;
 }
 function drawWaiting(){
   const notes=$('waiting').querySelectorAll('.wait');
@@ -4387,7 +4401,7 @@ function markMates(){
   input.placeholder=suggestion||placeholder();
 }
 function switchTo(id){
-  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';
+  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';following=true;
   render(shown);renderWaiting();$('note').textContent='';$('older').hidden=true;
   result.className='';result.textContent='';input.classList.remove('suggested');
   setState('offline');stateEl.querySelector('.label').textContent='Connecting';drawLive();markMates();

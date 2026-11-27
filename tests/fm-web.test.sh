@@ -2121,6 +2121,8 @@ out.push('beside a call: ' + [V.callMeta(card, false, false), V.callMeta(card, t
   V.callMeta(mates, false, false), V.callMeta(mates, true, false), V.callMeta({}, true, false)].map(m => m.join(' · ') || '-').join(' | '));
 out.push('tabs: ' + [V.tabScroll(0, 300, 20, 120), V.tabScroll(0, 300, 420, 120), V.tabScroll(400, 300, 100, 120),
   V.tabScroll(400, 300, 0, 120), V.tabScroll(250, 300, 400, 120)].join(' '));
+out.push('chat end: ' + [V.atEnd(1000, 600, 400), V.atEnd(1000, 598.5, 400), V.atEnd(300, 0, 400),
+  V.atEnd(1000, 590, 400), V.atEnd(1000, 540, 400)].join(' '));
 console.log(out.join('\n'));
 JS
 ) || fail "the page's rules did not run: $out"
@@ -2141,9 +2143,10 @@ notes: [{"action":"answer","item":"garden-chart","asking":"1794632400","option":
 look: {"action":"settled","item":"garden-chart"} {"in_tab":true,"action":"settled","item":"garden-chart"}
 strip: ↑↓ move, 1/2/3 answer, enter open, x settled?, k keep, t talk, r read, s who steers, ? all keys | enter send to Starship, esc cancel | esc back to the project, ? all keys | h show Factories, ? all keys
 beside a call: Garden Journal · waiting 3 h | waiting 3 h | checking | Garden Journal, from near · ready 53 min | from near · ready 53 min | -
-tabs: 0 252 88 0 250' \
-    "how the page folds the chat, labels links, what each key sends, what sits beside a call and where the tabs scroll to"
-  pass "each message shows when it landed, the chat folds into messages and quiet lines, links read as short labels, keys send the buttons' notes, a call on its own project's tab does not repeat the project, and a chosen tab is brought into sight"
+tabs: 0 252 88 0 250
+chat end: true true true false false' \
+    "how the page folds the chat, labels links, what each key sends, what sits beside a call, where the tabs scroll to and when the chat follows its end"
+  pass "each message shows when it landed, the chat folds into messages and quiet lines, links read as short labels, keys send the buttons' notes, a call on its own project's tab does not repeat the project, a chosen tab is brought into sight, and the chat follows new words only from its very end"
 }
 
 # The live line while the first mate works: what it is doing now in plain
