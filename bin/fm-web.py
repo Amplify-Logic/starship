@@ -4137,6 +4137,15 @@ VIEW_JS = r"""
     return height - top - client <= 2;
   }
 
+  /* How far to scroll so the reader sees what they saw before the chat was re-drawn: the first
+     row they saw that is still there sits where it sat. Rows dropped off the top move nothing. */
+  function keepPlace(before, after) {
+    for (var i = 0; i < before.length; i++)
+      for (var j = 0; j < after.length; j++)
+        if (after[j].id === before[i].id) return after[j].at - before[i].at;
+    return 0;
+  }
+
   /* A note sent from a project's own tab is no look, as a key in a factory's tab is not. */
   function withLook(ask, tab) {
     if (tab === 'home') return ask;
@@ -4148,7 +4157,7 @@ VIEW_JS = r"""
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, msgTime: msgTime, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
-              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd };
+              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd, keepPlace: keepPlace };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMView = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -4269,6 +4278,8 @@ let following=true;
 log.addEventListener('scroll',()=>{following=V.atEnd(log.scrollHeight,log.scrollTop,log.clientHeight);},{passive:true});
 log.addEventListener('wheel',e=>{if(e.deltaY<0)following=false;},{passive:true});
 function toEnd(){log.scrollTop=log.scrollHeight;following=true;}
+function places(){const top=log.getBoundingClientRect().top,h=log.clientHeight;
+  return Array.from(wrap.children,r=>{const b=r.getBoundingClientRect();return {id:r.dataset.id,at:b.top-top,seen:b.bottom>top&&b.top<top+h};});}
 function pictures(item){
   const box=el('div','pics');
   (item.pictures||[]).forEach(id=>{const a=el('a');a.href='/api/picture/'+encodeURIComponent(id);a.target='_blank';a.rel='noopener';
@@ -4277,7 +4288,7 @@ function pictures(item){
 }
 function render(items){
   const open=new Set(Array.from(wrap.querySelectorAll('details[open]')).map(d=>d.dataset.id));
-  const stick=following,top=log.scrollTop;
+  const stick=following,top=log.scrollTop,before=stick?[]:places().filter(p=>p.seen);
   const frag=document.createDocumentFragment();
   for(const row of V.foldChat(items)){
     if(row.kind==='quiet'){
@@ -4288,7 +4299,7 @@ function render(items){
     }
     const item=row.item;
     if(item.kind==='user'||item.kind==='assistant'){
-      const msg=el('div','msg '+item.kind);const b=el('div','bubble');
+      const msg=el('div','msg '+item.kind);msg.dataset.id=item.id;const b=el('div','bubble');
       if(item.kind==='assistant'){const av=el('div','av');av.appendChild(ship());msg.appendChild(av);}
       b.innerHTML=item.html||'';
       if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
@@ -4297,14 +4308,14 @@ function render(items){
       if(at){const t=el('time','stamp',at.short);t.dateTime=item.ts;t.title=at.full;b.appendChild(t);}
       msg.appendChild(b);frag.appendChild(msg);
     }else if(item.kind==='compact'){
-      const c=el('div','compact');const d=el('details');d.dataset.id=item.id;
+      const c=el('div','compact');c.dataset.id=item.id;const d=el('details');d.dataset.id=item.id;
       d.appendChild(el('summary','',item.summary));
       if(item.detail){d.appendChild(el('pre','',item.detail));}
       if(open.has(item.id))d.open=true;c.appendChild(d);frag.appendChild(c);
     }
   }
   wrap.replaceChildren(frag);
-  if(stick)toEnd();else log.scrollTop=top;
+  if(stick)toEnd();else{log.scrollTop=top;log.scrollTop+=V.keepPlace(before,places());}
 }
 function drawLive(){
   const live=$('live');
