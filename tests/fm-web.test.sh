@@ -1587,6 +1587,23 @@ test_the_front_line_is_hidden_from_the_chat() {
   pass "the Front line is hidden from the chat, and the owner's own words stay"
 }
 
+# The owner's line breaks and blank lines show as sent, and Claude's
+# <pasted_content> wrapper around a folded paste is not part of the bubble.
+test_the_owners_line_breaks_show_and_the_paste_wrapper_does_not() {
+  local home out
+  home=$(make_home linebreaks)
+  {
+    jq -nc '{type:"user",uuid:"u1",origin:{kind:"human"},message:{role:"user",content:"Three things:\n- merge the PR\nreply to Ann"}}'
+    jq -nc '{type:"user",uuid:"u2",origin:{kind:"human"},message:{role:"user",content:"\n\n<pasted_content id=\"9949\">\nFirst part.\n\nSecond part\n</pasted_content id=\"9949\">\n"}}'
+  } > "$(transcript "$home")"
+  serve_home "$home"
+  out=$(conversation "$home") || fail "conversation read failed"
+  assert_contains "$(jq -r '.items[0].html' <<<"$out")" "merge the PR" "a typed multi-line message shows"
+  assert_equals "$(jq -r '.items[1].html' <<<"$out")" "<p>First part.</p><p>Second part</p>" \
+    "a folded paste shows its words with the blank line, without the wrapper"
+  pass "the owner's line breaks show, and Claude's paste wrapper does not"
+}
+
 # Opening the address without signing in shows what this is and how to get in;
 # the look, the icons and the manifest load for anyone on this Mac, nothing else does.
 test_the_address_without_a_sign_in_explains_itself() {
@@ -2282,6 +2299,7 @@ test_no_direct_line_mate_means_no_choice
 test_a_reply_links_files_under_the_home_and_serves_them_read_only
 test_notices_fold_away_and_pasted_pictures_show_as_pictures
 test_the_front_line_is_hidden_from_the_chat
+test_the_owners_line_breaks_show_and_the_paste_wrapper_does_not
 test_the_address_without_a_sign_in_explains_itself
 test_open_signs_in_once_with_a_link_that_is_not_the_token
 test_the_mirror_is_the_pane_and_the_strip_in_plain_words

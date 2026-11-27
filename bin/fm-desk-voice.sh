@@ -54,7 +54,10 @@
 # a stray screenshot must never interrupt the captain's typing. The
 # text is sent as the captain's plain words: control characters, newlines, and
 # Unicode line separators become spaces, so nothing can submit early or reach
-# the pane as a key.
+# the pane as a key. The one exception is words with line breaks for a Claude
+# primary: they keep their lines, typed with line feeds (a new line in
+# Claude, never Enter), or as one folded paste when a blank line is among them
+# (plain_lines, paste_submit).
 # Outcomes, one line on stdout, exit 0:
 #   sent: <backend> <target>              typed and submit confirmed
 #   sent-unconfirmed: <backend> <target> (<verdict>)
@@ -533,7 +536,8 @@ ring_mailbox() {  # <path>
 # A typed line that starts with "!", "/" or "#" would reach the harness as a
 # shell command, a slash command or a memory note instead of words, so such a
 # line is typed with a leading "Message: ". plain_line has already made it one
-# line, so only its first character can start a composer line.
+# line, and plain_lines keeps line breaks only inside one composer input,
+# whose first character alone picks a mode, so only that character matters.
 composer_safe_line() {  # <line>
   case "$1" in
     '!'*|'/'*|'#'*) printf 'Message: %s' "$1" ;;
@@ -547,6 +551,28 @@ import sys, unicodedata
 raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateescape")
 text = "".join(" " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in raw)
 sys.stdout.write(" ".join(text.split()))
+'
+}
+
+# The captain's words with their line breaks kept, for a Claude primary only
+# (primary_submit): CR LF, CR and Unicode line or paragraph
+# separators become LF, every other control character still becomes a space,
+# so ESC still cannot end the paste early, and each line and the whole message
+# lose only their trailing and surrounding blank space. Prints nothing when
+# the words hold no line break, so a one-line message keeps plain_line.
+# Claude takes a typed line feed as a new line, never as Enter, so these
+# lines are typed like one line; a blank line among them is the exception,
+# because the strict blank-row rule cannot read a blank row in the chat box
+# as proven text, so those words are pasted instead (paste_submit).
+plain_lines() {  # <text>
+  printf '%s' "$1" | python3 -c '
+import sys, unicodedata
+raw = sys.stdin.buffer.read().decode(sys.getfilesystemencoding(), "surrogateescape")
+raw = raw.replace("\r\n", "\n").replace("\r", "\n").replace("\u2028", "\n").replace("\u2029", "\n")
+text = "".join(c if c == "\n" else " " if unicodedata.category(c) in ("Cc", "Zl", "Zp") else c for c in raw)
+text = "\n".join(row.rstrip() for row in text.split("\n")).strip("\n")
+if "\n" in text.strip():
+    sys.stdout.write(text.strip(" "))
 '
 }
 
@@ -678,14 +704,17 @@ shows_stash() {  # <backend> <target>
 # `[Pasted text #N]` placeholder; a typed burst that long can lose its head or
 # fold into placeholders plus a literal tail, which no proof can tell from a
 # truncated message (verified live on claude 2.1.283). <text> is one plain
-# line (plain_line), so it holds no escape that could end the paste early.
+# line (plain_line), or paste_submit's lines (plain_lines), so it holds no
+# escape that could end the paste early.
 paste_text() {  # <backend> <target> <text>
   local buffer="fm-desk-voice-$$"
   fm_backend_source "$1" || return 1
   case "$1" in
     tmux)
+      # -r keeps a line break of paste_submit's words a line feed: without
+      # it tmux pastes a carriage return, which is Enter.
       printf '%s' "$3" | tmux load-buffer -b "$buffer" - \
-        && tmux paste-buffer -p -d -b "$buffer" -t "$2"
+        && tmux paste-buffer -p -r -d -b "$buffer" -t "$2"
       ;;
     herdr) fm_backend_herdr_send_literal "$2" $'\033[200~'"$3"$'\033[201~' ;;
     *) return 1 ;;
@@ -809,6 +838,54 @@ send_past_draft() {  # <backend> <target> <line>
     i=$((i + 1))
     [ "$i" -lt 15 ] || { printf 'unknown'; return 0; }
   done
+}
+
+# Send a message with a blank line into a Claude primary's empty chat box.
+# A blank row in the box reads unknown under the strict blank-row rule, so the
+# words go in as one bracketed paste (paste_text) of at least four lines,
+# which Claude always folds into one `[Pasted text #N +M lines]` placeholder
+# (verified live on claude 2.1.332; it then records the words wrapped in
+# <pasted_content> tags, which bin/fm-web.py takes off again). Enter is
+# pressed once, only after the box shows only that placeholder
+# (fm_composer_payload_shown), and the send counts only once the box reads
+# empty again. A paste that never shows is cleared the way send_past_draft
+# clears one and goes to the mailbox; an unreadable box after the paste is
+# never cleared blind. Prints empty, send-failed or unknown, as
+# send_past_draft does.
+paste_submit() {  # <backend> <target> <text>
+  local backend=$1 target=$2 text=$3 after rows i=0
+  rows=$(fm_composer_proof_lines "$text")
+  paste_text "$backend" "$target" "$text" || { printf 'send-failed'; return 0; }
+  while sleep 0.2; ! after=$(composer_text "$backend" "$target" "$rows") \
+    || ! fm_composer_payload_shown "$text" "$after"; do
+    i=$((i + 1))
+    [ "$i" -lt 15 ] || break
+  done
+  if [ "$i" -ge 15 ]; then
+    if [ -z "${after:-}" ] \
+      || [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" != pending ]; then
+      note "the paste has not appeared in the chat box; no keys were sent after it"
+      printf 'unknown'
+      return 0
+    fi
+    i=0
+    while ! await_composer "$backend" "$target" empty 1; do
+      if [ "$i" -ge "$rows" ] || ! fm_backend_send_key "$backend" "$target" C-u >/dev/null 2>&1; then
+        note "the chat box could not be cleared of a paste that did not show whole"
+        printf 'unknown'
+        return 0
+      fi
+      i=$((i + 1))
+    done
+    printf 'send-failed'
+    return 0
+  fi
+  fm_backend_send_key "$backend" "$target" Enter >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  if await_composer "$backend" "$target" empty 15; then
+    printf 'empty'
+  else
+    printf 'unknown'
+  fi
 }
 
 # Ring input is short literal text. Do not accept a pasted-text placeholder as
@@ -1095,7 +1172,7 @@ prompt() (
 # PRIMARY_SUBMIT_EXPECT_HOME counts the pane proven only when the lock holder
 # runs for that home (holder_home_is). Its subshell scopes the pane environment and writer lock.
 primary_submit() (  # <line> [<app> <tty> | --focused]
-  local backend target root verdict draft claude composer tries
+  local backend target root verdict draft claude composer tries words=$1
   local writer_lock
   writer_lock=$(fm_pane_writer_lock_path "$STATE")
   prove_primary_pane "${PRIMARY_SUBMIT_EXPECT_HOME:-}" || return 1
@@ -1118,15 +1195,19 @@ primary_submit() (  # <line> [<app> <tty> | --focused]
     *) return 2 ;;
   esac
   ! shows_selection_dialog "$backend" "$target" || return 2
+  # The captain's own line breaks reach only a Claude primary (plain_lines).
+  [ -z "${PRIMARY_SUBMIT_LINES:-}" ] || [ "$claude" != 1 ] || words=$PRIMARY_SUBMIT_LINES
   if [ "${PRIMARY_SUBMIT_RING:-0}" = 1 ]; then
     ! shows_stash "$backend" "$target" || return 2
     verdict=$(submit_ring "$backend" "$target" "$1") || verdict=send-failed
   elif [ "$draft" = 1 ] && [ "$claude" = 1 ]; then
-    verdict=$(send_past_draft "$backend" "$target" "$1") || verdict=send-failed
+    verdict=$(send_past_draft "$backend" "$target" "$words") || verdict=send-failed
+  elif [ "$words" != "$1" ] && [ "${PRIMARY_SUBMIT_PASTE:-0}" = 1 ]; then
+    verdict=$(paste_submit "$backend" "$target" "$words") || verdict=send-failed
   else
     tries=3
     [ "$claude" != 1 ] || ! shows_stash "$backend" "$target" || tries=1
-    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$1" "$tries" 0.4 0.5) || verdict=send-failed
+    verdict=$(fm_backend_send_text_submit "$backend" "$target" "$words" "$tries" 0.4 0.5) || verdict=send-failed
   fi
   printf '%s\t%s\t%s\n' "${verdict:-send-failed}" "$backend" "$target"
 )
@@ -1276,7 +1357,7 @@ send() {
 }
 
 send_once() {
-  local source text line result='' verdict backend target path image rc=0
+  local source text line lines paste result='' verdict backend target path image rc=0
   local composer='empty pending' front_app='' front_tty='' focused=false expect_home='' mailbox_only=0
   local -a image_args=() front=() rest=()
   while [ "$#" -gt 0 ]; do
@@ -1336,6 +1417,19 @@ send_once() {
     ARG_FRONT=''
   fi
   line=$(message_text) || die "cannot prepare transcript"
+  # The captain's own line breaks are kept only for a Claude primary
+  # (primary_submit, paste_submit); every other path types plain_line.
+  lines='' paste=0
+  if [ -n "$(plain_lines "$text")" ]; then
+    lines=$(plain_lines "$line") || die "cannot prepare transcript"
+    lines=$(composer_safe_line "$lines")
+    case "$lines" in
+      *$'\n\n'*)
+        paste=1
+        while [ "$(printf '%s' "$lines" | tr -cd '\n' | wc -c)" -lt 3 ]; do lines+=$'\n'; done
+        ;;
+    esac
+  fi
   line=$(plain_line "$line") || die "cannot prepare transcript"
   [ -n "$line" ] || refuse "nothing to deliver"
   line=$(composer_safe_line "$line")
@@ -1350,7 +1444,7 @@ send_once() {
     # finish first, and the outcome is still recorded.
     trap '' TERM INT HUP
     result=$(PRIMARY_SUBMIT_COMPOSER=$composer PRIMARY_SUBMIT_EXPECT_HOME=$expect_home \
-      primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
+      PRIMARY_SUBMIT_LINES=$lines PRIMARY_SUBMIT_PASTE=$paste primary_submit "$line" ${front[@]+"${front[@]}"}) || rc=$?
   fi
   if [ "${#front[@]}" -gt 0 ] && [ "$rc" = 1 ]; then
     printf 'not-in-front\n'

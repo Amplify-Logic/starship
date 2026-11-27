@@ -8,7 +8,8 @@
 # back in the chat box, never submitted.
 # It also rings the same primary through the payload-proof path, first
 # refusing its restored draft and then submitting only the ring text.
-# Run explicitly with FM_DESK_VOICE_CLAUDE_DRAFT_LIVE=1; it submits two short
+# It also sends a message with line breaks, which must arrive once, lines kept.
+# Run explicitly with FM_DESK_VOICE_CLAUDE_DRAFT_LIVE=1; it submits three short
 # prompts to the installed claude.
 set -u
 
@@ -125,3 +126,37 @@ for _ in $(seq 1 60); do
 done
 [ "$answered" = 1 ] || fail "Claude $VERSION: the ring never reached the model"
 pass "desk ring: real Claude $VERSION refuses an unsent draft and submits the proven ring alone"
+
+# Messages with line breaks are submitted once with their lines kept: typed
+# with line feeds when no line is blank, one folded paste when one is. The
+# first line alone asks for nothing, so an early Enter at a line break would
+# answer before the last line arrives.
+send_lines() {  # <text> <word>
+  local out answered=0 folder
+  out=$(env -u TMUX -u TMUX_PANE -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH \
+    PATH="$LAB/notify-bin:$PATH" FM_HOME="$LAB/home" FM_STATE_OVERRIDE="$LAB/home/state" \
+    "$DESK" send --source live-test "$1") \
+    || fail "Claude $VERSION: multi-line send failed: $out"
+  case "$out" in
+    'sent: tmux '*) ;;
+    *) fail "Claude $VERSION: expected the multi-line message to be sent, got: $out" ;;
+  esac
+  for _ in $(seq 1 60); do
+    if screen | grep -q "⏺ $2"; then answered=1; break; fi
+    sleep 1
+  done
+  [ "$answered" = 1 ] || fail "Claude $VERSION never answered the multi-line message: $(screen | tail -n 12)"
+  # The lab Claude's own transcript, in the projects folder named after its
+  # working directory.
+  folder=$(cd -P "$LAB/project" && pwd | sed 's#[^A-Za-z0-9]#-#g')
+  if ! cat "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$folder"/*.jsonl 2>/dev/null \
+    | jq -r 'select(.type == "user") | .message.content | strings' \
+    | tr '\n' '\r' | grep -qF "$(printf '%s' "$1" | tr '\n' '\r')"; then
+    fail "Claude $VERSION: the transcript did not keep the message's line breaks"
+  fi
+  [ "$(composer_state)" = empty ] || fail "Claude $VERSION: the multi-line message left text in the chat box"
+}
+send_lines $'Read every line first.\nThen answer.\nReply with only the word HERON' HERON
+pass "desk send: real Claude $VERSION submits typed lines once, line breaks kept"
+send_lines $'Read every line first.\n\nReply with only the word EGRET' EGRET
+pass "desk send: real Claude $VERSION submits a message with a blank line once, as one folded paste"
