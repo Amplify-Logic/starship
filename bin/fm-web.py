@@ -4399,6 +4399,7 @@ async function freshCall(step){
     return await r.json();}catch(e){return {state:'failed',said:'Starship could not be reached; try again.'};}
 }
 function freshShow(words,ask){
+  if($('settings').hidden)return;
   $('freshAsk').hidden=false;$('freshWords').textContent=words;
   $('freshYes').hidden=!ask;$('freshNo').textContent=ask?'Cancel':'Close';
   (ask?$('freshYes'):$('freshNo')).focus();
@@ -5115,8 +5116,8 @@ $('floaterQuiet').addEventListener('change',async e=>{
     const a=await r.json();$('floaterSaid').textContent=a.said||'';if(typeof a.quiet==='boolean')$('floaterQuiet').checked=a.quiet;}
   catch(err){$('floaterSaid').textContent='Not saved: the page could not reach this computer.';}});
 function closeSettings(){$('settings').hidden=true;$('freshAsk').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
-$('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
-  $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();loadVoice();loadFloater();$('textSize').focus();}});
+$('gear').addEventListener('click',()=>{const panel=$('settings');if(!panel.hidden){closeSettings();return;}
+  panel.hidden=false;$('gear').setAttribute('aria-expanded','true');drawSettings();loadVoice();loadFloater();$('textSize').focus();});
 $('settingsClose').addEventListener('click',closeSettings);
 $('textSize').addEventListener('input',e=>change('text',Number(e.target.value)));
 $('lessMotion').addEventListener('change',e=>change('motion',e.target.checked?'less':'auto'));
