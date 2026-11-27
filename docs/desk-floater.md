@@ -284,7 +284,9 @@ A pane showing a shell or a screen that cannot be read counts as unreachable, be
 So does a pane showing a selection dialog, such as a permission prompt, a question, or a picker: a pointer on a numbered option, or an `Enter to select` or `Esc to cancel` footer, sends the transcript to the mailbox so it cannot pick an option.
 
 The transcript is sent as the captain's plain words, with no label or marker other than the Front and Screenshots lines below.
-Line breaks and control characters become spaces, so a transcript cannot submit early or press keys.
+Control characters become spaces, so a transcript cannot submit early or press keys.
+Line breaks become spaces too, except for a Claude first mate, which keeps them: Claude takes a typed line feed as a new line, never as Enter, and a message with a blank line goes in as one pasted block, because a blank row in the chat box cannot be proven as text.
+Claude records that pasted block between `<pasted_content>` tags, which the web page does not show.
 
 ### The Front line
 

@@ -259,6 +259,10 @@ NOTICE_WORDS = {"desk-voice": "A message waited in the mailbox", "inbox": "A not
 # "\ "). Only the screenshots line's paths and paths under the desk voice's
 # shots folder leave the words; any other path stays as the owner wrote it.
 IMAGE_PLACEHOLDER_RE = re.compile(r"\s*\[Image #\d+\]")
+# Claude records a folded paste as its words between <pasted_content> tags; the
+# owner's multi-line messages with a blank line arrive that way
+# (bin/fm-desk-voice.sh paste_submit), so their bubble shows only the words.
+PASTED_CONTENT_RE = re.compile(r'<pasted_content id="[^"<>]*">\n?(.*?)\n?</pasted_content id="[^"<>]*">', re.S)
 SCREENSHOTS_LINE_RE = re.compile(r"(?:^|(?<=\s))Screenshots:[^\n]*")
 SCREENSHOTS_LEFT_RE = re.compile(r"(?:^|(?<=\s))Screenshots:[ \t]*(?=\n|$)")
 IMAGE_PATH_RE = re.compile(
@@ -931,8 +935,12 @@ def _starts_turn(text: str) -> bool:
     return not (tag and tag.group(1) in BASH_MODE_TAGS)
 
 
+def _unpasted(text: str) -> str:
+    return PASTED_CONTENT_RE.sub(lambda m: m.group(1), text)
+
+
 def _words(text: str) -> str:
-    return " ".join(text.split())
+    return " ".join(_unpasted(text).split())
 
 
 class Conversation:
@@ -1056,7 +1064,8 @@ class Conversation:
         return waiting
 
     def _render_user(self, item: Dict[str, Any], blobs: Optional[List[Tuple[str, str]]] = None) -> None:
-        text, paths = owner_pictures(FRONT_LINE_RE.sub("", item.pop("_text"), count=1), self.shots)
+        text = _unpasted(item.pop("_text")).strip()
+        text, paths = owner_pictures(FRONT_LINE_RE.sub("", text, count=1), self.shots)
         item["html"] = render_markdown(text) if text.strip() else ""
         for index, (media, data) in enumerate(blobs or []):
             pid = picture_id(f"{item['id']}:{index}")

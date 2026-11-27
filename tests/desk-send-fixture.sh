@@ -33,8 +33,10 @@
 # it names, as a busy Claude draws input late, yet handles it before any key.
 # Text over 800 characters folds as Claude folds it (verified live on claude
 # 2.1.283): a bracketed paste into one `[Pasted text #N]` placeholder, a typed
-# burst into a placeholder plus its literal tail. Enter expands a placeholder
-# back into its text.
+# burst into a placeholder plus its literal tail. A bracketed paste of four or
+# more lines folds into `[Pasted text #N +M lines]` (claude 2.1.332), and a
+# typed line feed is a new line in the box. Enter expands a placeholder back
+# into its text.
 
 desk_send_fixture() {  # <name> [tmux|herdr] [harness] -> home; starts the stand-in primary
   local name=$1 backend=${2:-herdr} harness=${3:-claude} home dir fb pid envs marker
@@ -108,7 +110,8 @@ case "${1:-} ${2:-}" in
       done
       row+="${esc}[0m"
     elif [ -n "$draft" ]; then
-      row+="${esc}[38;2;255;255;255m${draft}${esc}[0m"
+      # A typed line feed is a new line in the box, drawn as Claude draws it.
+      row+="${esc}[38;2;255;255;255m${draft//$'\n'/\\n  }${esc}[0m"
     elif [ -e "$dir/ghost" ]; then
       row+="${esc}[2m$(cat "$dir/ghost")${esc}[0m"
     fi
@@ -139,7 +142,12 @@ case "${1:-} ${2:-}" in
     if [ "${text#"$open"}" != "$text" ] && [ "${text%"$close"}" != "$text" ]; then
       text=${text#"$open"}
       text=${text%"$close"}
-      if [ "${#text}" -gt 800 ]; then
+      breaks=${text//[!$'\n']/}
+      if [ "${#breaks}" -ge 3 ]; then
+        printf '%s' "$n" > "$dir/pastes"
+        printf '%s' "$text" > "$dir/paste-$n"
+        text="[Pasted text #$n +${#breaks} lines]"
+      elif [ "${#text}" -gt 800 ]; then
         printf '%s' "$n" > "$dir/pastes"
         printf '%s' "$text" > "$dir/paste-$n"
         text="[Pasted text #$n]"
@@ -198,6 +206,10 @@ case "${1:-} ${2:-}" in
           for paste in "$dir"/paste-*; do
             [ -e "$paste" ] || continue
             draft=${draft//"[Pasted text #${paste##*-}]"/$(cat "$paste")}
+            lines=$(cat "$paste"; printf x)
+            lines=${lines%x}
+            breaks=${lines//[!$'\n']/}
+            draft=${draft//"[Pasted text #${paste##*-} +${#breaks} lines]"/$lines}
           done
           printf '%s\n' "$draft" >> "$dir/submitted"
           if [ -e "$dir/stale-reads" ]; then

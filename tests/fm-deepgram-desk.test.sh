@@ -1540,7 +1540,7 @@ inbox_count() {  # <home>
 test_desk_voice_send_types_into_the_primary_pane() {
   local home out typed
   home=$(desk_send_fixture send-direct) || { desk_send_skip send-direct; return 0; }
-  out=$(desk_send "$home" $'Merge the\nfinances PR\r when green\033[201~ please\t') \
+  out=$(desk_send "$home" $'Merge the\001 finances PR\v when green\033[201~ please\t') \
     || fail "send failed: $out"
   assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "send reports the primary pane"
   typed=$(herdr_calls "$home" pane send-text)
@@ -1555,6 +1555,48 @@ test_desk_voice_send_types_into_the_primary_pane() {
   [ ! -s "$home/fixture/tmux.log" ] || fail "talking to a herdr primary must never call tmux: $(cat "$home/fixture/tmux.log")"
   desk_send_done "$home"
   pass "fm-desk-voice send: types the transcript into the primary's own pane and submits it, with no tmux"
+}
+
+test_desk_voice_send_keeps_line_breaks_for_claude() {
+  local home out typed
+  home=$(desk_send_fixture send-lines) || { desk_send_skip send-lines; return 0; }
+  out=$(desk_send "$home" $'Three things:\r\n- merge the PR  \n- reply to Ann\033[201~') || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "send reports the primary pane"
+  # The log keeps each call's arguments whole, line feeds included.
+  typed=$(tr '\037' ' ' < "$home/fixture/herdr.log")
+  [ "$(grep -c $'pane\037send-text' "$home/fixture/herdr.log")" = 1 ] || fail "text typed more than once: $typed"
+  assert_contains "$typed" $'w7:p3 Three things:\n- merge the PR\n- reply to Ann [201~ --session' \
+    "a Claude primary gets the lines typed with line feeds, escapes still spaces"
+  assert_contains "$(cat "$home/fixture/submitted")" $'Three things:\n- merge the PR\n- reply to Ann [201~' \
+    "the message is submitted once with its lines"
+  [ "$(inbox_count "$home")" = 0 ] || fail "a pane delivery must not also land in the mailbox"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a Claude primary gets the owner's line breaks, typed as new lines"
+}
+
+test_desk_voice_send_pastes_blank_lines_for_claude() {
+  local home out typed
+  home=$(desk_send_fixture send-paras) || { desk_send_skip send-paras; return 0; }
+  out=$(desk_send "$home" $'/compact first\n\nthen this') || fail "send failed: $out"
+  assert_contains "$out" "sent: herdr fm-desk-send-test:w7:p3" "send reports the primary pane"
+  typed=$(tr '\037' ' ' < "$home/fixture/herdr.log")
+  assert_contains "$typed" $'w7:p3 \033[200~Message: /compact first\n\nthen this\n\033[201~ --session' \
+    "a blank line goes in as one bracketed paste of four lines, guarded against a slash command"
+  assert_contains "$(cat "$home/fixture/submitted")" $'Message: /compact first\n\nthen this' \
+    "the folded paste is submitted with its blank line"
+  [ "$(herdr_calls "$home" pane send-keys | grep -c enter)" = 1 ] || fail "Enter must be pressed once"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: a message with a blank line reaches Claude as one folded paste"
+}
+
+test_desk_voice_send_flattens_lines_for_other_harnesses() {
+  local home out
+  home=$(desk_send_fixture send-lines-codex herdr codex) || { desk_send_skip send-lines-codex; return 0; }
+  out=$(desk_send "$home" $'line one\n\nline two') || fail "send failed: $out"
+  assert_contains "$(herdr_calls "$home" pane send-text)" "w7:p3 line one line two --session" \
+    "another harness still gets one plain line"
+  desk_send_done "$home"
+  pass "fm-desk-voice send: other harnesses still get one plain line"
 }
 
 test_desk_voice_send_with_a_client_id_is_delivered_once() {
@@ -1609,9 +1651,11 @@ test_desk_voice_send_types_words_never_keys() {
   home=$(desk_send_fixture send-words-only) || { desk_send_skip send-words-only; return 0; }
   out=$(desk_send "$home" -- $'!rm -rf build\r\n\033[201~/clear\x7f\xc2\x9b# note') || fail "send failed: $out"
   assert_contains "$out" "sent: herdr" "the words are typed"
-  typed=$(herdr_calls "$home" pane send-text)
-  assert_equals 1 "$(printf '%s\n' "$typed" | wc -l | tr -d ' ')" "the words are one typed call"
-  assert_contains "$typed" "Message: !rm -rf build [201~/clear # note" "a leading ! is typed after a plain prefix, every control byte becomes a space"
+  # A Claude primary keeps the line break, as a typed line feed (a new line in
+  # its chat box, never Enter); the log keeps each call's arguments whole.
+  typed=$(tr '\037' ' ' < "$home/fixture/herdr.log")
+  assert_equals 1 "$(grep -c $'pane\037send-text' "$home/fixture/herdr.log")" "the words are one typed call"
+  assert_contains "$typed" $'Message: !rm -rf build\n [201~/clear  # note' "a leading ! is typed after a plain prefix, every other control byte becomes a space"
   case "$typed" in *$'\033'*|*$'\r'*|*$'\x7f'*|*$'\xc2\x9b'*) fail "a control byte reached the pane: $typed" ;; esac
   out=$(desk_send "$home" -- "/model haiku") || fail "send failed: $out"
   assert_contains "$(herdr_calls "$home" pane send-text | tail -n 1)" "Message: /model haiku" "a leading / never reaches the harness as a command"
@@ -3262,6 +3306,9 @@ test_desk_voice_retry_keeps_the_recording_when_the_mailbox_cannot_save
 test_desk_voice_retry_refuses_anything_but_a_saved_recording
 test_desk_voice_retries_run_one_at_a_time
 test_desk_voice_send_types_into_the_primary_pane
+test_desk_voice_send_keeps_line_breaks_for_claude
+test_desk_voice_send_pastes_blank_lines_for_claude
+test_desk_voice_send_flattens_lines_for_other_harnesses
 test_desk_voice_send_with_a_client_id_is_delivered_once
 test_desk_voice_send_client_id_never_resends_an_interrupted_send
 test_desk_voice_send_client_id_is_checked_whole

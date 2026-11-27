@@ -60,7 +60,7 @@ A caller runs a send detached and polls it rather than killing it; desk-voice fi
 
 ## Words, not keys
 
-Desk-voice types the captain's words as one plain line: every control character, escape included, becomes a space and runs of whitespace collapse, so nothing can submit early or act as a key.
+Desk-voice types the captain's words as plain words: every control character, escape included, becomes a space, so nothing can submit early or act as a key; line breaks are kept only for a Claude mate ([desk-floater.md](desk-floater.md#how-transcripts-reach-firstmate) owns the rule).
 A line that would start with `!`, `/`, or `#` is typed after `Message: `, so it never reaches the harness as a shell command, a slash command, or a memory note.
 The parent-channel copy is one cleaned line as well, so a message cannot forge a second status line.
 
