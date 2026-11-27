@@ -109,7 +109,7 @@ state/web/factories (factories_hidden, factories_change). So does the desk
 floater's "Quiet while I'm on Starship" switch: GET /api/floater reads and POST
 /api/floater {"quiet": true|false} changes it, kept in the floater's own
 state/desk-voice/bubble-on-starship (starship_quiet, floater_change). The Fresh session
-button asks first, then POST /api/fresh {"step": "check"|"ask"} hands the
+button in Settings asks first, then POST /api/fresh {"step": "check"|"ask"} hands the
 press to `bin/fm-primary-handoff.sh fresh <step> --from web`, which owns every
 refusal and the ask itself (fresh_change); the page only shows its words.
 VIEW_JS, served as /view.js, owns the page's
@@ -3088,11 +3088,7 @@ kbd,.kh{font:600 .68rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;padding:.1
 #home[data-facs="hidden"] #chatPane{display:flex}
 .facs-btn{flex:none;align-self:center;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:.1rem .65rem;font-size:.78rem;line-height:1.4;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
 .facs-btn:hover,.facs-btn:focus-visible{color:var(--ink);border-color:var(--edge);background:var(--surface-2)}
-#freshBtn{margin-left:auto}
-#facsShow{margin-left:.25rem}
-.fresh-ask{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.5rem 1rem;border-bottom:1px solid var(--line);background:var(--surface-2);font-size:.88rem}
-.fresh-ask[hidden]{display:none}
-.fresh-ask #freshWords{flex:1 1 16rem;min-width:0}
+#facsShow{margin-left:auto}
 #facsHide{margin-left:.25rem}
 
 #log{flex:1;min-height:0;overflow-y:auto;padding:.25rem 1rem .75rem}
@@ -3396,6 +3392,10 @@ details.news.settled .more b{font-weight:600}
 .hint{font-size:.8rem;color:var(--ink-2);margin-top:.25rem}
 .settings>.hint{margin-top:.875rem}
 #voiceSet .switch{margin:.5rem 0 .625rem}
+.set>#freshBtn{margin-top:.375rem}
+.fresh-ask{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-top:.5rem;padding:.5rem .625rem;border-radius:.5rem;background:var(--surface-2);font-size:.8125rem}
+.fresh-ask[hidden]{display:none}
+.fresh-ask #freshWords{flex:1 1 100%;min-width:0}
 .replies{list-style:none;margin:.25rem 0 0;padding:0;display:grid;gap:.375rem}
 .replies li{display:flex;gap:.5rem;align-items:flex-start;font-size:.8125rem;line-height:1.35}
 .replies li span{flex:1;min-width:0}
@@ -4998,8 +4998,8 @@ document.addEventListener('keydown',e=>{
     const go=document.querySelector('[data-act="talksend"]');if(go)go.click();return;}
   if(e.key==='Escape'){
     if(!$('keysSheet').hidden){openKeys(false);$('keysBtn').focus();return;}
-    if(!$('settings').hidden){closeSettings();return;}
     if(!$('freshAsk').hidden){perform({act:'freshno'});return;}
+    if(!$('settings').hidden){closeSettings();return;}
     if(confirming||talk){perform({act:'cancel'});return;}
     if(typing(t))return;
   }
@@ -5114,7 +5114,7 @@ $('floaterQuiet').addEventListener('change',async e=>{
       headers:{'Content-Type':'application/json','X-FM-CSRF':CSRF},body:JSON.stringify({quiet:e.target.checked})});
     const a=await r.json();$('floaterSaid').textContent=a.said||'';if(typeof a.quiet==='boolean')$('floaterQuiet').checked=a.quiet;}
   catch(err){$('floaterSaid').textContent='Not saved: the page could not reach this computer.';}});
-function closeSettings(){$('settings').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
+function closeSettings(){$('settings').hidden=true;$('freshAsk').hidden=true;$('gear').setAttribute('aria-expanded','false');$('gear').focus();}
 $('gear').addEventListener('click',()=>{const panel=$('settings');panel.hidden=!panel.hidden;
   $('gear').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden){drawSettings();loadVoice();loadFloater();$('textSize').focus();}});
 $('settingsClose').addEventListener('click',closeSettings);
@@ -5252,11 +5252,7 @@ def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = F
 <div class="pane-head"><h2>Firstmate</h2>
 <div class="seg mate-switch" id="mateSwitch" role="group" aria-label="Who you talk to" hidden></div>
 <span id="state" class="state offline"><span class="label">Connecting</span></span>
-<button class="facs-btn" id="freshBtn" type="button" data-act="fresh" title="Save what the first mate learned and start a fresh session; it asks first">Fresh session</button>
 <button class="facs-btn" id="facsShow" type="button" data-act="facs" data-hidden="false" title="Show Factories beside the chat">Show Factories</button></div>
-<div class="fresh-ask" id="freshAsk" role="group" aria-label="Fresh session" hidden><span id="freshWords" role="status"></span>
-<button class="btn small primary" id="freshYes" type="button" data-act="freshyes">Start fresh</button>
-<button class="btn small" id="freshNo" type="button" data-act="freshno">Cancel</button></div>
 <div id="log"><div class="wrap">
 <p id="older" class="note" hidden>Earlier conversation is in the terminal history.</p>
 <div id="items"></div>
@@ -5338,6 +5334,12 @@ def page_html(nonce: str, csrf: str, weekly: bool = False, facs_hidden: bool = F
 <label class="switch"><input id="floaterQuiet" type="checkbox">Quiet while I'm on Starship</label>
 <p class="hint">The floater on the Mac shows no reply beside it while this page or the first mate's chat is in front; the voice is unchanged.</p>
 <p class="hint" id="floaterSaid" role="status"></p></div>
+<div class="set"><div class="lbl">First mate</div>
+<button class="btn small" id="freshBtn" type="button" data-act="fresh">Fresh session</button>
+<p class="hint">Saves what the first mate learned and starts a new, empty session; everything under way carries over. It asks first.</p>
+<div class="fresh-ask" id="freshAsk" role="group" aria-label="Fresh session" hidden><span id="freshWords" role="status"></span>
+<button class="btn small primary" id="freshYes" type="button" data-act="freshyes">Start fresh</button>
+<button class="btn small" id="freshNo" type="button" data-act="freshno">Cancel</button></div></div>
 <p class="hint">The voice and the desk floater are kept for this home; everything else in this browser only.</p>
 </section>
 <section class="sheet" id="keysSheet" role="dialog" aria-modal="true" aria-label="Keyboard keys" hidden>
