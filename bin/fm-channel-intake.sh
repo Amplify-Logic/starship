@@ -3,7 +3,7 @@
 #
 # Usage:
 #   fm-channel-intake.sh tick
-#   fm-channel-intake.sh claim [--source ID]
+#   fm-channel-intake.sh claim [--source ID [--if-due]]
 #   fm-channel-intake.sh observe --source ID --ref REF (--digest TEXT | --digest-file FILE)
 #                                [--class CLASS] [--title TEXT] [--link URL]
 #                                [--dedup-key KEY] [--thread PARENT] [--reply-marker VALUE]
@@ -181,6 +181,22 @@
 # docs/channel-intake.md owns which posts are kept, the title and date
 # convention, and the durable updates log the orchestrator writes beside it.
 #
+# SOURCES READ OUTSIDE FIRSTMATE. A source named in `outside_sources` is read
+# by a separate process, such as a loop in its own terminal, so its cadence
+# never wakes Firstmate. It is due on its own `outside_interval_seconds`, and it
+# is left out of everything that serves Firstmate's own reads: a `claim`
+# without --source, the `tick` wake, the live `check`, `pending` and the
+# `sources_due` count. The outside reader runs `claim --source ID --if-due`,
+# which hands the source out only when it is due (inside the scanning window,
+# past its backoff and its interval) and prints `source: <none due>`
+# otherwise, then the same observe, recheck and complete or fail steps as any
+# read. Its claim, complete and fail leave Firstmate's armed cycle alone, and
+# its re-check share keeps its own record ($INTAKE_DIR/recheck.<source id>):
+# an outside claim rolls and records only that share and an outside complete
+# reports only it, so Firstmate's re-check list, its round robin and its
+# complete report never move for an outside read.
+# Without --if-due, `claim --source` hands any source out at once, as before.
+#
 # Opt-in is per home and per device: with no `enabled = true` line in private
 # config/channel-intake this command is inert, so cloning the repo or seeding
 # another home never enrols it.
@@ -193,6 +209,11 @@
 #   timezone                 IANA zone for the local day and quiet hours,
 #                            refused unless it actually resolves here
 #   interval_seconds         per-source poll cadence (default 900, floor 300)
+#   outside_sources          space-separated source ids read by an outside
+#                            reader rather than by Firstmate (default unset);
+#                            see SOURCES READ OUTSIDE FIRSTMATE above
+#   outside_interval_seconds poll cadence of those sources (default
+#                            interval_seconds, floor 300)
 #   sources_file             absolute path to the private inventory
 #                            (default data/channel-intake/sources.tsv)
 #   revision_window_seconds  bounded edit-detection lookback (default 86400)
@@ -278,6 +299,8 @@ UPDATE_WINDOW=1209600
 CFG_ENABLED=false
 CFG_TIMEZONE=
 CFG_INTERVAL=$DEFAULT_INTERVAL
+CFG_OUTSIDE_SOURCES=
+CFG_OUTSIDE_INTERVAL=
 CFG_SOURCES_FILE=
 CFG_REVISION_WINDOW=$DEFAULT_REVISION_WINDOW
 CFG_STALE_AFTER=$DEFAULT_STALE_AFTER
@@ -355,7 +378,7 @@ timezone_resolves() {
 }
 
 load_config() {
-  local line key value
+  local line key value id outside_ids
   CFG_SOURCES_FILE="$INTAKE_DIR/sources.tsv"
   if [ -f "$CONFIG_FILE" ]; then
     [ ! -L "$CONFIG_FILE" ] || die "config must be a regular file: $CONFIG_FILE"
@@ -389,6 +412,20 @@ load_config() {
           [ "$value" -ge "$MIN_INTERVAL" ] \
             || die "interval_seconds must be at least ${MIN_INTERVAL}s so an awake laptop cannot run an unbounded poll loop: $value"
           CFG_INTERVAL=$value
+          ;;
+        outside_sources)
+          CFG_OUTSIDE_SOURCES=
+          read -r -a outside_ids <<<"$value"
+          for id in "${outside_ids[@]+"${outside_ids[@]}"}"; do
+            require_id 'outside_sources entry' "$id"
+            CFG_OUTSIDE_SOURCES="$CFG_OUTSIDE_SOURCES${CFG_OUTSIDE_SOURCES:+ }$id"
+          done
+          ;;
+        outside_interval_seconds)
+          require_positive_int outside_interval_seconds "$value"
+          [ "$value" -ge "$MIN_INTERVAL" ] \
+            || die "outside_interval_seconds must be at least ${MIN_INTERVAL}s so an awake laptop cannot run an unbounded poll loop: $value"
+          CFG_OUTSIDE_INTERVAL=$value
           ;;
         sources_file)
           case "$value" in
@@ -473,6 +510,7 @@ load_config() {
   fi
   [ "$CFG_BACKOFF_MAX" -ge "$CFG_BACKOFF" ] \
     || die "backoff_max_seconds must not be below backoff_seconds"
+  [ -n "$CFG_OUTSIDE_INTERVAL" ] || CFG_OUTSIDE_INTERVAL=$CFG_INTERVAL
   if [ -n "$CFG_QUIET_START" ] || [ -n "$CFG_QUIET_END" ]; then
     [ -n "$CFG_QUIET_START" ] && [ -n "$CFG_QUIET_END" ] \
       || die 'quiet_start and quiet_end must be set together'
@@ -802,7 +840,24 @@ source_due() {
   case "$last_ok" in ''|*[!0-9]*) last_ok=0 ;; esac
   case "$last_attempt" in ''|*[!0-9]*) last_attempt=0 ;; esac
   [ "$last_attempt" -ge "$last_ok" ] || last_attempt=$last_ok
-  [ $((epoch - last_attempt)) -ge "$CFG_INTERVAL" ]
+  [ $((epoch - last_attempt)) -ge "$(source_interval "$id")" ]
+}
+
+# A source an outside reader owns (see SOURCES READ OUTSIDE FIRSTMATE).
+is_outside_source() {
+  local id=$1 outside
+  for outside in $CFG_OUTSIDE_SOURCES; do
+    [ "$outside" != "$id" ] || return 0
+  done
+  return 1
+}
+
+source_interval() {
+  if is_outside_source "$1"; then
+    printf '%s\n' "$CFG_OUTSIDE_INTERVAL"
+  else
+    printf '%s\n' "$CFG_INTERVAL"
+  fi
 }
 
 save_source() {
@@ -1063,10 +1118,17 @@ disarm_check() {
 
 # --- tick -------------------------------------------------------------------
 
+# The due sources Firstmate reads itself; `outside` lists the due sources an
+# outside reader owns instead. The two sets never overlap.
 due_source_ids() {
-  local epoch=$1 id
+  local epoch=$1 which=${2:-firstmate} id
   load_inventory
   for id in $INVENTORY_IDS; do
+    if is_outside_source "$id"; then
+      [ "$which" = outside ] || continue
+    else
+      [ "$which" = firstmate ] || continue
+    fi
     if source_due "$id" "$epoch"; then
       printf '%s\n' "$id"
     fi
@@ -1078,10 +1140,13 @@ due_source_ids() {
 # forward, because `claim`, `complete` and `fail` all stamp the current epoch,
 # so it is the monotonic term a suppression signature needs to tell a genuinely
 # recurring condition apart from one already surfaced.
+# An outside reader's attempts are left out, so its own cadence never changes
+# the signature that decides whether Firstmate is woken.
 last_attempt_watermark() {
   local id watermark=0 value
   load_inventory
   for id in $INVENTORY_IDS; do
+    ! is_outside_source "$id" || continue
     value=$(record_field "$(source_record "$id")" last_attempt)
     case "$value" in ''|*[!0-9]*) continue ;; esac
     [ "$value" -le "$watermark" ] || watermark=$value
@@ -1130,13 +1195,15 @@ tick() {
 # --- claim / complete / fail ------------------------------------------------
 
 claim() {
-  local want='' epoch id due any=false parent marker rec
+  local want='' if_due=false epoch id due any=false parent marker rec
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source) [ "$#" -ge 2 ] || die '--source requires a value'; want=$2; shift 2 ;;
+      --if-due) if_due=true; shift ;;
       *) die "unknown claim argument: $1" ;;
     esac
   done
+  [ "$if_due" != true ] || [ -n "$want" ] || die '--if-due requires --source'
   require_enabled
   epoch=$(now_epoch)
   require_state_lock
@@ -1149,6 +1216,7 @@ claim() {
     require_id 'source id' "$want"
     source_known "$want" || die "source is not in the inventory: $want"
     due=$want
+    [ "$if_due" != true ] || source_due "$want" "$epoch" || due=
   else
     due=$(due_source_ids "$epoch")
   fi
@@ -1183,9 +1251,12 @@ EOF
       "$(record_field "$rec" failures)" "$(record_field "$rec" backoff_until)" \
       "$(record_field "$rec" error)"
   done
-  clear_armed
+  # Firstmate's armed cycle is settled only by Firstmate's own reads.
+  if [ -z "$want" ] || ! is_outside_source "$want"; then
+    clear_armed
+  fi
   if [ "$any" = true ]; then
-    recheck_claim_lines "$epoch"
+    recheck_claim_lines "$epoch" "$(recheck_file_for "$want")"
   else
     printf 'source: <none due>\n'
   fi
@@ -1198,9 +1269,9 @@ EOF
 # bounded like the page refresh: no store, or a store that cannot list, prints
 # nothing and never costs the claim.
 recheck_claim_lines() {
-  local epoch=$1 out ids last
-  last=$(record_field "$RECHECK_FILE" items)
-  rm -f "$RECHECK_FILE"
+  local epoch=$1 file=$2 out ids last
+  last=$(record_field "$file" items)
+  rm -f "$file"
   [ -d "$TODO_STORE/items" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
   # shellcheck disable=SC2086
   out=$(FM_HOME="$FM_HOME" FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" recheck \
@@ -1209,7 +1280,7 @@ recheck_claim_lines() {
     return 0
   }
   ids=$(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p' | tr '\n' ' ')
-  write_atomic "$RECHECK_FILE" "$(printf 'claimed=%s\nitems=%s' "$epoch" "${ids% }")" \
+  write_atomic "$file" "$(printf 'claimed=%s\nitems=%s' "$epoch" "${ids% }")" \
     || log_event 'recheck list not recorded'
   [ -z "$out" ] || printf '%s\n' "$out"
 }
@@ -1227,10 +1298,19 @@ passes_per_day() {
   printf '%s\n' "$(( minutes * 60 / CFG_INTERVAL > 0 ? minutes * 60 / CFG_INTERVAL : 1 ))"
 }
 
+# The re-check record a read keeps: an outside source's own, else Firstmate's.
+recheck_file_for() {
+  if [ -n "$1" ] && is_outside_source "$1"; then
+    printf '%s.%s\n' "$RECHECK_FILE" "$1"
+  else
+    printf '%s\n' "$RECHECK_FILE"
+  fi
+}
+
 recheck_report() {
-  local since ids out
-  since=$(record_field "$RECHECK_FILE" claimed)
-  ids=$(record_field "$RECHECK_FILE" items)
+  local file=$1 since ids out
+  since=$(record_field "$file" claimed)
+  ids=$(record_field "$file" items)
   case "$since" in ''|*[!0-9]*) return 0 ;; esac
   [ -n "$ids" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
   # shellcheck disable=SC2086
@@ -1305,11 +1385,11 @@ complete_source() {
     last_relist=$epoch
   fi
   save_source "$id" "$checkpoint" "$epoch" "$epoch" 0 0 '' "$last_relist"
-  clear_armed
+  is_outside_source "$id" || clear_armed
   log_event "source $id complete at checkpoint $checkpoint"
   printf 'CHANNEL_INTAKE: %s read complete, checkpoint %s\n' "$id" "$checkpoint"
   refresh_todo_page "$epoch"
-  recheck_report
+  recheck_report "$(recheck_file_for "$id")"
 }
 
 # The day's page re-ranks itself on every completed read. This is the whole
@@ -1376,7 +1456,7 @@ fail_source() {
   # reading both stay where the last captured read left them.
   save_source "$id" "$(record_field "$rec" checkpoint)" \
     "$(record_field "$rec" last_ok)" "$epoch" "$failures" "$((epoch + backoff))" "$reason"
-  clear_armed
+  is_outside_source "$id" || clear_armed
   log_event "source $id failed ($failures): $reason"
   printf 'CHANNEL_INTAKE: %s read failed (%s consecutive), backing off %ss - %s\n' \
     "$id" "$failures" "$backoff" "$reason"
@@ -2399,6 +2479,8 @@ status_cmd() {
   printf 'timezone: %s\n' "${CFG_TIMEZONE:-<host local time>}"
   printf 'interval_seconds: %s\n' "$CFG_INTERVAL"
   printf 'interval_floor_seconds: %s\n' "$MIN_INTERVAL"
+  printf 'outside_sources: %s\n' "${CFG_OUTSIDE_SOURCES:-<unset>}"
+  printf 'outside_interval_seconds: %s\n' "$CFG_OUTSIDE_INTERVAL"
   printf 'revision_window_seconds: %s\n' "$CFG_REVISION_WINDOW"
   printf 'stale_after_seconds: %s\n' "$CFG_STALE_AFTER"
   printf 'backoff_seconds: %s\n' "$CFG_BACKOFF"
@@ -2421,6 +2503,7 @@ status_cmd() {
   printf 'local_date_now: %s\n' "$(local_date "$epoch")"
   printf 'sources_enrolled: %s\n' "$(load_inventory; printf '%s' "$INVENTORY_IDS" | grep -c '[^[:space:]]' || true)"
   printf 'sources_due: %s\n' "$(due_source_ids "$epoch" | grep -c '[^[:space:]]' || true)"
+  printf 'outside_sources_due: %s\n' "$(due_source_ids "$epoch" outside | grep -c '[^[:space:]]' || true)"
   printf 'sources_unknown: %s\n' "$(unknown_sources "$epoch")"
   # Open and waiting both live in the active directory, so counting the
   # directory would report work handed to someone else as still owed.

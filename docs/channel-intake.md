@@ -49,6 +49,14 @@ An `asana` source hands out, once per local day, a full re-list of every incompl
 The day page's coverage fold names every channel family no enrolled kind reads between morning sweeps.
 Any other kind is read by its checkpoint alone; a home that needs a system read differently, such as a ticket system, carries that in its private add-on (`bin/fm-addon.sh`).
 
+### Sources read outside Firstmate
+
+A source can be read by a separate process instead, such as a loop in its own terminal, so a short cadence for that source never wakes Firstmate.
+Naming it in `outside_sources` takes it out of the tick's wake, the plain `claim`, the live check and the session-start surface, and gives it its own `outside_interval_seconds`, with the same 300-second floor.
+The outside reader runs `claim --source ID --if-due` on its own schedule and, when the source is handed out, the same steps 4 to 7 above against the same ledger, so dedup, closing and backoff are unchanged.
+Its re-check share keeps its own record, so an outside read never moves Firstmate's re-check list or the count its `complete` reports.
+`bin/fm-channel-intake.sh --help` owns the exact behavior.
+
 ## Team announcement channels
 
 A `slack-announcements` source enrols a set of team channels for what they announce rather than for asks addressed to the page's owner.
