@@ -50,6 +50,10 @@
 #   - A click anywhere on a card opens and closes its note box, as the note
 #     button still does; a click on its link, its button or inside the open
 #     box, or one that ends a text selection, does not toggle it.
+#   - A promise with a `due` day shows that day as a label, never raw text:
+#     before it the line waits with the parked lines, on it the line is in the
+#     main list marked due today, and after it the line stays there marked
+#     overdue.
 # shellcheck disable=SC2016
 set -u
 
@@ -781,6 +785,42 @@ test_closed_folds_cover_nothing_and_stay_findable() {
   pass 'closed folds lay no row over the sections below and their rows stay findable'
 }
 
+test_a_due_promise_waits_parked_then_is_due_then_overdue() {
+  local h id page title='Quinn: you promised the repair report'
+  h="$TMP_ROOT/due-promise"
+  new_home "$h"
+  observe_at "$h" "$T_0900" observe --source C_BRIEF --ref promise-m-9 --digest 'report by Saturday' \
+    --class obligation --title "$title" --source-epoch "$T_0900" --about promise:m-9 >/dev/null
+  FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" FM_TODO_NOW="$T_0900" "$ROOT/bin/fm-todo.sh" sync >/dev/null
+  id=$(FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" FM_TODO_NOW="$T_0900" "$ROOT/bin/fm-todo.sh" find --about promise:m-9 | cut -f1)
+  [ -n "$id" ] || fail 'the promise is not a line'
+  FM_HOME="$h" FM_ROOT_OVERRIDE="$ROOT" FM_TODO_NOW="$T_0900" "$ROOT/bin/fm-todo.sh" \
+    mark --item "$id" --name due --text 2026-09-12 >/dev/null || fail 'the due mark was refused'
+
+  # Before its day it waits with the parked lines, its day shown as a label.
+  render_at "$h" "$T_1100" render >/dev/null
+  page=$(cat "$(page_of "$h")")
+  assert_not_contains "$page" "class=\"what\">$title" 'a promise due later is in the main list'
+  assert_contains "$(sed -n '/<summary>Parked/,/<\/details>/p' <<<"$page")" \
+    "<b>$title</b> - waiting for its due day" 'a promise due later is not with the parked lines'
+  assert_contains "$page" '<span class="prov unv">due Sat 12 Sep</span>' 'the due day is not shown as a label'
+  assert_not_contains "$page" '>2026-09-12</span>' 'the due mark shows as raw text'
+
+  # On its day it is in the main list, marked due.
+  render_at "$h" "$((T_1100 + 2 * 86400))" render >/dev/null
+  page=$(cat "$h/.lavish/today-2026-09-12-all.html")
+  assert_contains "$page" "class=\"what\">$title" 'a promise due today is not in the main list'
+  assert_contains "$page" '<span class="prov unv">due today</span>' 'a promise due today is not marked due'
+  assert_not_contains "$page" '<summary>Parked' 'a promise due today is still parked'
+
+  # After its day it stays open in the main list, marked overdue.
+  render_at "$h" "$((T_1100 + 3 * 86400))" render >/dev/null
+  page=$(cat "$h/.lavish/today-2026-09-13-all.html")
+  assert_contains "$page" "class=\"what\">$title" 'an overdue promise left the main list'
+  assert_contains "$page" '<span class="prov unv">overdue since Sat 12 Sep</span>' 'an overdue promise is not marked overdue'
+  pass 'a promise due later waits parked, is in the main list marked due on its day, and is marked overdue after'
+}
+
 test_card_click_toggles_its_note_box() {
   local h page probed chrome dom report
 
@@ -840,3 +880,4 @@ test_a_short_addon_section_can_ask_for_the_front_page
 test_team_updates_fold_newest_post_first
 test_closed_folds_cover_nothing_and_stay_findable
 test_card_click_toggles_its_note_box
+test_a_due_promise_waits_parked_then_is_due_then_overdue

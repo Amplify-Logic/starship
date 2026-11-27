@@ -34,12 +34,14 @@ A tick therefore looks like this.
    Before classifying anything as `obligation`, `urgent` or `deadline`, the orchestrator reads the rest of the thread for a reply the captain already sent, and reads the source-side item's own completion state.
    A message the captain has already answered with content that discharges it, or whose source-side task is already completed, is reported as `routine` rather than opened as a new owed item.
    The gate deliberately does not enforce this: it opens an item for whatever class it is handed, because only the connector read can see the thread and the source-side state.
-   Silence is not completion. A message nobody replied to and a source-side item nobody closed both stay owed, and an acknowledgement or a promise to act is not a reply that discharges anything.
+   Silence is not completion. A message nobody replied to and a source-side item nobody closed both stay owed, and an acknowledgement is not a reply that discharges anything.
+   A promise to act closes nothing; it becomes its own to-do line, with its due day when one was stated.
    A partner- or customer-facing ask - a colleague relaying a partner question, a customer's own message - is observed with `--partner`, which ranks it ahead of other asks on the day page.
    A partner ask awaiting the captain is observed with `--partner-awaiting-since EPOCH`, the epoch second the partner started waiting, which ranks it in the day page's top partner tier, oldest first, like a morning action's `partner_awaiting` and `awaiting_since`.
    An ask is observed with `--about KEY` for what it is about, such as a device, a ticket or a person and subject, so the same ask arriving on another channel joins the line already open instead of becoming a second one; a home's `config/todo-about` patterns add keys from the title on their own.
    A home's add-on `todo-admit` rules refuse a new ask at this point, such as an announcement or a status report with no ask, so it never becomes a line; `bin/fm-channel-intake.sh --help` owns that contract.
-6. A source that reads what the captain sent - their sent mail and their chat replies - closes each open item that a sent message discharges, with `bin/fm-todo.sh close --actor` naming the captain and the sent message as evidence; an acknowledgement or a promise to act closes nothing.
+6. A source that reads what the captain sent - their sent mail and their chat replies - closes each open item that a sent message discharges, with `bin/fm-todo.sh close --actor` naming the captain and the sent message as evidence; an acknowledgement closes nothing.
+   A promise to act closes nothing; it becomes its own to-do line, with its due day when one was stated.
 7. `complete --source ID --checkpoint VALUE` advances that source's checkpoint and says how many listed `recheck:` items are still not re-read, or `fail --source ID --reason TEXT` records the failure and backs off.
 
 Three kinds carry their own read, so asks that never carry an @mention or a fresh modification date still reach the page between morning sweeps.
@@ -48,6 +50,21 @@ A `calendar` source reads the window through the next two working days for unans
 An `asana` source hands out, once per local day, a full re-list of every incomplete task assigned to the captain, completed with `--relisted`.
 The day page's coverage fold names every channel family no enrolled kind reads between morning sweeps.
 Any other kind is read by its checkpoint alone; a home that needs a system read differently, such as a ticket system, carries that in its private add-on (`bin/fm-addon.sh`).
+
+### Promised follow-ups
+
+A follow-up the captain promised someone is owed work: its own to-do line, never merged into the ask it answers, with its due day, closed only when the follow-up is done.
+No incoming message carries it, so each pass also reads the captain's own messages newer than the checkpoint in every source it reads, sent mail included.
+A promise is the captain saying they will do something later for someone.
+
+1. Observe it as `observe --source ID --ref promise-<message ref> --class obligation --title '<who is owed>: you promised <what>' --link LINK --digest '<the promise in brief>' --source-epoch <when sent> --about promise:<message ref>`, with `--partner` when a customer is owed and none of the ask's about keys.
+   A line whose ref starts `promise-` never attaches to another line by shared about keys, even keys the home's title patterns add, and the ask it answers stays open under its own rules.
+2. When the promise names a day, counted from when it was sent, run `bin/fm-todo.sh sync`, find the line with `bin/fm-todo.sh find --about promise:<message ref>`, and give it `bin/fm-todo.sh mark --item ID --name due --text YYYY-MM-DD`.
+   The page shows that mark as a label: before the day the line waits with the parked lines, on the day it is in the main list marked due today, and after it is marked overdue.
+3. It closes when its `recheck:` read shows the follow-up went out, with `bin/fm-todo.sh close --item ID --reason fulfilled --evidence '<where it went out>'`, and never because its day passed.
+
+A follow-up agreed in chat with the first mate goes on the captain's own list that same turn with `bin/fm-todo.sh today add`, then the `due` mark.
+No source re-reads it: the first mate closes it with `close` and its evidence once the follow-up is done, or the captain types done on its row.
 
 ### Sources read outside Firstmate
 
