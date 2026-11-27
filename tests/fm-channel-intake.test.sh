@@ -72,6 +72,9 @@
 #   - --partner-awaiting-since takes only an epoch second, marks the ask
 #     partner-facing, moves on a later read that passes it and survives one
 #     that does not and a resolve.
+#   - A source named in outside_sources is due on its own interval, is handed
+#     out only by `claim --source ID --if-due`, and never reaches Firstmate's
+#     claim, tick, live check or armed cycle.
 #   - Session-start bootstrap surfaces the intake through the built-in hook.
 #   - A home whose add-on still carries the intake runs the add-on's copy: its
 #     same-named bootstrap hooks replace the built-in ones and run its own
@@ -1653,6 +1656,62 @@ test_an_addon_copy_of_the_intake_keeps_running() {
   pass 'a home whose add-on still carries the intake runs the add-on hooks, scripts, armed check and skills'
 }
 
+test_outside_sources_never_wake_firstmate() {
+  local h out code queued
+  h="$TMP_ROOT/outside"
+  new_home "$h"
+  printf 'outside_sources = M_ACTION\noutside_interval_seconds = 600\n' >>"$h/config/channel-intake"
+
+  # Firstmate's own surfaces count only the source it reads itself.
+  out=$(at "$h" "$T_0900" pending)
+  assert_contains "$out" '1 source(s) due' 'pending counted the outside source as Firstmate work'
+  out=$(at "$h" "$T_0900" tick)
+  assert_contains "$out" '1 source(s) due' 'the tick counted the outside source as Firstmate work'
+  out=$(at "$h" "$T_0900" claim)
+  assert_contains "$out" 'source: C_BRIEF' 'a plain claim did not hand out the Firstmate source'
+  assert_not_contains "$out" 'source: M_ACTION' 'a plain claim handed out the outside source'
+  at "$h" "$T_0900" complete --source C_BRIEF --checkpoint c1 >/dev/null
+  out=$(at "$h" "$T_0900" check)
+  [ -z "$out" ] || fail "the live check woke Firstmate for the outside source: $out"
+  out=$(at "$h" "$T_0900" status)
+  assert_contains "$out" 'outside_sources: M_ACTION' 'status did not name the outside source'
+  assert_contains "$out" 'outside_interval_seconds: 600' 'status did not report the outside interval'
+  assert_contains "$out" 'sources_due: 0' 'the outside source counted in sources_due'
+  assert_contains "$out" 'outside_sources_due: 1' 'status did not count the due outside source'
+
+  # The outside reader takes it only when due, on its own interval.
+  out=$(at "$h" "$T_0900" claim --source M_ACTION --if-due)
+  assert_contains "$out" 'source: M_ACTION' 'the outside reader could not claim its due source'
+  at "$h" "$T_0900" complete --source M_ACTION --checkpoint m1 >/dev/null
+  out=$(at "$h" $((T_0900 + 300)) claim --source M_ACTION --if-due)
+  assert_contains "$out" 'source: <none due>' 'the outside source was handed out before its interval'
+  out=$(at "$h" $((T_0900 + 600)) claim --source M_ACTION --if-due)
+  assert_contains "$out" 'source: M_ACTION' 'the outside source was not due after its own interval'
+  out=$(at "$h" $((T_0900 + 600)) tick)
+  [ -z "$out" ] || fail "the outside reader's cadence armed a Firstmate tick: $out"
+
+  # The outside reader's claim, complete and fail leave Firstmate's armed cycle
+  # alone, so one Firstmate cycle still produces one wake.
+  out=$(at "$h" "$T_0915" tick)
+  assert_contains "$out" '1 source(s) due' 'the Firstmate source did not come due on its own interval'
+  queued=$(queue_lines "$h")
+  at "$h" "$T_0915" claim --source M_ACTION >/dev/null
+  at "$h" "$T_0915" complete --source M_ACTION --checkpoint m2 >/dev/null
+  at "$h" "$T_0915" fail --source M_ACTION --reason 'connector throttled' >/dev/null
+  out=$(at "$h" $((T_0915 + 60)) tick)
+  [ -z "$out" ] || fail "an outside read re-armed a Firstmate wake: $out"
+  [ "$(queue_lines "$h")" = "$queued" ] || fail 'an outside read enqueued a second Firstmate wake'
+
+  out=$(at "$h" "$T_0915" claim --if-due 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" '--if-due without --source was accepted'
+  printf 'outside_interval_seconds = 299\n' >>"$h/config/channel-intake"
+  out=$(at "$h" "$T_0915" status 2>&1) && code=0 || code=$?
+  expect_code 2 "$code" 'an outside interval below the floor was accepted'
+  assert_contains "$out" 'at least 300s' 'the refusal did not name the floor'
+
+  pass 'an outside source is read on its own interval by an outside reader and never wakes Firstmate'
+}
+
 test_inert_without_opt_in
 test_new_ask_appears_once_and_unchanged_polls_are_silent
 test_edit_updates_the_same_item
@@ -1688,3 +1747,4 @@ test_team_announcements_are_information_not_asks
 test_new_source_kinds_get_their_own_reads
 test_observe_and_resolve_refuse_what_rots_the_page
 test_partner_awaiting_since_is_an_epoch_second
+test_outside_sources_never_wake_firstmate
