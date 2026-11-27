@@ -842,6 +842,34 @@ test_a_pass_rechecks_open_items_and_counts_the_misses() {
   pass 'a pass lists every open item to re-check, counts the ones it skipped, keeps the closed boundary and leaves held decisions to the morning sweep'
 }
 
+test_an_outside_read_keeps_its_own_recheck_share() {
+  local h out a b
+  h="$TMP_ROOT/recheck-outside"
+  new_home "$h"
+  printf 'outside_sources = M_ACTION\noutside_interval_seconds = 600\n' >>"$h/config/channel-intake"
+  printf 'M_ACTION\tslack-mentions\tSlack messages that mention the captain\n' >>"$h/data/channel-intake/sources.tsv"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref m-1 --digest a --class urgent --title 'quote for the dealer' >/dev/null
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref m-2 --digest b --class urgent --title 'cover lens question' >/dev/null
+  todo_at "$h" "$T_0900" sweep-start >/dev/null
+  render_at "$h" "$T_0900"
+  a=$(field_of "$h" 'quote for' 1)
+  b=$(field_of "$h" 'cover lens' 1)
+  out=$(intake_at "$h" "$T_1030" claim)
+  assert_contains "$out" "recheck: $a" 'Firstmate'"'"'s claim did not list an open item'
+  assert_contains "$out" "recheck: $b" 'Firstmate'"'"'s claim did not list an open item'
+  todo_at "$h" "$T_1030" sweep-start --pass >/dev/null
+  todo_at "$h" "$((T_1030 + 120))" verify --item "$a" --how 'read the thread on Slack' >/dev/null
+  # The outside reader re-checks on its own pass between Firstmate's claim and complete.
+  out=$(intake_at "$h" "$((T_1030 + 300))" claim --source M_ACTION --if-due)
+  assert_contains "$out" 'source: M_ACTION' 'the outside reader could not claim its due source'
+  assert_contains "$out" "recheck: $a" 'the outside reader was handed no re-check share'
+  out=$(intake_at "$h" "$((T_1030 + 360))" complete --source M_ACTION --checkpoint m-1)
+  assert_contains "$out" "2 of 2 listed not re-read" 'the outside complete did not report its own share'
+  out=$(intake_at "$h" "$T_1100" complete --source C_BRIEF --checkpoint c-1)
+  assert_contains "$out" "1 of 2 listed not re-read: $b" 'an outside read changed Firstmate'"'"'s re-check report'
+  pass 'an outside read keeps its own re-check share and leaves Firstmate'"'"'s list and report alone'
+}
+
 test_ranking_follows_partners_and_the_oldest_ask() {
   local h out yb
   h="$TMP_ROOT/ranking"
@@ -1781,6 +1809,7 @@ test_awaiting_partner_asks_lead_the_13_oct_page
 test_each_row_marks_where_it_came_from
 test_a_merged_row_marks_the_source_it_presents
 test_a_pass_rechecks_open_items_and_counts_the_misses
+test_an_outside_read_keeps_its_own_recheck_share
 test_ranking_follows_partners_and_the_oldest_ask
 test_page_bugs_stay_fixed
 test_held_decisions_stay_in_the_tooling_fold_by_default

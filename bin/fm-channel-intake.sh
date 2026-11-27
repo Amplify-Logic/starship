@@ -190,7 +190,11 @@
 # which hands the source out only when it is due (inside the scanning window,
 # past its backoff and its interval) and prints `source: <none due>`
 # otherwise, then the same observe, recheck and complete or fail steps as any
-# read. Its claim, complete and fail leave Firstmate's armed cycle alone.
+# read. Its claim, complete and fail leave Firstmate's armed cycle alone, and
+# its re-check share keeps its own record ($INTAKE_DIR/recheck.<source id>):
+# an outside claim rolls and records only that share and an outside complete
+# reports only it, so Firstmate's re-check list, its round robin and its
+# complete report never move for an outside read.
 # Without --if-due, `claim --source` hands any source out at once, as before.
 #
 # Opt-in is per home and per device: with no `enabled = true` line in private
@@ -1252,7 +1256,7 @@ EOF
     clear_armed
   fi
   if [ "$any" = true ]; then
-    recheck_claim_lines "$epoch"
+    recheck_claim_lines "$epoch" "$(recheck_file_for "$want")"
   else
     printf 'source: <none due>\n'
   fi
@@ -1265,9 +1269,9 @@ EOF
 # bounded like the page refresh: no store, or a store that cannot list, prints
 # nothing and never costs the claim.
 recheck_claim_lines() {
-  local epoch=$1 out ids last
-  last=$(record_field "$RECHECK_FILE" items)
-  rm -f "$RECHECK_FILE"
+  local epoch=$1 file=$2 out ids last
+  last=$(record_field "$file" items)
+  rm -f "$file"
   [ -d "$TODO_STORE/items" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
   # shellcheck disable=SC2086
   out=$(FM_HOME="$FM_HOME" FM_TODO_NOW="$epoch" "$SCRIPT_DIR/fm-todo.sh" recheck \
@@ -1276,7 +1280,7 @@ recheck_claim_lines() {
     return 0
   }
   ids=$(printf '%s\n' "$out" | sed -n 's/^recheck: \([^[:space:]]*\).*/\1/p' | tr '\n' ' ')
-  write_atomic "$RECHECK_FILE" "$(printf 'claimed=%s\nitems=%s' "$epoch" "${ids% }")" \
+  write_atomic "$file" "$(printf 'claimed=%s\nitems=%s' "$epoch" "${ids% }")" \
     || log_event 'recheck list not recorded'
   [ -z "$out" ] || printf '%s\n' "$out"
 }
@@ -1294,10 +1298,19 @@ passes_per_day() {
   printf '%s\n' "$(( minutes * 60 / CFG_INTERVAL > 0 ? minutes * 60 / CFG_INTERVAL : 1 ))"
 }
 
+# The re-check record a read keeps: an outside source's own, else Firstmate's.
+recheck_file_for() {
+  if [ -n "$1" ] && is_outside_source "$1"; then
+    printf '%s.%s\n' "$RECHECK_FILE" "$1"
+  else
+    printf '%s\n' "$RECHECK_FILE"
+  fi
+}
+
 recheck_report() {
-  local since ids out
-  since=$(record_field "$RECHECK_FILE" claimed)
-  ids=$(record_field "$RECHECK_FILE" items)
+  local file=$1 since ids out
+  since=$(record_field "$file" claimed)
+  ids=$(record_field "$file" items)
   case "$since" in ''|*[!0-9]*) return 0 ;; esac
   [ -n "$ids" ] && [ -x "$SCRIPT_DIR/fm-todo.sh" ] || return 0
   # shellcheck disable=SC2086
@@ -1376,7 +1389,7 @@ complete_source() {
   log_event "source $id complete at checkpoint $checkpoint"
   printf 'CHANNEL_INTAKE: %s read complete, checkpoint %s\n' "$id" "$checkpoint"
   refresh_todo_page "$epoch"
-  recheck_report
+  recheck_report "$(recheck_file_for "$id")"
 }
 
 # The day's page re-ranks itself on every completed read. This is the whole
