@@ -4283,7 +4283,8 @@ function urls(text){return V.linkParts(text).filter(p=>p.url);}
    even a little stops that, and only scrolling back to the end starts it again. While it does
    not follow, nothing that arrives or grows below moves the view. */
 let following=true,pageTop=-1;
-log.addEventListener('scroll',()=>{following=V.follows(following,log.scrollHeight,log.scrollTop,log.clientHeight,pageTop);},{passive:true});
+function isFollowing(){return following=V.follows(following,log.scrollHeight,log.scrollTop,log.clientHeight,pageTop);}
+log.addEventListener('scroll',isFollowing,{passive:true});
 function toEnd(){log.scrollTop=log.scrollHeight;pageTop=log.scrollTop;following=true;}
 function places(){const top=log.getBoundingClientRect().top,h=log.clientHeight;
   return Array.from(wrap.children,r=>{const b=r.getBoundingClientRect();return {id:r.dataset.id,at:b.top-top,seen:b.bottom>top&&b.top<top+h};});}
@@ -4295,7 +4296,7 @@ function pictures(item){
 }
 function render(items){
   const open=new Set(Array.from(wrap.querySelectorAll('details[open]')).map(d=>d.dataset.id));
-  const stick=following,top=log.scrollTop,before=stick?[]:places().filter(p=>p.seen);
+  const stick=isFollowing(),top=log.scrollTop,before=stick?[]:places().filter(p=>p.seen);
   const frag=document.createDocumentFragment();
   for(const row of V.foldChat(items)){
     if(row.kind==='quiet'){
@@ -4329,7 +4330,7 @@ function drawLive(){
   const ask=V.promptWords(asking);
   drawStop();
   if(!working&&!ask){if(!live.hidden)live.hidden=true;return;}
-  const stick=live.hidden&&following;
+  const stick=live.hidden&&isFollowing();
   const start=Date.parse(since||'');
   live.classList.toggle('asks',!!ask);
   live.querySelector('.what').textContent=ask?ask.what:V.nowWords(shown);
@@ -4364,7 +4365,7 @@ function escStops(t){return canStop()&&(!typing(t)||(t===input&&!input.value));}
 /* Each waiting message as a faded bubble below the live line; the transcript
    showing it read in drops it here as its normal bubble appears above. */
 function renderWaiting(){
-  const box=$('waiting');const stick=following,top=log.scrollTop;const frag=document.createDocumentFragment();
+  const box=$('waiting');const stick=isFollowing(),top=log.scrollTop;const frag=document.createDocumentFragment();
   for(const item of waiting){
     const msg=el('div','msg user waiting');const b=el('div','bubble');b.innerHTML=item.html||'';
     if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
@@ -4419,7 +4420,7 @@ function markMates(){
   input.placeholder=suggestion||placeholder();
 }
 function switchTo(id){
-  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';following=true;
+  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';toEnd();
   render(shown);renderWaiting();$('note').textContent='';$('older').hidden=true;
   result.className='';result.textContent='';input.classList.remove('suggested');
   setState('offline');stateEl.querySelector('.label').textContent='Connecting';drawLive();markMates();
