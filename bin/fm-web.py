@@ -4284,7 +4284,6 @@ function urls(text){return V.linkParts(text).filter(p=>p.url);}
    not follow, nothing that arrives or grows below moves the view. */
 let following=true,pageTop=-1;
 log.addEventListener('scroll',()=>{following=V.follows(following,log.scrollHeight,log.scrollTop,log.clientHeight,pageTop);},{passive:true});
-log.addEventListener('wheel',e=>{if(e.deltaY<0&&log.scrollHeight>log.clientHeight)following=false;},{passive:true});
 function toEnd(){log.scrollTop=log.scrollHeight;pageTop=log.scrollTop;following=true;}
 function places(){const top=log.getBoundingClientRect().top,h=log.clientHeight;
   return Array.from(wrap.children,r=>{const b=r.getBoundingClientRect();return {id:r.dataset.id,at:b.top-top,seen:b.bottom>top&&b.top<top+h};});}
