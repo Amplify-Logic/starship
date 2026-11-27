@@ -429,7 +429,7 @@ def build(args):
         base = base_hint
     elif urlsplit(reported).scheme in ("http", "https"):
         base = reported
-    html_attrs = [("data-fm-lavish-url", "snapshot"), ("data-fm-viewport", viewport)]
+    html_attrs = [("data-fm-lavish-url", "snapshot"), ("data-fm-viewport", viewport), ("data-lavish-annotate", "off")]
     sanitizer = Sanitizer(base, html_attrs, capture.get("styles", []))
     sanitizer.feed(capture["html"])
     sanitizer.close()
