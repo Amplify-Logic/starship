@@ -119,8 +119,10 @@ first mate's own pane and types no text, then reads the conversation until it
 shows the turn ended, and says plainly whether it stopped (stop_turn).
 VIEW_JS, served as /view.js, owns the page's
 plain rules: the chat folded into messages and one quiet line per run of
-steps, links shown as short labels, and what each key does, which is always
-the act of the button it stands for.
+steps, links shown as short labels, what each key does, which is always
+the act of the button it stands for, and when the chat follows its end: only
+while the reader sits at its very end, so a reader scrolled up even a little
+stays put as new words arrive below.
 
 While a page is what the owner is looking at (its tab visible and its window
 focused), it says so with POST /api/front {"page": <its own random id>,
@@ -4129,6 +4131,29 @@ VIEW_JS = r"""
     return left;
   }
 
+  /* Whether the chat is scrolled to its very end, so what arrives below may keep it there.
+     A reader scrolled up by even a little is left where they are. */
+  function atEnd(height, top, client) {
+    return height - top - client <= 2;
+  }
+
+  /* Whether the chat still follows after a scroll. Only the reader moving away from the end
+     stops it: a scroll still at the place the page itself put the view, with words grown below
+     since, leaves it as it was. */
+  function follows(was, height, top, client, pageTop) {
+    if (atEnd(height, top, client)) return true;
+    return top === pageTop ? was : false;
+  }
+
+  /* How far to scroll so the reader sees what they saw before the chat was re-drawn: the first
+     row they saw that is still there sits where it sat. Rows dropped off the top move nothing. */
+  function keepPlace(before, after) {
+    for (var i = 0; i < before.length; i++)
+      for (var j = 0; j < after.length; j++)
+        if (after[j].id === before[i].id) return after[j].at - before[i].at;
+    return 0;
+  }
+
   /* A note sent from a project's own tab is no look, as a key in a factory's tab is not. */
   function withLook(ask, tab) {
     if (tab === 'home') return ask;
@@ -4140,7 +4165,7 @@ VIEW_JS = r"""
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, msgTime: msgTime, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
-              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll };
+              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd, follows: follows, keepPlace: keepPlace };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMView = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -4254,7 +4279,15 @@ function linked(text,live){const frag=document.createDocumentFragment();
 function urls(text){return V.linkParts(text).filter(p=>p.url);}
 
 /* ---- the first mate's conversation ---- */
-function atBottom(){return log.scrollHeight-log.scrollTop-log.clientHeight<80;}
+/* The chat follows what arrives below only while the reader is at its very end: scrolling up
+   even a little stops that, and only scrolling back to the end starts it again. While it does
+   not follow, nothing that arrives or grows below moves the view. */
+let following=true,pageTop=-1;
+function isFollowing(){return following=V.follows(following,log.scrollHeight,log.scrollTop,log.clientHeight,pageTop);}
+log.addEventListener('scroll',isFollowing,{passive:true});
+function toEnd(){log.scrollTop=log.scrollHeight;pageTop=log.scrollTop;following=true;}
+function places(){const top=log.getBoundingClientRect().top,h=log.clientHeight;
+  return Array.from(wrap.children,r=>{const b=r.getBoundingClientRect();return {id:r.dataset.id,at:b.top-top,seen:b.bottom>top&&b.top<top+h};});}
 function pictures(item){
   const box=el('div','pics');
   (item.pictures||[]).forEach(id=>{const a=el('a');a.href='/api/picture/'+encodeURIComponent(id);a.target='_blank';a.rel='noopener';
@@ -4263,7 +4296,7 @@ function pictures(item){
 }
 function render(items){
   const open=new Set(Array.from(wrap.querySelectorAll('details[open]')).map(d=>d.dataset.id));
-  const stick=atBottom();
+  const stick=isFollowing(),top=log.scrollTop,before=stick?[]:places().filter(p=>p.seen);
   const frag=document.createDocumentFragment();
   for(const row of V.foldChat(items)){
     if(row.kind==='quiet'){
@@ -4274,7 +4307,7 @@ function render(items){
     }
     const item=row.item;
     if(item.kind==='user'||item.kind==='assistant'){
-      const msg=el('div','msg '+item.kind);const b=el('div','bubble');
+      const msg=el('div','msg '+item.kind);msg.dataset.id=item.id;const b=el('div','bubble');
       if(item.kind==='assistant'){const av=el('div','av');av.appendChild(ship());msg.appendChild(av);}
       b.innerHTML=item.html||'';
       if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
@@ -4283,27 +4316,27 @@ function render(items){
       if(at){const t=el('time','stamp',at.short);t.dateTime=item.ts;t.title=at.full;b.appendChild(t);}
       msg.appendChild(b);frag.appendChild(msg);
     }else if(item.kind==='compact'){
-      const c=el('div','compact');const d=el('details');d.dataset.id=item.id;
+      const c=el('div','compact');c.dataset.id=item.id;const d=el('details');d.dataset.id=item.id;
       d.appendChild(el('summary','',item.summary));
       if(item.detail){d.appendChild(el('pre','',item.detail));}
       if(open.has(item.id))d.open=true;c.appendChild(d);frag.appendChild(c);
     }
   }
   wrap.replaceChildren(frag);
-  if(stick)log.scrollTop=log.scrollHeight;
+  if(stick)toEnd();else{log.scrollTop=top;log.scrollTop+=V.keepPlace(before,places());}
 }
 function drawLive(){
   const live=$('live');
   const ask=V.promptWords(asking);
   drawStop();
   if(!working&&!ask){if(!live.hidden)live.hidden=true;return;}
-  const stick=live.hidden&&atBottom();
+  const stick=live.hidden&&isFollowing();
   const start=Date.parse(since||'');
   live.classList.toggle('asks',!!ask);
   live.querySelector('.what').textContent=ask?ask.what:V.nowWords(shown);
   live.querySelector('.ask').textContent=ask?ask.ask:'';
   live.querySelector('.took').textContent=working?V.took(Date.now()-(isNaN(start)?seenAt:start)):'';
-  if(live.hidden){live.hidden=false;if(stick)log.scrollTop=log.scrollHeight;}
+  if(live.hidden){live.hidden=false;if(stick)toEnd();}
 }
 /* Esc stops the first mate's turn, as Esc does in its terminal; there is no button. Only
    while the first mate itself works (not a second mate's chat) and its chat is on screen.
@@ -4332,14 +4365,14 @@ function escStops(t){return canStop()&&(!typing(t)||(t===input&&!input.value));}
 /* Each waiting message as a faded bubble below the live line; the transcript
    showing it read in drops it here as its normal bubble appears above. */
 function renderWaiting(){
-  const box=$('waiting');const stick=atBottom();const frag=document.createDocumentFragment();
+  const box=$('waiting');const stick=isFollowing(),top=log.scrollTop;const frag=document.createDocumentFragment();
   for(const item of waiting){
     const msg=el('div','msg user waiting');const b=el('div','bubble');b.innerHTML=item.html||'';
     if(item.pictures&&item.pictures.length)b.appendChild(pictures(item));
     msg.appendChild(b);msg.appendChild(el('div','wait',V.waitingWords(item,chatState,Date.now())));frag.appendChild(msg);
   }
   box.replaceChildren(frag);
-  if(stick)log.scrollTop=log.scrollHeight;
+  if(stick)toEnd();else log.scrollTop=top;
 }
 function drawWaiting(){
   const notes=$('waiting').querySelectorAll('.wait');
@@ -4387,7 +4420,7 @@ function markMates(){
   input.placeholder=suggestion||placeholder();
 }
 function switchTo(id){
-  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';
+  talkTo=id;version='';shown=[];waiting=[];asking=null;suggestion='';toEnd();
   render(shown);renderWaiting();$('note').textContent='';$('older').hidden=true;
   result.className='';result.textContent='';input.classList.remove('suggested');
   setState('offline');stateEl.querySelector('.label').textContent='Connecting';drawLive();markMates();

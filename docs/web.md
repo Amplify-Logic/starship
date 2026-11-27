@@ -57,6 +57,7 @@ The desk floater's Front line, naming the app and window in front when you talke
 A file the first mate names in a reply, home-relative such as `data/<task>/knowledge.html` or as an absolute path, is a link that opens the file in a new tab when it exists under the home's `data/` or `.lavish/` folder.
 Web pages, PDFs, pictures and drawings open as themselves, and Markdown and other text files open as plain text; any other path stays plain words.
 A compaction shows as a divider whose summary you can expand.
+The chat follows new words only while you sit at its very end: scroll up even a little and it stays where you are as replies, steps and waiting messages arrive below, until you scroll back to the end.
 The header says whether the first mate is working, ready, or not running.
 Right after a restart, while Starship's startup holds the session but the conversation is not written yet, it says `Starting up` instead, with no error.
 While it works, a live line at the end of the chat shows moving dots, what it is doing right now in plain words (such as `Reading a file`, its own short description of a step, or `Thinking`), and how long the turn has run (counted from when the page first saw it working, when the turn began before the part of the conversation the page reads); it goes away when the turn ends.
