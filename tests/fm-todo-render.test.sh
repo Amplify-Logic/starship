@@ -250,6 +250,7 @@ FRAG
   assert_contains "$(cat "$page")" '<summary>Earlier morning reference - not re-verified by this update</summary>' 'legacy content must be collapsed and labelled'
   assert_contains "$(cat "$page")" 'Stage read live &amp; unchanged.' 'legacy evidence must survive'
   [ "$(grep -c '<h1>' "$page")" = 1 ] || fail 'page must have one title'
+  grep -q '<html lang="en" data-lavish-annotate="off">' "$page" || fail 'page must open with annotate mode off'
   [ "$(line_of "$page" 'Calendar snapshot')" -gt "$(line_of "$page" '<summary>Earlier morning reference')" ] || fail 'legacy prose must stay inside the reference'
   pass 'legacy morning content stays in a labelled historical disclosure'
 

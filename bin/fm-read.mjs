@@ -325,7 +325,7 @@ function main(...args) {
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "report";
     const digest = crypto.createHash("sha256").update(sources.join("\n")).digest("hex").slice(0, 10);
     const title = escapeHtml(label.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()));
-    const html = `<!doctype html>\n<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${paperCss()}${reportCss}</style></head><body><main>\n${themeToggle}\n${body}\n</main></body></html>\n`;
+    const html = `<!doctype html>\n<html data-lavish-annotate="off"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${paperCss()}${reportCss}</style></head><body><main>\n${themeToggle}\n${body}\n</main></body></html>\n`;
     const outputDir = path.resolve(outputDirArg);
     const output = path.join(outputDir, `read-${slug}-${digest}.html`);
     fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });

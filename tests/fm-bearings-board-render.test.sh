@@ -107,6 +107,8 @@ render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charte
     LAVISH_AXI_STATE_DIR="$home/lavish-state" \
     "$BOARD" build "$data" >/dev/null || fail "the board did not build"
   require_listener_reached_poll "$home"
+  grep -q '<html lang="en" data-lavish-annotate="off">' "$home/.lavish/bearings-board.html" \
+    || fail "the board does not open with annotate mode off"
   node "$HARNESS" "$home/.lavish/bearings-board.html" \
     || fail "the built board could not be rendered"
 }

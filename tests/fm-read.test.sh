@@ -272,6 +272,7 @@ second=$(FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_LAVISH_BIN="$FAKEBIN/la
 [ "$first" = "$second" ] || fail "same report rendered to different output names"
 case "$first" in "$HOME_DIR/.lavish/read-sample-task-"*.html) ;; *) fail "task report page was not named for its task id: $first" ;; esac
 assert_contains "$(cat "$first")" "<title>Sample Task</title>" "task report page was not titled for its task id"
+assert_contains "$(cat "$first")" '<html data-lavish-annotate="off">' "report page does not open with annotate mode off"
 assert_contains "$(cat "$first")" '<h1 id="report-heading">Report heading</h1>' "bare-id output lost the source heading"
 assert_contains "$(cat "$first")" '<div class="tw"><table>' "report table was not placed in its overflow wrapper"
 pass "bare task ids resolve, name and title their page, and reuse a deterministic output name"
