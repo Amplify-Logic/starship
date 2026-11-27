@@ -17,6 +17,7 @@
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh suggestion
 #   fm-desk-voice.sh prompt [--stdin]
+#   fm-desk-voice.sh stop
 #   fm-desk-voice.sh front --front-app <pid> --front-tty <tty>
 #   fm-desk-voice.sh --help
 #
@@ -251,6 +252,21 @@
 # same way, and types nothing; --stdin reads the screen from standard input
 # instead of the pane. The web page shows it in place of Thinking.
 #
+# stop cancels the turn a Claude primary is running, as the owner's Esc in
+# the terminal does: it presses the interrupt key bin/fm-control-lib.sh names
+# for claude (one Escape) into the pane send would type into, proven the same
+# way, and types no text. It holds the pane-writer lock while it presses, so
+# it never lands between another typist's words and their Enter. It does not
+# wait to see the turn end: the caller reads that from the conversation
+# (the web page's Esc, bin/fm-web.py). One line on stdout, exit 0:
+#   stopped: <backend> <target>           the key was delivered
+#   unreachable                           no proven primary pane
+#   unsupported                           the primary is not Claude, or its
+#                                         backend cannot deliver the key
+#   contended                             another typist holds the pane;
+#                                         nothing pressed
+#   failed: <backend> <target>            the backend refused the key
+#
 # Drain moves files to state/desk-voice/processed/ and prints each transcript
 # (one JSON object per line with --print, plain text otherwise). The primary
 # treats drained text as captain input.
@@ -279,6 +295,8 @@ UNSENT="$STATE/desk-voice/unsent"
 . "$SCRIPT_DIR/fm-composer-lib.sh"
 # shellcheck source=bin/fm-pane-writer-lib.sh
 . "$SCRIPT_DIR/fm-pane-writer-lib.sh"
+# shellcheck source=bin/fm-control-lib.sh
+. "$SCRIPT_DIR/fm-control-lib.sh"
 
 DELIVERIES="$STATE/desk-voice/deliveries"
 CLIENT_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$'
@@ -1684,6 +1702,26 @@ drain() {
   done
 }
 
+# Cancel the Claude primary's running turn with its interrupt key; see stop in
+# the header. Its subshell scopes the pane environment and writer lock.
+stop() (
+  local key writer_lock
+  [ "$#" -eq 0 ] || refuse "stop takes no arguments"
+  prove_primary_pane || { printf 'unreachable\n'; return 0; }
+  [ "$PANE_CLAUDE" = 1 ] || { printf 'unsupported\n'; return 0; }
+  key=$(fm_control_interrupt_key claude) && [ "$(fm_control_interrupt_repeat claude)" = 1 ] \
+    || { printf 'unsupported\n'; return 0; }
+  fm_control_backend_supports_key "$PANE_BACKEND" "$key" || { printf 'unsupported\n'; return 0; }
+  writer_lock=$(fm_pane_writer_lock_path "$STATE")
+  fm_pane_writer_try_acquire "$STATE" || { printf 'contended\n'; return 0; }
+  trap 'fm_lock_release "$writer_lock"' EXIT
+  if fm_backend_send_key "$PANE_BACKEND" "$PANE_TARGET" "$key" >/dev/null 2>&1; then
+    printf 'stopped: %s %s\n' "$PANE_BACKEND" "$PANE_TARGET"
+  else
+    printf 'failed: %s %s\n' "$PANE_BACKEND" "$PANE_TARGET"
+  fi
+)
+
 # Whether the frontmost tab <tty> of app <pid> shows the primary's own chat;
 # a read only, see front in the header.
 front() {
@@ -1731,6 +1769,7 @@ main() {
     drain) shift; drain "$@" ;;
     suggestion) shift; suggestion "$@" ;;
     prompt) shift; prompt "$@" ;;
+    stop) shift; stop "$@" ;;
     front) shift; front "$@" ;;
     *) refuse "unknown command: $1" ;;
   esac

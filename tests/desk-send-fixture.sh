@@ -22,7 +22,8 @@
 # `› stashed` in the footer. Its keys behave as Claude's do: Ctrl+S stashes a
 # typed draft or pops the stash into an empty box, Ctrl+U clears the box, and
 # Enter submits the box (the suggestion when nothing is typed) to the
-# submitted log, then restores a stash into the box. Knob files bend it: wrap
+# submitted log, then restores a stash into the box, while Escape only notes
+# itself in the escaped log, as a cancelled turn. Knob files bend it: wrap
 # draws the box 40 columns wide, where Ctrl+U deletes one wrapped row;
 # drop-head loses the first typed character; no-marker hides `› stashed`;
 # narrow draws `› stashed` on a footer row of its own, as a narrow pane wraps it;
@@ -177,6 +178,9 @@ case "${1:-} ${2:-}" in
         else
           : > "$dir/draft"
         fi ;;
+      escape)
+        # Claude's Esc cancels a running turn and keeps the box as it is.
+        printf 'escape\n' >> "$dir/escaped" ;;
       *)
         : > "$dir/entered"
         if [ -e "$dir/swallow-enter-once" ]; then
@@ -319,6 +323,16 @@ desk_send() {  # <home> [--image <png>]... <text> -> stdout of fm-desk-voice.sh 
     PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
       FM_STATE_OVERRIDE="$home/state" FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0.1 \
       "$DESK" send --source test-suite "$@"
+  )
+}
+
+desk_stop() {  # <home> -> stdout of fm-desk-voice.sh stop
+  local home=$1 dir="$1/fixture"
+  (
+    unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
+      FM_BACKEND_HERDR_BIN FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND
+    PATH="$dir/bin:$PATH" FM_FAKE_HERDR_DIR="$dir" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" "$DESK" stop
   )
 }
 

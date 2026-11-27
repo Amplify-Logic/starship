@@ -2003,6 +2003,49 @@ test_ring_and_send_share_one_writer_lock() {
   pass "desk ring and send: concurrent writers use one lock and release it after delivery"
 }
 
+# The web page's Esc: stop presses Claude's interrupt key, one Escape,
+# into the proven primary pane and types no text; it presses nothing for an
+# unproven pane, another harness, or while another typist holds the pane.
+test_desk_voice_stop_presses_esc_into_the_primary_pane() {
+  local home out pid i
+  home=$(desk_send_fixture stop-claude) || { desk_send_skip stop-claude; return 0; }
+  printf 'half a thought' > "$home/fixture/draft"
+  out=$(desk_stop "$home") || fail "stop failed: $out"
+  assert_equals "stopped: herdr fm-desk-send-test:w7:p3" "$out" "stop names the pane it pressed into"
+  assert_equals "escape" "$(cat "$home/fixture/escaped" 2>/dev/null)" "one Escape reaches the pane"
+  assert_equals "1" "$(herdr_calls "$home" pane send-keys | wc -l | tr -d ' ')" "no other key is pressed"
+  [ -z "$(herdr_calls "$home" pane send-text)" ] || fail "stop must never type text"
+  [ ! -e "$home/fixture/submitted" ] || fail "stop must never submit the box"
+  assert_equals "half a thought" "$(cat "$home/fixture/draft")" "a draft in the box is left alone"
+  [ ! -e "$home/state/desk-voice/.send.lock" ] || fail "stop must release the pane-writer lock"
+
+  rm -f "$home/state/.lock"
+  assert_equals "unreachable" "$(desk_stop "$home")" "no live primary is unreachable"
+  desk_send_done "$home"
+
+  home=$(desk_send_fixture stop-codex herdr codex) || { desk_send_skip stop-codex; return 0; }
+  assert_equals "unsupported" "$(desk_stop "$home")" "a primary that is not Claude is not pressed into"
+  [ -z "$(herdr_calls "$home" pane send-keys)" ] || fail "nothing may be pressed into another harness"
+  desk_send_done "$home"
+
+  home=$(desk_send_fixture stop-contended) || { desk_send_skip stop-contended; return 0; }
+  : > "$home/fixture/hold-send"
+  desk_send "$home" 'a message under way' > "$home/first.out" &
+  pid=$!
+  fm_test_track_pid "$pid"
+  for i in $(seq 1 100); do
+    [ -e "$home/fixture/send-held" ] && break
+    sleep 0.1
+  done
+  [ -e "$home/fixture/send-held" ] || fail "the first writer never reached the pane"
+  assert_equals "contended" "$(desk_stop "$home")" "stop waits for no typist"
+  [ ! -e "$home/fixture/escaped" ] || fail "no Escape may land between a typist's words and their Enter"
+  : > "$home/fixture/release-send"
+  wait "$pid" || fail "the first writer failed"
+  desk_send_done "$home"
+  pass "fm-desk-voice stop: one Escape into the proven Claude pane, and nothing pressed otherwise"
+}
+
 test_inbox_ring_respects_contract_only_away_posture() {
   local home out probe posture i
   home=$(new_home note-ring-contract)
@@ -3256,6 +3299,7 @@ test_inbox_note_ring_never_submits_a_draft_or_rings_away
 test_ring_checks_the_payload_before_each_enter
 test_ring_waits_for_a_late_paste_and_a_late_redraw
 test_ring_and_send_share_one_writer_lock
+test_desk_voice_stop_presses_esc_into_the_primary_pane
 test_inbox_ring_respects_contract_only_away_posture
 test_desk_voice_send_types_screenshots_into_the_primary_pane
 test_desk_voice_send_screenshots_fall_back_to_the_mailbox
