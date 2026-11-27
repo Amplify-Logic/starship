@@ -37,7 +37,7 @@ The terminal's Factory pane has its own `h` ([factory-pane.md](factory-pane.md#h
 
 ### Fresh session
 
-The **Fresh session** button in the top corner of the chat starts a new, empty first-mate session without losing anything under way.
+The **Fresh session** button in [Settings](#settings) starts a new, empty first-mate session without losing anything under way.
 
 - One click checks whether a fresh session can start now, and the page asks you to confirm: Start fresh, or Cancel (`esc`).
 - Start fresh asks the first mate to save what it learned and then hand over; the page says so in plain words.
@@ -227,6 +227,7 @@ The Settings button opens one small panel:
   These belong to the home rather than the browser: they are read and changed through `bin/fm-speak.sh` (`--volume`, `--mute`, `--unmute`, `--history`, `--caption`, `--replay`), so the floater's right-click menu and every browser see the same level ([desk-floater.md](desk-floater.md#controls)).
 - **Desk floater**: **Quiet while I'm on Starship**, on by default, keeps the desk floater's reply bubble quiet while this page or the first mate's chat is in front; off, replies show beside the floater there too.
   It belongs to the home as well: it is the same switch as the floater's right-click menu, kept in the same file ([desk-floater.md](desk-floater.md#reply-bubble)).
+- **First mate**: the [Fresh session](#fresh-session) button, which asks first; it sits here rather than on the chat because it is rarely needed, and closing Settings cancels its ask.
 
 Every other setting and the panel size are kept in the browser's own storage, so each browser has its own, and a browser that blocks storage gets the defaults.
 A browser that kept settings from the first version of the page keeps its look and starts on Normal text.

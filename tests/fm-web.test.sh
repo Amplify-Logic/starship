@@ -1670,7 +1670,7 @@ test_the_voice_in_settings_is_the_homes_through_fm_speak() {
   pass "the voice in Settings is the home's, read and changed only through fm-speak.sh"
 }
 
-# The Fresh session button asks first, then hands the press to
+# The Fresh session button sits in Settings, not the chat header, asks first, then hands the press to
 # bin/fm-primary-handoff.sh fresh, which owns every refusal; the page shows its
 # words, behind the same POST guards as a send.
 test_fresh_session_asks_first_and_shows_plain_refusals() {
@@ -1682,8 +1682,13 @@ test_fresh_session_asks_first_and_shows_plain_refusals() {
   csrf=$(csrf_of "$port" "$cookie")
   url="http://127.0.0.1:$port/api/fresh"
   out=$(curl -sS --cookie "$cookie" "http://127.0.0.1:$port/")
-  assert_contains "$out" 'id="freshBtn"' "the chat carries the Fresh session button"
-  assert_contains "$out" 'id="freshAsk"' "the page carries the confirm step"
+  local settings chat
+  settings=$(sed -n '/<section class="settings" id="settings"/,/<\/section>/p' <<<"$out")
+  chat=$(sed -n '/<section class="pane" id="chatPane"/,/<div id="log">/p' <<<"$out")
+  assert_contains "$settings" 'id="freshBtn"' "Settings carries the Fresh session button"
+  assert_contains "$settings" 'id="freshAsk"' "Settings carries the confirm step"
+  case "$chat" in *fresh*) fail "the chat header still carries the Fresh session button" ;; esac
+  [ -n "$chat" ] || fail "the chat header was not found on the page"
   assert_equals "403" "$(status_of -X POST --cookie "$cookie" --data '{"step":"ask"}' "$url")" "no CSRF header"
   assert_absent "$home/fresh.asks" "a refused request reaches nothing"
   for bad in '{"step":"go"}' '{"step":"ask","x":1}' '{}' 'nope'; do
@@ -1701,7 +1706,7 @@ fresh ask --from web FM_HOME=$home" "$(cat "$home/fresh.asks")" "each step runs 
   out=$(curl -sS -X POST --cookie "$cookie" -H "X-FM-CSRF: $csrf" --data '{"step":"check"}' "$url")
   assert_equals "false refused" "$(jq -r '"\(.ok) \(.state)"' <<<"$out")" "a refusal reads refused"
   assert_equals "A merge is under way. Try again once it has finished." "$(jq -r .said <<<"$out")" "the refusal's plain words reach the page"
-  pass "the Fresh session button asks first and shows each refusal in plain words"
+  pass "the Fresh session button sits in Settings, asks first and shows each refusal in plain words"
 }
 
 # Factories can be taken off Control Centre with one click and brought back

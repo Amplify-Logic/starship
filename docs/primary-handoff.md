@@ -150,7 +150,7 @@ A fresh session replaces the first-mate session with a new, empty one of the sam
 The owner asks for it three ways, and every way asks to confirm first:
 
 - `/fresh` typed in chat, which loads the `fresh` skill; the first mate asks once in chat.
-- The **Fresh session** button on the Starship web page ([web.md](web.md#fresh-session)), which asks on the page.
+- The **Fresh session** button in Settings on the Starship web page ([web.md](web.md#fresh-session)), which asks on the page.
 - The `↻ Fresh session` mark on the bridge strip, which takes a second click ([bridge-strip.md](bridge-strip.md#a-fresh-session)), or `starship fresh` in a terminal, which asks y/N ([desk.md](desk.md#a-fresh-session)).
 
 One press runs one flow:
