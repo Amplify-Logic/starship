@@ -94,6 +94,7 @@ pass "generator reconciles every captain hold and renders reason, options, recom
 # A long two-line card title must keep clear separation from the identity element under it.
 assert_grep "h3 { margin:.5rem 0 .2rem; font-size:clamp(1.4rem,3vw,2rem); line-height:1.34; padding-bottom:4px; }" \
   "$PAGE" "generated stylesheet lost the card heading overlap remedy"
+assert_grep '<html lang="en" data-lavish-annotate="off"' "$PAGE" "decision page does not open with annotate mode off"
 
 marker=$(node - "$PAGE" "$route_hold" <<'NODE'
 const fs = require("node:fs");

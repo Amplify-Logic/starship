@@ -167,7 +167,7 @@ captured_part() {  # <snapshot>
 
 hostile_page() {  # <path>
   cat > "$1" <<'EOF'
-<html lang="en" data-lavish-annotate="off"><head>
+<html lang="en" data-lavish-annotate="on"><head>
 <meta charset="utf-8"><meta http-equiv="refresh" content="0;url=https://evil.example.test/">
 <base href="https://evil.example.test/"><link rel="stylesheet" href="/site.css"><link rel="modulepreload" href="/app.js">
 <style>.hero{background:url(img/hero.png)}@media (width < 600px){.hero{display:none}}@media (600px <= width){.hero{display:block}}</style>
@@ -234,11 +234,12 @@ test_generic_url_capture_sanitizes_layers_and_arms() {
   captured_part "$snap" > "$home/captured.html"
   # The SVG style payload survives only as inert, escaped style text that can
   # never open a tag, so it is judged by the tag it tried to open.
-  for needle in "alert('captured script')" "alert('handler')" "alert('link')" "alert('img')" "alert('frame')" "javascript:" "http-equiv" "data-lavish-annotate" "data-lavish-action" \
+  for needle in "alert('captured script')" "alert('handler')" "alert('link')" "alert('img')" "alert('frame')" "javascript:" "http-equiv" 'data-lavish-annotate="on"' "data-lavish-action" \
       "evil.example.test" "modulepreload" "srcdoc" "<object" "<embed" "<iframe" "<img src=x" "<base"; do
     assert_no_grep "$needle" "$home/captured.html" "the captured page kept hostile markup: $needle"
   done
   assert_no_regex '<[^>]*[[:space:]]on[a-z]+=' "$home/captured.html" "the captured page kept an event handler attribute"
+  assert_equals 'data-lavish-annotate="off"' "$(grep -o '<html[^>]*>' "$snap" | grep -o 'data-lavish-annotate="[^"]*"')" "the snapshot root does not open with annotate off exactly once"
   assert_grep 'href="https://shop.example.test/menu"' "$home/captured.html" "a relative link was not resolved against the page"
   assert_grep 'href="https://shop.example.test/site.css"' "$home/captured.html" "the stylesheet link was not kept"
   assert_grep 'srcset="data:image/png;base64,AAAA 2x, https://shop.example.test/img/fallback.png 1x"' "$home/captured.html" "a data-image srcset candidate was corrupted"

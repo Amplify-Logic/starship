@@ -345,7 +345,7 @@ function renderHtml(manifest) {
     ? `<section class="unshown" role="alert"><strong>${manifest.unshown.length} captain decision${manifest.unshown.length === 1 ? "" : "s"} could not be shown on this board.</strong> Run generate again and fix what it reports.<ul>${manifest.unshown.map((item) => `<li><code>${escapeHtml(item.id)}</code> - ${escapeHtml(item.reason)}</li>`).join("")}</ul></section>`
     : "";
   return `<!doctype html>
-<html lang="en" data-lavish-live-reload-root>
+<html lang="en" data-lavish-annotate="off" data-lavish-live-reload-root>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
