@@ -4137,6 +4137,14 @@ VIEW_JS = r"""
     return height - top - client <= 2;
   }
 
+  /* Whether the chat still follows after a scroll. Only the reader moving away from the end
+     stops it: a scroll still at the place the page itself put the view, with words grown below
+     since, leaves it as it was. */
+  function follows(was, height, top, client, pageTop) {
+    if (atEnd(height, top, client)) return true;
+    return top === pageTop ? was : false;
+  }
+
   /* How far to scroll so the reader sees what they saw before the chat was re-drawn: the first
      row they saw that is still there sits where it sat. Rows dropped off the top move nothing. */
   function keepPlace(before, after) {
@@ -4157,7 +4165,7 @@ VIEW_JS = r"""
   var api = { stepWords: stepWords, foldChat: foldChat, quietLabel: quietLabel, msgTime: msgTime, nowWords: nowWords, promptWords: promptWords, took: took, linkLabel: linkLabel,
               waitingWords: waitingWords, WAIT_LONG_MS: WAIT_LONG_MS,
               linkParts: linkParts, plainText: plainText, KEYS: KEYS, keyStrip: keyStrip,
-              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd, keepPlace: keepPlace };
+              keyAction: keyAction, noteFor: noteFor, withLook: withLook, callMeta: callMeta, tabScroll: tabScroll, atEnd: atEnd, follows: follows, keepPlace: keepPlace };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FMView = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -4274,10 +4282,10 @@ function urls(text){return V.linkParts(text).filter(p=>p.url);}
 /* The chat follows what arrives below only while the reader is at its very end: scrolling up
    even a little stops that, and only scrolling back to the end starts it again. While it does
    not follow, nothing that arrives or grows below moves the view. */
-let following=true;
-log.addEventListener('scroll',()=>{following=V.atEnd(log.scrollHeight,log.scrollTop,log.clientHeight);},{passive:true});
-log.addEventListener('wheel',e=>{if(e.deltaY<0)following=false;},{passive:true});
-function toEnd(){log.scrollTop=log.scrollHeight;following=true;}
+let following=true,pageTop=-1;
+log.addEventListener('scroll',()=>{following=V.follows(following,log.scrollHeight,log.scrollTop,log.clientHeight,pageTop);},{passive:true});
+log.addEventListener('wheel',e=>{if(e.deltaY<0&&log.scrollHeight>log.clientHeight)following=false;},{passive:true});
+function toEnd(){log.scrollTop=log.scrollHeight;pageTop=log.scrollTop;following=true;}
 function places(){const top=log.getBoundingClientRect().top,h=log.clientHeight;
   return Array.from(wrap.children,r=>{const b=r.getBoundingClientRect();return {id:r.dataset.id,at:b.top-top,seen:b.bottom>top&&b.top<top+h};});}
 function pictures(item){
