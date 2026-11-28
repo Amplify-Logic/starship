@@ -90,7 +90,8 @@
 #                 Gemini 4 Neon through the Antigravity CLI. The effort is the
 #                 model id's suffix, from the first trimmed line of local
 #                 gitignored config/neon-effort when that file exists,
-#                 otherwise high. Accepted tokens: low, medium, high, xhigh,
+#                 otherwise medium, which spends the plan's Gemini quota more
+#                 slowly than high or xhigh. Accepted tokens: low, medium, high, xhigh,
 #                 the Neon tiers `agy models` lists; any other content,
 #                 including an empty token, refuses.
 #                 Exports AGY_CLI_AUTO_COMPACT_OVERRIDE=500K (see "Context
@@ -488,7 +489,7 @@ resolve_claude_effort() {
 
 # Resolve a model-tier effort from a one-token local config file, for the
 # astra (config/astra-effort, default xhigh) and neon (config/neon-effort,
-# default high) profiles. Sets TIER_EFFORT. An absent file takes the default.
+# default medium) profiles. Sets TIER_EFFORT. An absent file takes the default.
 # A present file must have a first line that trims to exactly one of low,
 # medium, high, or xhigh; anything else, including an empty token, refuses
 # rather than falling back. Call this only for the profile that owns the file
@@ -1078,7 +1079,7 @@ case "$PROFILE" in
     argv=("$CLI" --yolo --model cursor-grok-4.5-high)
     ;;
   neon)
-    resolve_tier_effort neon-effort high
+    resolve_tier_effort neon-effort medium
     NEON_MODEL=gemini-4-neon-$TIER_EFFORT
     # Cap auto-compaction at 500k tokens through agy's own override, so the
     # agy settings file is never touched (header "Context window").

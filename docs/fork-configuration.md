@@ -1027,7 +1027,7 @@ The file is not inherited by secondmate homes.
 
 `config/neon-effort` is an optional local, gitignored one-token file that sets the launch effort for the `neon` primary profile, which runs Gemini 4 Neon through the Antigravity CLI (`bin/fm-primary.sh neon`).
 `bin/fm-primary.sh` reads it only at launch and turns it into the model id, so `xhigh` launches `gemini-4-neon-xhigh`.
-When the file is absent, the launcher uses `high`.
+When the file is absent, the launcher uses `medium`, which spends the plan's Gemini quota more slowly than `high` or `xhigh`.
 When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, or `xhigh`, the Neon tiers `agy models` lists.
 Any other content, including an empty token, refuses rather than falling back.
 A launch also refuses when `agy models` answers without the chosen tier for the signed-in plan.

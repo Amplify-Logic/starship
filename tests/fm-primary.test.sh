@@ -1783,7 +1783,8 @@ test_preflight_is_read_only_and_checks_accounts() {
 }
 
 # The neon profile launches Gemini 4 Neon through the Antigravity CLI. Its
-# effort is the model id's suffix, chosen by config/neon-effort; the 500K cap
+# effort is the model id's suffix, chosen by config/neon-effort (default
+# medium); the 500K cap
 # rides agy's own AGY_CLI_AUTO_COMPACT_OVERRIDE; and a launch refuses when
 # `agy models` cannot answer or does not offer the chosen model.
 test_neon_primary_profile() {
@@ -1798,13 +1799,13 @@ test_neon_primary_profile() {
   out=$(dry neon 2>&1)
   assert_contains "$out" 'profile=neon' "neon dry-run omitted profile"
   assert_contains "$out" 'AGY_CLI_AUTO_COMPACT_OVERRIDE=500K' "neon dry-run omitted the 500K cap"
-  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-high' '--dangerously-skip-permissions'" \
-    "absent neon-effort did not launch Gemini 4 Neon High with permissions skipped"
-  assert_contains "$out" 'launching model gemini-4-neon-high at effort high' \
+  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-medium' '--dangerously-skip-permissions'" \
+    "absent neon-effort did not launch Gemini 4 Neon Medium with permissions skipped"
+  assert_contains "$out" 'launching model gemini-4-neon-medium at effort medium' \
     "neon did not print the resolved model and effort"
   assert_not_contains "$out" 'status-bar' "neon invented a status-bar install"
 
-  for token in low medium xhigh; do
+  for token in low high xhigh; do
     printf '  %s \n' "$token" > "$effort_file"
     out=$(dry neon 2>/dev/null)
     assert_contains "$out" "'--model' 'gemini-4-neon-$token'" "neon-effort $token was not accepted"
@@ -1835,7 +1836,7 @@ test_neon_primary_profile() {
   assert_contains "$out" "pwd=$ROOT" "neon did not run agy at the tracked root"
   assert_contains "$out" 'harness=agy' "neon did not export FM_PRIMARY_HARNESS=agy"
   assert_contains "$out" 'agy_auto_compact=500K' "the launched agy did not inherit the 500K cap"
-  assert_contains "$out" 'argv=<--model><gemini-4-neon-high><--dangerously-skip-permissions>' \
+  assert_contains "$out" 'argv=<--model><gemini-4-neon-medium><--dangerously-skip-permissions>' \
     "neon lost the model pin or the permission skip at exec"
 
   # A plan that does not offer the model refuses, live and under --preflight,
@@ -1846,7 +1847,7 @@ test_neon_primary_profile() {
     # shellcheck disable=SC2086 # $mode is deliberately empty or one flag
     out=$(FM_PRIMARY_TEST_AGY_MODELS='gemini-3.8-flash-low\tGemini 3.8 Flash (Low)' live neon $mode 2>&1) || status=$?
     [ "$status" -ne 0 ] || fail "neon ${mode:-live} launched although agy models lacks the model"
-    assert_contains "$out" "does not offer gemini-4-neon-high" "missing-model refusal ${mode:-live} did not name the model: $out"
+    assert_contains "$out" "does not offer gemini-4-neon-medium" "missing-model refusal ${mode:-live} did not name the model: $out"
     [ ! -s "$LOG" ] || fail "neon ${mode:-live} launched agy despite the missing model"
   done
   # When agy models cannot answer at all, --preflight refuses, so a handoff
@@ -1863,10 +1864,10 @@ test_neon_primary_profile() {
   status=0
   out=$(FM_PRIMARY_TEST_AGY_MODELS_FAIL='network unreachable' live neon 2>&1) || status=$?
   [ "$status" -eq 0 ] || fail "a neon launch was refused only because agy models did not answer: $out"
-  assert_contains "$out" 'launching gemini-4-neon-high unvalidated' "unanswered agy models gave no notice: $out"
+  assert_contains "$out" 'launching gemini-4-neon-medium unvalidated' "unanswered agy models gave no notice: $out"
   assert_contains "$(cat "$LOG")" 'cli=agy' "an unanswered agy models stopped the neon launch"
   out=$(FM_PRIMARY_TEST_AGY_MODELS_FAIL='network unreachable' dry neon 2>/dev/null)
-  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-high'" "the models gate hid the dry-run argv"
+  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-medium'" "the models gate hid the dry-run argv"
 
   # The tracked agy hook file is checked before launch: agy ignores the whole
   # file when any top-level entry is not a named hook spec.
