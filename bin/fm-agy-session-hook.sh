@@ -14,9 +14,10 @@
 # that same holder still owns the lock; bin/fm-web.py owns that check and the
 # transcript reading. This hook is the record's only writer.
 #
-# Registered for SessionStart (after bin/fm-sessionstart-agy.sh, which takes
-# the lock) and PreInvocation, which agy runs before every model call, so a
-# /clear's new conversation is recorded at its first model call. A payload
+# Registered for PreInvocation only, listed first there; agy runs it before
+# every model call, after bin/fm-sessionstart-agy.sh has taken the lock at
+# SessionStart, so a /clear's new conversation is recorded at its first model
+# call. A payload
 # naming the conversation, transcript and lock holder already recorded returns
 # at once, so the per-call cost is one small file read.
 #

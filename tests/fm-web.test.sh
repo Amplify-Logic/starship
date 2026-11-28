@@ -2402,6 +2402,24 @@ test_an_agy_first_mates_conversation_is_read_from_its_transcript() {
   assert_equals "idle|compact|Conversation compacted" "$(jq -r '[.state, .items[-1].kind, .items[-1].summary] | join("|")' <<<"$out")" \
     "the owner's /compact ends on the compaction"
   assert_contains "$(jq -r '.items[-1].detail' <<<"$out")" "The summary." "the compaction carries its summary"
+  # Esc mid-command again, and this time a Stop hook wake starts the next turn.
+  {
+    jq -cn '{step_index:13,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",created_at:"2026-11-28T10:08:00Z",content:"<USER_REQUEST>\nwait a bit\n</USER_REQUEST>"}'
+    jq -cn '{step_index:14,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:08:01Z",
+      tool_calls:[{name:"run_command",args:{CommandLine:"sleep 99",toolSummary:"Wait"}}]}'
+    jq -cn '{step_index:16,source:"SYSTEM",type:"SYSTEM_MESSAGE",status:"DONE",created_at:"2026-11-28T10:09:00Z",
+      content:"The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\nStop hook blocked termination: a wake arrived\n</SYSTEM_MESSAGE>"}'
+    jq -cn '{step_index:17,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:09:01Z",
+      tool_calls:[{name:"run_command",args:{CommandLine:"bin/fm-crew-state.sh",toolSummary:"Check the fleet"}}]}'
+    jq -cn '{step_index:18,source:"MODEL",type:"GENERIC",status:"DONE",created_at:"2026-11-28T10:09:02Z",content:"one worker live"}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "sleep 99|false|" \
+    "$(jq -r '[.items[] | select(.kind == "tool")][-2] | [.summary, .pending, .result] | join("|")' <<<"$out")" \
+    "a call Esc stopped takes no output from a later turn"
+  assert_equals "bin/fm-crew-state.sh|false|one worker live" \
+    "$(jq -r '[.items[] | select(.kind == "tool")][-1] | [.summary, .pending, .result] | join("|")' <<<"$out")" \
+    "after a Stop hook wake, the new call's output lands on the new call"
   pass "an agy first mate's conversation is read from its own transcript"
 }
 

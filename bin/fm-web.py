@@ -1359,6 +1359,7 @@ class Antigravity(Conversation):
         self.calls.clear()
 
     def _reply(self, entry: Dict[str, Any], uid: str, ts: str, text: str) -> None:
+        self._drop_calls()
         if text.strip():
             self._push({"id": uid, "kind": "assistant", "ts": ts, "text": text,
                         "html": render_markdown(text, self.link)})
