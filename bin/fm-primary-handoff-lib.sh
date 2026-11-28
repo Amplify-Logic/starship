@@ -131,7 +131,7 @@ fm_handoff_normalize_profile() {
     fable) printf 'claude-fable52\n' ;;
     opus) printf 'claude-opus\n' ;;
     cursor) printf 'cursor-grok\n' ;;
-    pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) printf '%s\n' "$1" ;;
+    pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45|neon) printf '%s\n' "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -144,6 +144,7 @@ fm_handoff_profile_cli() {
     opencode) printf 'opencode\n' ;;
     grok) printf 'grok\n' ;;
     cursor-grok|cursor-grok45) printf 'agent\n' ;;
+    neon) printf 'agy\n' ;;
     *) return 1 ;;
   esac
 }
@@ -826,6 +827,8 @@ fm_handoff_profile_from_argv() {  # <command-line>
     grok:) printf 'grok\n' ;;
     agent:cursor-grok-4.6-high) printf 'cursor-grok\n' ;;
     agent:cursor-grok-4.5-high) printf 'cursor-grok45\n' ;;
+    # neon's effort is the model id's suffix, so every Neon tier is the profile.
+    agy:gemini-4-neon-low|agy:gemini-4-neon-medium|agy:gemini-4-neon-high|agy:gemini-4-neon-xhigh) printf 'neon\n' ;;
     *) return 1 ;;
   esac
 }

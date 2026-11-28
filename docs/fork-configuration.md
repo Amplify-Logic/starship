@@ -972,6 +972,7 @@ Claude Code reads `CLAUDE_CODE_AUTO_COMPACT_WINDOW` as a token count and says so
 Codex accepts `model_auto_compact_token_limit` as a launch-line config override: `codex debug models -c model_auto_compact_token_limit=500000` exits 0 on codex-cli 0.154.0 while the same key with a string value exits 1 with `invalid type: string "nope", expected i64`, which proves the key is real, typed, and settable without touching `config.toml`.
 Pi has no context-window or auto-compaction launch knob: pi 0.80.10's `shouldCompact` is `contextTokens > contextWindow - settings.reserveTokens`, where `contextWindow` comes from the model catalog and `reserveTokens` exists only in `~/.pi/agent/settings.json` or a project's `.pi/settings.json`, so nothing is passed at launch and pi's threshold remains whatever its model allows.
 The Cursor CLI exposes no context or compaction setting: `agent --help` on 2026.09.02-c22c1a3 lists no such flag, the binary carries no `CURSOR_*` context or compaction environment variable, and `contextWindowSize` appears only in its token-usage display code.
+The Antigravity CLI reads `AGY_CLI_AUTO_COMPACT_OVERRIDE`, which the `neon` profile sets to `500K`: on agy 1.5.18 with Gemini 4 Neon High, `/context` reads "Auto-compact at 500.0k tokens (overridden by AGY_CLI_AUTO_COMPACT_OVERRIDE=500K)" against a 1.0M window.
 
 Every other worker adapter is outside that order and its launch is unchanged.
 
@@ -1020,6 +1021,16 @@ When the file is absent, the launcher uses `xhigh`.
 When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, or `xhigh`.
 `max` is not accepted, and that refusal is retained pending the separate follow-up astra-max-effort.
 Any other content, including an empty token, refuses rather than falling back.
+The file is not inherited by secondmate homes.
+
+## Primary Neon effort (config/neon-effort)
+
+`config/neon-effort` is an optional local, gitignored one-token file that sets the launch effort for the `neon` primary profile, which runs Gemini 4 Neon through the Antigravity CLI (`bin/fm-primary.sh neon`).
+`bin/fm-primary.sh` reads it only at launch and turns it into the model id, so `xhigh` launches `gemini-4-neon-xhigh`.
+When the file is absent, the launcher uses `medium`, which spends the plan's Gemini quota more slowly than `high` or `xhigh`.
+When the file is present, its first line must trim to exactly one of `low`, `medium`, `high`, or `xhigh`, the Neon tiers `agy models` lists.
+Any other content, including an empty token, refuses rather than falling back.
+A launch also refuses when `agy models` answers without the chosen tier for the signed-in plan.
 The file is not inherited by secondmate homes.
 
 ## Primary Astra context window (config/astra-context, config/astra-compact-at)

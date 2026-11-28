@@ -167,6 +167,7 @@ The memory save runs in the outgoing session rather than as a note for the new o
 The cost is that a press waits for the first mate to reach its inbox, which it does at its next wake.
 
 The live profile is the live lock holder's own launch line, read back against the launch lines `bin/fm-primary.sh` owns, else `state/.primary-active`, which only an enabled handoff config writes and which can go stale once it is disabled.
+Every effort tier of the `neon` profile reads back as `neon`, so the new session starts at the effort `config/neon-effort` chooses at that moment.
 A manual fresh session ignores the cooldown, because it is an explicit ask, and it never takes `--force`.
 
 Each step refuses, in plain words, while:
@@ -241,7 +242,7 @@ That marker is not a lock and never authorizes mutation.
 
 Auto-rotation via `check`/`run` only triggers the **quota** axis for quota-monitored providers: claude, codex, grok, and cursor.
 A cursor-grok primary is read from its cursor plan windows (`included_usage` and `auto_usage`), not from the model- or bot-scoped windows quota-axi also reports for that account.
-When the active primary is pi or opencode, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
+When the active primary is pi, opencode, or neon, no quota source exists, `min_remaining` reports `na`, and the quota axis never auto-hands-off.
 The **context** axis can still fire for any profile that has a durable context sample.
 Operators must run `fm-primary-handoff.sh execute --force` (or wait until a monitored provider is active again) to force a quota-style chain walk off an unmonitored provider.
 This is an accepted limitation, not a bug.

@@ -50,6 +50,8 @@ Teardown removes nothing agy-specific because the spawn leaves nothing behind.
 
 ## Primary and secondmate integration
 
+A primary launches through `../../../../../bin/fm-primary.sh neon` (Gemini 4 Neon), whose header owns the launch line, effort file, context cap, and pre-launch checks.
+
 Antigravity CLI loads `<workspace>/.agents/hooks.json` for hook lifecycle events, running each command from `.agents/` itself.
 agy 1.4.9 reads every top-level key as a named hook spec (firstmate ships one, `firstmate`), with flat `SessionStart` and `Stop` handler lists and `PreToolUse` grouped under `matcher` and `hooks`; any other top-level key, such as a `version` field, silently disables the whole file (verified live).
 A PreToolUse handler that prints nothing allows the call, while a printed object without a `decision` denies it, so the seatbelts print only on deny.

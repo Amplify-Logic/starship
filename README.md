@@ -87,6 +87,7 @@ Other verified primaries, each with its own notes:
 - Cursor Agent CLI uses a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
   Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
 - Antigravity CLI (`agy`) uses a tracked project-local `.agents/hooks.json` whose Stop hook parks on the watcher between turns like Cursor's.
+  `bin/fm-primary.sh neon` launches it on Gemini 4 Neon at the effort [config/neon-effort](docs/fork-configuration.md#primary-neon-effort-configneon-effort) chooses.
 
 ### Install and launch
 
