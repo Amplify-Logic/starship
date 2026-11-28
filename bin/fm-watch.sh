@@ -647,6 +647,9 @@ inbox_steer_busy() {  # <window> <backend> <task> <tail40>
 # being healthy, while an unacknowledged instruction can still be a stuck steer.
 inbox_steer_check() {  # <window> <task>
   local w=$1 task=$2 action verb rec count tail40 reason='' ring_rc backend agent_state
+  # A lane stopped while waiting on the captain has no agent to ring:
+  # bin/fm-park.sh's tick relaunches it for the waiting instruction.
+  [ ! -f "$STATE/$task.idle-park" ] || return 0
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
@@ -2594,10 +2597,11 @@ handle_paused_stale() {  # <window> <task> <hash>
   last=$(status_declared_wait_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
   declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
-  # A lane parked on review stopped its agent on purpose; bin/fm-park.sh's tick
-  # watches its PR and owns every wake for it.
-  if [ -f "$STATE/$task.review-park" ]; then
-    triage_log "absorbed stale (parked on review, watched by fm-park.sh tick): $win"
+  # A lane parked on review, or stopped while waiting on the captain, stopped
+  # its agent on purpose; bin/fm-park.sh's tick watches it and owns every wake
+  # for it.
+  if [ -f "$STATE/$task.review-park" ] || [ -f "$STATE/$task.idle-park" ]; then
+    triage_log "absorbed stale (agent stopped on purpose, watched by fm-park.sh tick): $win"
     return 0
   fi
   pause_age=$(status_pause_age "$last" "$age" "$now")

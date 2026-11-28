@@ -31,7 +31,7 @@
 # Output is one stable, parseable, token-tight line firstmate can read every
 # heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|review-park|none> · <detail>
+#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|review-park|idle-park|none> · <detail>
 #
 # A run-step reading whose run came from inventory selection ends its detail
 # with a `run: <id>` field naming that run, and a terminal one appends
@@ -43,8 +43,8 @@
 #
 # Logic, numbered for reference; rules 2b and 3 each record that rule 3's
 # status-log reconciliation is applied before rule 2b. A lane parked on review
-# by bin/fm-park.sh short-circuits after the worktree check: paused, or blocked
-# when its relaunch failed.
+# by bin/fm-park.sh, or stopped by it while waiting on the captain, short-circuits
+# after the worktree check: paused, or blocked when its relaunch failed.
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
 #      live on that host, so the local worktree and pane reads are skipped and
@@ -349,6 +349,20 @@ if [ -f "$PARK_RECORD" ]; then
     emit paused review-park "parking on review: PR $PARK_PR at ${PARK_HEAD:0:12} since $PARK_WHEN; the agent's stop is not yet confirmed"
   fi
   emit paused review-park "parked on review: PR $PARK_PR at ${PARK_HEAD:0:12} since $PARK_WHEN; agent stopped, relaunches on review activity"
+fi
+IDLE_RECORD=$STATE/$ID.idle-park
+if [ -f "$IDLE_RECORD" ]; then
+  IDLE_SINCE=$(fm_meta_get "$IDLE_RECORD" waiting_since)
+  IDLE_WHEN=$(date -u -r "$IDLE_SINCE" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d "@$IDLE_SINCE" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '%s' "$IDLE_SINCE")
+  IDLE_WHAT="held for the captain"
+  [ "$(fm_meta_get "$IDLE_RECORD" basis)" != decision ] || IDLE_WHAT="decision $(fm_meta_get "$IDLE_RECORD" key) unanswered"
+  if [ -n "$(fm_meta_get "$IDLE_RECORD" resume_error)" ]; then
+    emit blocked idle-park "stopped while waiting on the captain since $IDLE_WHEN ($IDLE_WHAT); the relaunch failed - run bin/fm-park.sh idle-resume"
+  fi
+  if [ -n "$(fm_meta_get "$IDLE_RECORD" pending)" ]; then
+    emit paused idle-park "stopping while waiting on the captain since $IDLE_WHEN ($IDLE_WHAT); the agent's stop is not yet confirmed"
+  fi
+  emit paused idle-park "stopped while waiting on the captain since $IDLE_WHEN ($IDLE_WHAT); agent stopped, relaunches when an answer or steer arrives"
 fi
 
 # --- status log ------------------------------------------------------------

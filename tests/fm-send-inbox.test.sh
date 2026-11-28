@@ -139,6 +139,27 @@ test_text_steer_rides_inbox() {
   pass "fm-send inbox: the payload is recorded durably and only the doorbell is typed"
 }
 
+# A task stopped while waiting on the captain has no agent to ring: the steer
+# is recorded, then the stopped worker is relaunched to read it.
+test_steer_to_stopped_worker_relaunches_instead_of_ringing() {
+  local dir err rc rec
+  dir=$(setup_case idle-stopped)
+  err="$dir/send.err"
+  printf 'basis=decision\nkey=board\n' > "$dir/home/state/t1.idle-park"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/park.log"\n' "$dir" > "$dir/fakebin/fm-park.sh"
+  chmod +x "$dir/fakebin/fm-park.sh"
+  run_send "$dir" "$err" FM_SEND_PARK_BIN="$dir/fakebin/fm-park.sh" -- t1 "option two, go"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a stopped worker should exit 0 once recorded"
+  rec="$dir/home/state/t1.inbox/001.msg"
+  [ -f "$rec" ] || fail "the steer to a stopped worker was not recorded"
+  [ "$(record_body _ "$rec")" = "option two, go" ] || fail "the recorded body differs"
+  [ "$(cat "$dir/park.log" 2>/dev/null)" = "idle-wake t1" ] || fail "the stopped worker was not relaunched: $(cat "$dir/park.log" 2>/dev/null)"
+  [ ! -s "$dir/send.log" ] || fail "a doorbell was typed into the stopped worker's endpoint: $(cat "$dir/send.log")"
+  assert_contains "$(cat "$err")" "relaunching it now" "the send should say the worker is being relaunched"
+  pass "fm-send inbox: a steer to a worker stopped while waiting on the captain is recorded, then relaunches it instead of ringing"
+}
+
 # A home nested deep must not lengthen the doorbell: a long line wraps past
 # what a composer read can prove, so a Herdr submit reports it never reached
 # the pane and every re-ring fails the same way.
@@ -543,6 +564,7 @@ test_empty_message_refused() {
 }
 
 test_text_steer_rides_inbox
+test_steer_to_stopped_worker_relaunches_instead_of_ringing
 test_deep_home_doorbell_stays_short
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence

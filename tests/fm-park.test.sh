@@ -1201,6 +1201,243 @@ test_land_waits_for_an_action_under_way() {
   pass "a merge-time cleanup waits for a relaunch of the same lane that is under way"
 }
 
+# --- stop on a long wait for the captain --------------------------------------
+
+# A lane whose worker waits on the captain: no PR, its newest status event an
+# open decision written long before the idle threshold, an idle agent, and a
+# fake captain-hold reader that reports a task held while $world/hold.open
+# names it.
+idle_world() {  # <name> [status-line]
+  local w
+  w=$(make_world "$1" "$GH_URL")
+  grep -v '^pr=' "$w/state/lane.meta" > "$w/meta.tmp" && mv "$w/meta.tmp" "$w/state/lane.meta"
+  rm -f "$w/state/lane.check.sh"
+  printf '%s\n' "${2:-needs-decision [at=1] [key=board]: the board waits for answers}" > "$w/state/lane.status"
+  touch -t 202601010000 "$w/state/lane.status"
+  printf 'state: parked · source: status-log · needs-decision\n' > "$w/crew-state"
+  cat > "$w/fakebin/fm-captain-hold.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$w/hold.log"
+held() { grep -qx "\$1" "$w/hold.open" 2>/dev/null; }
+case "\$1" in
+  open) held "\$2" ;;
+  open-each) shift; for id in "\$@"; do if held "\$id"; then printf '%s\t0\tstamp\n' "\$id"; else printf '%s\t1\t\n' "\$id"; fi; done ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$w/fakebin/fm-captain-hold.sh"
+  printf '%s\n' "$w"
+}
+
+run_idle() {  # <world> <args...>
+  FM_PARK_IDLE_SECS=${FM_TEST_IDLE:-3600} FM_PARK_IDLE_SCAN_SECS=0 \
+    FM_PARK_CAPTAIN_HOLD_BIN="$1/fakebin/fm-captain-hold.sh" run_park "$@"
+}
+
+# Waits until the lane holds a settled stop record and its stop has finished.
+wait_idle_parked() {  # <world> <label>
+  for _ in $(seq 1 300); do
+    if [ -f "$1/state/lane.idle-park" ] && ! grep -q '^pending=' "$1/state/lane.idle-park" \
+      && [ ! -e "$1/state/.review-park-lane.lock" ]; then return 0; fi
+    sleep 0.1
+  done
+  fail "$2: the lane was not stopped within 30s (control: $(cat "$1/control.log" 2>/dev/null))"
+}
+
+# A tick that starts nothing: no lifecycle call, no record, nothing printed.
+expect_idle_untouched() {  # <world> <label>
+  local out
+  out=$(run_idle "$1" tick 2>&1) || fail "$2: tick failed: $out"
+  sleep 0.5
+  [ -z "$out" ] || fail "$2: tick printed: $out"
+  [ ! -e "$1/control.log" ] || fail "$2: the agent was stopped: $(cat "$1/control.log")"
+  [ ! -e "$1/state/lane.idle-park" ] || fail "$2: a stop record was written"
+}
+
+test_worker_waiting_on_the_captain_is_stopped_after_the_threshold() {
+  local w out
+  w=$(idle_world idle-decision)
+  # A wait younger than the threshold keeps its agent.
+  touch "$w/state/lane.status"
+  expect_idle_untouched "$w" idle-young
+  touch -t 202601010000 "$w/state/lane.status"
+  out=$(run_idle "$w" tick 2>&1) || fail "idle-decision: tick failed: $out"
+  [ -z "$out" ] || fail "idle-decision: the starting tick printed: $out"
+  wait_idle_parked "$w" idle-decision
+  [ "$(cat "$w/control.log")" = "lane exit" ] || fail "idle-decision: expected one control exit, got $(cat "$w/control.log")"
+  grep -qx 'basis=decision' "$w/state/lane.idle-park" || fail "idle-decision: record lacks the decision basis: $(cat "$w/state/lane.idle-park")"
+  grep -qx 'key=board' "$w/state/lane.idle-park" || fail "idle-decision: record lacks the decision key"
+  grep -qx "lease 3 --lease-holder lane --root $w/root" "$w/treehouse.log" || fail "idle-decision: slot was not durably leased"
+  tail -1 "$w/state/lane.status" | grep -q '^paused \[at=[0-9]*\]: stopped while waiting on the captain' \
+    || fail "idle-decision: no declared wait: $(tail -1 "$w/state/lane.status")"
+  grep -q '^needs-decision \[at=1\] \[key=board\]' "$w/state/lane.status" || fail "idle-decision: the open decision was rewritten"
+  out=$(run_idle "$w" tick 2>&1)
+  [ -z "$out" ] || fail "idle-decision: a routine stop was reported: $out"
+  out=$(run_idle "$w" list)
+  case "$out" in *"lane	stopped while waiting on the captain"*) ;; *) fail "idle-decision: list output $out" ;; esac
+  out=$(FM_HOME="$w" FM_STATE_OVERRIDE="$w/state" "$ROOT/bin/fm-crew-state.sh" lane 2>&1 | head -1)
+  case "$out" in "state: paused · source: idle-park · stopped while waiting on the captain since "*"(decision board unanswered)"*) ;;
+    *) fail "idle-decision: crew state does not read the stop: $out" ;; esac
+  pass "a worker waiting on the captain keeps its agent until the threshold, then is stopped once, silently, with its decision left open"
+}
+
+test_held_task_is_stopped_and_other_waits_are_not() {
+  local w
+  w=$(idle_world idle-hold "paused [at=1]: holding the preview server for a look")
+  printf 'state: paused · source: status-log · holding the preview server\n' > "$w/crew-state"
+  # A declared wait that is not held for the captain is the worker's own.
+  expect_idle_untouched "$w" idle-own-wait
+  printf 'lane\n' > "$w/hold.open"
+  run_idle "$w" tick >/dev/null 2>&1
+  wait_idle_parked "$w" idle-hold
+  grep -qx 'basis=hold' "$w/state/lane.idle-park" || fail "idle-hold: record lacks the hold basis"
+  pass "a task held for the captain is stopped after the threshold, while a declared wait of the worker's own is not"
+}
+
+test_idle_stop_never_touches_busy_validating_kept_or_secondmate_lanes() {
+  local w
+  w=$(idle_world idle-busy)
+  printf 'v1 gen=gen1 seq=4 state=busy source=claude-hook event=UserPromptSubmit ts=%s\n' "$(date +%s)" > "$w/state/lane.busy-state"
+  run_idle "$w" tick >/dev/null 2>&1; sleep 1
+  [ ! -e "$w/control.log" ] && [ ! -e "$w/state/lane.idle-park" ] || fail "idle-busy: a busy agent was stopped"
+  w=$(idle_world idle-validating)
+  printf 'state: parked · source: run-step · parked at review\n' > "$w/crew-state"
+  run_idle "$w" tick >/dev/null 2>&1; sleep 1
+  [ ! -e "$w/control.log" ] && [ ! -e "$w/state/lane.idle-park" ] || fail "idle-validating: a lane with a live validation run was stopped"
+  w=$(idle_world idle-kept)
+  run_idle "$w" keep lane >/dev/null || fail "idle-kept: keep failed"
+  expect_idle_untouched "$w" idle-kept
+  run_idle "$w" unkeep lane >/dev/null || fail "idle-kept: unkeep failed"
+  run_idle "$w" tick >/dev/null 2>&1
+  wait_idle_parked "$w" idle-unkept
+  w=$(idle_world idle-secondmate)
+  printf 'kind=secondmate\n' >> "$w/state/lane.meta"
+  expect_idle_untouched "$w" idle-secondmate
+  w=$(idle_world idle-inbox)
+  mkdir -p "$w/state/lane.inbox"; printf 'answer\n' > "$w/state/lane.inbox/001.msg"
+  expect_idle_untouched "$w" idle-inbox
+  w=$(idle_world idle-off)
+  printf '0\n' > "$w/config/idle-park-hours"
+  FM_PARK_IDLE_SECS='' expect_idle_untouched "$w" idle-off
+  pass "the idle stop never touches a busy agent, a live validation run, a kept-alive task, a secondmate, an unread instruction, or a home that turned it off"
+}
+
+test_dirty_copy_is_reported_once_and_left_running() {
+  local w out
+  w=$(idle_world idle-dirty)
+  printf 'draft\n' > "$(fm_meta_get_test "$w" worktree)/draft.txt"
+  out=$(run_idle "$w" tick 2>&1)
+  wait_report "$w" idle-dirty
+  out=$(run_idle "$w" tick 2>&1)
+  case "$out" in "idle-stop-refused lane: "*"uncommitted changes"*) ;; *) fail "idle-dirty: report: $out" ;; esac
+  [ ! -e "$w/control.log" ] && [ ! -e "$w/state/lane.idle-park" ] || fail "idle-dirty: a lane with uncommitted work was stopped"
+  out=$(run_idle "$w" tick 2>&1); sleep 0.5
+  out=$out$(run_idle "$w" tick 2>&1)
+  [ -z "$out" ] || fail "idle-dirty: the refusal was reported again: $out"
+  pass "a worker waiting on the captain with uncommitted work is left running and reported once"
+}
+
+test_idle_stop_clears_what_the_agent_left_running() {
+  local w wt orphan kept ppid
+  w=$(idle_world idle-leftovers)
+  wt=$(fm_meta_get_test "$w" worktree)
+  # A dev server the agent left behind is an orphan in the local copy; the
+  # endpoint's shell, which stays, keeps a live parent outside it.
+  ( cd "$wt" && nohup sleep 60 >/dev/null 2>&1 & echo $! > "$w/orphan.pid" )
+  orphan=$(cat "$w/orphan.pid")
+  ( cd "$wt" && exec sleep 61 ) &
+  kept=$!
+  sleep 0.3
+  ppid=$(ps -o ppid= -p "$orphan" | tr -d '[:space:]')
+  mkdir -p "$w/state/browse/lane"; : > "$w/state/browse/lane/session.live"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/browse.log"\n' "$w" > "$w/fakebin/fm-browse-session.sh"
+  chmod +x "$w/fakebin/fm-browse-session.sh"
+  FM_REAP_ORPHAN_PARENTS=$ppid FM_PARK_BROWSE_BIN="$w/fakebin/fm-browse-session.sh" run_idle "$w" tick >/dev/null 2>&1
+  wait_idle_parked "$w" idle-leftovers
+  if kill -0 "$orphan" 2>/dev/null; then kill "$orphan" "$kept" 2>/dev/null; fail "idle-leftovers: the orphaned process in the local copy is still running"; fi
+  kill -0 "$kept" 2>/dev/null || fail "idle-leftovers: a process with a live parent outside the copy was stopped"
+  kill "$kept" 2>/dev/null; wait "$kept" 2>/dev/null
+  [ "$(cat "$w/browse.log" 2>/dev/null)" = "stop lane" ] || fail "idle-leftovers: the task's browser session was not stopped: $(cat "$w/browse.log" 2>/dev/null)"
+  pass "an idle stop stops the task's browser session and the orphaned processes in its local copy, never one whose parent lives outside it"
+}
+
+# Stops the world's lane through the real tick, then clears the call log.
+idle_park_world() {  # <world> <label>
+  run_idle "$1" tick >/dev/null 2>&1
+  wait_idle_parked "$1" "$2"
+  rm -f "$1/control.log"
+}
+
+# Waits for a detached relaunch to finish.
+wait_idle_resumed() {  # <world> <label>
+  for _ in $(seq 1 200); do
+    [ -e "$1/state/lane.idle-park" ] || return 0
+    sleep 0.1
+  done
+  fail "$2: the stopped lane was not relaunched within 20s"
+}
+
+expect_idle_relaunch() {  # <world> <label> <note-substring>
+  wait_idle_resumed "$1" "$2"
+  head -1 "$1/control.log" | grep -q '^lane relaunch --note-file ' || fail "$2: no relaunch call: $(cat "$1/control.log" 2>/dev/null)"
+  grep -qF "$3" "$1/control.log" || fail "$2: the relaunch note lacks '$3': $(cat "$1/control.log")"
+  grep -qF 'steering inbox' "$1/control.log" || fail "$2: the note does not point the fresh agent at its inbox"
+  tail -1 "$1/state/lane.status" | grep -q '^working \[at=[0-9]*\]: relaunched after a stop while waiting on the captain' \
+    || fail "$2: no working line: $(tail -1 "$1/state/lane.status")"
+}
+
+test_stopped_worker_relaunches_when_the_captain_answers() {
+  local w out
+  # A steer recorded for the task relaunches it on the next tick.
+  w=$(idle_world idle-steer)
+  idle_park_world "$w" idle-steer
+  out=$(run_idle "$w" tick 2>&1); sleep 0.5
+  [ ! -e "$w/control.log" ] || fail "idle-steer: a quiet stopped lane was relaunched"
+  mkdir -p "$w/state/lane.inbox"; printf 'go ahead\n' > "$w/state/lane.inbox/001.msg"
+  run_idle "$w" tick >/dev/null 2>&1
+  expect_idle_relaunch "$w" idle-steer "an instruction is waiting"
+  [ -f "$w/state/lane.inbox/001.msg" ] || fail "idle-steer: the waiting instruction was consumed by the relaunch"
+  # The open decision answered without a steer relaunches it too.
+  w=$(idle_world idle-resolved)
+  idle_park_world "$w" idle-resolved
+  printf 'resolved [key=board] [at=%s]: answered: ship option two\n' "$(date +%s)" >> "$w/state/lane.status"
+  run_idle "$w" tick >/dev/null 2>&1
+  expect_idle_relaunch "$w" idle-resolved "ship option two"
+  # A released hold relaunches a lane stopped on its hold.
+  w=$(idle_world idle-released "paused [at=1]: holding the preview server for a look")
+  printf 'state: paused · source: status-log · holding\n' > "$w/crew-state"
+  printf 'lane\n' > "$w/hold.open"
+  idle_park_world "$w" idle-released
+  : > "$w/hold.open"
+  run_idle "$w" tick >/dev/null 2>&1
+  expect_idle_relaunch "$w" idle-released "hold"
+  # idle-wake, the steer path's entry point, relaunches at once.
+  w=$(idle_world idle-wake)
+  idle_park_world "$w" idle-wake
+  out=$(run_idle "$w" idle-wake lane 2>&1) || fail "idle-wake: $out"
+  expect_idle_relaunch "$w" idle-wake "a new instruction"
+  pass "a stopped worker relaunches with a note pointing at its inbox when a steer arrives, its decision is answered, its hold is released, or a steer wakes it directly"
+}
+
+test_failed_idle_relaunch_is_reported_and_kept() {
+  local w out
+  w=$(idle_world idle-relaunch-fail)
+  idle_park_world "$w" idle-relaunch-fail
+  : > "$w/control.fail"
+  mkdir -p "$w/state/lane.inbox"; printf 'go\n' > "$w/state/lane.inbox/001.msg"
+  run_idle "$w" tick >/dev/null 2>&1
+  wait_report "$w" idle-relaunch-fail
+  out=$(run_idle "$w" tick 2>&1)
+  case "$out" in "idle-relaunch-failed lane: "*) ;; *) fail "idle-relaunch-fail: report: $out" ;; esac
+  grep -q '^resume_error=' "$w/state/lane.idle-park" || fail "idle-relaunch-fail: record does not keep the failure"
+  out=$(FM_HOME="$w" FM_STATE_OVERRIDE="$w/state" "$ROOT/bin/fm-crew-state.sh" lane 2>&1 | head -1)
+  case "$out" in "state: blocked · source: idle-park · "*"the relaunch failed"*) ;; *) fail "idle-relaunch-fail: crew state: $out" ;; esac
+  rm -f "$w/state/lane.inbox/001.msg"
+  out=$(run_idle "$w" tick 2>&1); sleep 0.5
+  [ -z "$out" ] && [ "$(grep -c "^lane relaunch" "$w/control.log")" = 1 ] || fail "idle-relaunch-fail: a failed relaunch was retried by the tick"
+  pass "a relaunch that fails is reported and keeps the stop record for a manual relaunch"
+}
+
 fm_test_run \
   test_github_gate_clean_and_each_unclean_condition \
   test_github_gate_refuses_until_every_required_check_reports \
@@ -1235,4 +1472,11 @@ fm_test_run \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \
-  test_land_waits_for_an_action_under_way
+  test_land_waits_for_an_action_under_way \
+  test_worker_waiting_on_the_captain_is_stopped_after_the_threshold \
+  test_held_task_is_stopped_and_other_waits_are_not \
+  test_idle_stop_never_touches_busy_validating_kept_or_secondmate_lanes \
+  test_dirty_copy_is_reported_once_and_left_running \
+  test_idle_stop_clears_what_the_agent_left_running \
+  test_stopped_worker_relaunches_when_the_captain_answers \
+  test_failed_idle_relaunch_is_reported_and_kept

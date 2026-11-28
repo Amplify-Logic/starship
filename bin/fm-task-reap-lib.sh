@@ -26,6 +26,15 @@
 # process outside those copies.
 # Stopping is polite then forceful: TERM, a one-second grace, then KILL for a
 # survivor whose identity (start time) still matches, up to three passes.
+# With FM_REAP_ORPHANS_ONLY=1 only orphaned process trees are matched: a
+# process is kept in the match when every ancestor up to the one orphans are
+# reparented to (pid 1, or a pid listed in FM_REAP_ORPHAN_PARENTS) is itself
+# matched. A process with a live parent outside the copies, such as the shell
+# of a terminal endpoint that stays open in the copy, is never matched, nor is
+# anything it started; neither is a tree with any process outside the copies,
+# or one rooted at a terminal multiplexer (fm_reap_orphan_trees below).
+# bin/fm-park.sh uses this to clear what a stopped agent left behind while its
+# endpoint stays.
 # Every stopped process is logged on stderr with its pid and command line.
 # Without lsof only the argument match runs; the caller decides on any extra
 # fallback. Returns 0 when nothing is left, 1 (with a REFUSED line ending in
@@ -117,6 +126,57 @@ fm_reap_pids_with_args_under() {  # <dir>...
     }' "$@"
 }
 
+# The pids of <pid-list> that belong to an orphaned tree (the
+# FM_REAP_ORPHANS_ONLY rule above): the process and every ancestor up to the
+# tree's root are in the list, and the root's parent is an orphan parent. A
+# whole tree is left alone when any of its processes has a descendant outside
+# the list, or its root is a terminal multiplexer, so a server that hosts other
+# terminals is never matched. Failure means the process table could not be read.
+fm_reap_orphan_trees() {  # <pid-list>
+  local table
+  table=$(ps -A -o pid= -o ppid= -o comm= 2>/dev/null) || return 1
+  [ -n "$table" ] || return 1
+  # BSD awk refuses a newline in a -v value, so both lists travel space-separated.
+  printf '%s\n' "$table" | awk -v list="$(printf '%s' "$1" | tr '\n' ' ')" \
+    -v extra="$(printf '%s' "${FM_REAP_ORPHAN_PARENTS:-}" | tr '\n' ' ')" '
+    BEGIN {
+      n = split(list, a, /[ \t]+/); for (i = 1; i <= n; i++) if (a[i] != "") cand[a[i]] = 1
+      orphan[1] = 1
+      n = split(extra, a, /[ \t]+/); for (i = 1; i <= n; i++) if (a[i] != "") orphan[a[i]] = 1
+    }
+    $1 ~ /^[0-9]+$/ {
+      parent[$1] = $2
+      cmd = $3; sub(/^.*\//, "", cmd); comm[$1] = cmd
+    }
+    END {
+      for (p in cand) {
+        q = p; root[p] = ""
+        for (d = 0; d < 64; d++) {
+          pp = parent[q]
+          if (pp == "") break
+          if (pp in orphan) { root[p] = q; break }
+          if (!(pp in cand)) break
+          q = pp
+        }
+      }
+      for (p in parent) {
+        if (p in cand) continue
+        q = p
+        for (d = 0; d < 64; d++) {
+          q = parent[q]
+          if (q == "" || q in orphan) break
+          if (q in cand) { if (root[q] != "") held[root[q]] = 1; break }
+        }
+      }
+      for (p in cand) {
+        r = root[p]
+        if (r == "" || r in held) continue
+        if (comm[r] ~ /^(tmux|tmate|screen|zellij|herdr|abduco|dtach)/) continue
+        print p
+      }
+    }' | sort -n
+}
+
 fm_reap_process_identity() {  # <pid>
   local pid=$1 proc_root stat_line starttime value
   local -a stat_fields
@@ -177,6 +237,12 @@ fm_reap_pids_under_roots() {  # <dir>...
 $arg_pids"
   FM_REAP_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un \
     | grep -F -x -v -f <(fm_reap_own_ancestry; printf '%s\n' "$$") || true)
+  if [ "${FM_REAP_ORPHANS_ONLY:-0}" = 1 ] && [ -n "$FM_REAP_PIDS" ]; then
+    FM_REAP_PIDS=$(fm_reap_orphan_trees "$FM_REAP_PIDS") || {
+      FM_REAP_FAILED_DIR=${dirs[0]}
+      return 1
+    }
+  fi
 }
 
 fm_reap_log_processes() {  # <prefix> <pid>...
