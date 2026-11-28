@@ -42,6 +42,11 @@
     "PreInvocation": [
       {
         "type": "command",
+        "command": "sh -c \"[ -x ./bin/fm-agy-session-hook.sh ] && exec ./bin/fm-agy-session-hook.sh || exec ../bin/fm-agy-session-hook.sh\" || cd .",
+        "timeout": 5
+      },
+      {
+        "type": "command",
         "command": "sh -c \"[ -x ./bin/fm-agy-plain-language.sh ] && exec ./bin/fm-agy-plain-language.sh before-model || exec ../bin/fm-agy-plain-language.sh before-model\" || cd .",
         "timeout": 5
       }
