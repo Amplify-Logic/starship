@@ -38,6 +38,17 @@ if [ "${1:-}" = auth ] && [ "${2:-}" = status ] && [ "$(basename "$0")" = claude
     "${FM_PRIMARY_TEST_CLAUDE_ORG:-org-fake-0001}"
   exit 0
 fi
+if [ "${1:-}" = models ] && [ "$(basename "$0")" = agy ]; then
+  # Matches agy 1.5.18: a progress line, then one "<id><TAB><name>" row per
+  # model the signed-in plan offers, exit 0.
+  printf 'Fetching available models...\n' >&2
+  if [ -n "${FM_PRIMARY_TEST_AGY_MODELS_FAIL:-}" ]; then
+    printf '%s\n' "$FM_PRIMARY_TEST_AGY_MODELS_FAIL" >&2
+    exit 1
+  fi
+  printf '%b\n' "${FM_PRIMARY_TEST_AGY_MODELS:-gemini-4-neon-high\tGemini 4 Neon (High)\ngemini-4-neon-xhigh\tGemini 4 Neon (XHigh)\ngemini-4-neon-medium\tGemini 4 Neon (Medium)\ngemini-4-neon-low\tGemini 4 Neon (Low)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)}"
+  exit 0
+fi
 if [ "${1:-}" = login ] && [ "${2:-}" = status ] && [ "$(basename "$0")" = codex ]; then
   # Matches codex-cli 0.144.6: the status lands on stderr with empty stdout and
   # a non-zero exit. An empty fixture stays a quiet, non-blocking probe.
@@ -54,6 +65,7 @@ printf 'role=%s\n' "${FM_PRIMARY_ROLE:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'opencode_permissions=%s\n' "${OPENCODE_CONFIG_CONTENT:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'claude_bg_shell_pressure_reap=%s\n' "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'claude_auto_compact_window=%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" >> "$FM_PRIMARY_TEST_LOG"
+printf 'agy_auto_compact=%s\n' "${AGY_CLI_AUTO_COMPACT_OVERRIDE:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'argv=' >> "$FM_PRIMARY_TEST_LOG"
 printf '<%s>' "$@" >> "$FM_PRIMARY_TEST_LOG"
 printf '\n' >> "$FM_PRIMARY_TEST_LOG"
@@ -61,7 +73,7 @@ exit "${FM_PRIMARY_TEST_EXIT:-0}"
 SH
   chmod +x "$FAKEBIN/$1"
 }
-for cli in pi claude codex opencode grok agent herdr tmux; do make_cli "$cli"; done
+for cli in pi claude codex opencode grok agent agy herdr tmux; do make_cli "$cli"; done
 
 strip_ansi() {
   sed $'s/\033\\[[0-9;?]*[a-zA-Z]//g'
@@ -71,6 +83,7 @@ dry() { # <profile> [<args>...]
   ( cd "$TMP_ROOT" && \
     env -u CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP \
     -u CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+    -u AGY_CLI_AUTO_COMPACT_OVERRIDE \
     PATH="$FAKEBIN:$PATH" \
     FM_HOME="$HOME_FIX" \
     FM_PRIMARY_DRY_RUN=1 \
@@ -1669,6 +1682,10 @@ test_context_window_is_capped_at_500k() {
       "$profile argv omitted the 500k auto-compact limit"
   done
 
+  out=$(dry neon)
+  assert_contains "$out" 'AGY_CLI_AUTO_COMPACT_OVERRIDE=500K' \
+    "neon dry-run omitted the 500K auto-compact override"
+
   # Pi and Cursor expose no context or compaction knob, so their launches must
   # stay bare rather than carry an invented one.
   for profile in pi cursor-grok; do
@@ -1733,7 +1750,7 @@ test_preflight_is_read_only_and_checks_accounts() {
   holder=$!
   printf '%s\n' "$holder" > "$HOME_FIX/state/.lock"
   : > "$LOG"
-  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
+  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45 neon; do
     out=$(live "$profile" --preflight 2>&1) || status=$?
     [ "$status" -eq 0 ] || { kill "$holder"; fail "$profile preflight failed: $out"; }
   done
@@ -1765,9 +1782,121 @@ test_preflight_is_read_only_and_checks_accounts() {
   pass "fm-primary: preflight checks all profile gates without launch, state, or terminal changes, and refuses a logged-out Claude Code only under --preflight"
 }
 
+# The neon profile launches Gemini 4 Neon through the Antigravity CLI. Its
+# effort is the model id's suffix, chosen by config/neon-effort; the 500K cap
+# rides agy's own AGY_CLI_AUTO_COMPACT_OVERRIDE; and a launch refuses when
+# `agy models` cannot answer or does not offer the chosen model.
+test_neon_primary_profile() {
+  local out status=0 effort_file="$HOME_FIX/config/neon-effort" token mini="$TMP_ROOT/neon-mini"
+  mkdir -p "$HOME_FIX/config"
+  rm -f "$effort_file"
+
+  out=$("$ROOT/bin/fm-primary.sh" --help)
+  assert_contains "$out" 'neon' "help omitted the neon profile"
+  assert_contains "$out" 'AGY_CLI_AUTO_COMPACT_OVERRIDE=500K' "help omitted the agy 500K cap"
+
+  out=$(dry neon 2>&1)
+  assert_contains "$out" 'profile=neon' "neon dry-run omitted profile"
+  assert_contains "$out" 'AGY_CLI_AUTO_COMPACT_OVERRIDE=500K' "neon dry-run omitted the 500K cap"
+  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-high' '--dangerously-skip-permissions'" \
+    "absent neon-effort did not launch Gemini 4 Neon High with permissions skipped"
+  assert_contains "$out" 'launching model gemini-4-neon-high at effort high' \
+    "neon did not print the resolved model and effort"
+  assert_not_contains "$out" 'status-bar' "neon invented a status-bar install"
+
+  for token in low medium xhigh; do
+    printf '  %s \n' "$token" > "$effort_file"
+    out=$(dry neon 2>/dev/null)
+    assert_contains "$out" "'--model' 'gemini-4-neon-$token'" "neon-effort $token was not accepted"
+  done
+  for token in max turbo ''; do
+    printf '%s\n' "$token" > "$effort_file"
+    status=0
+    out=$(dry neon 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "neon-effort '$token' was accepted"
+    assert_contains "$out" "$effort_file" "neon-effort '$token' refusal did not name the file"
+    assert_contains "$out" 'low medium high xhigh' "neon-effort '$token' refusal did not name the accepted set"
+  done
+  rm -f "$effort_file"
+
+  status=0
+  out=$(dry neon --account work 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "neon accepted --account although agy has no account pin"
+  assert_contains "$out" 'no vendor account to pin' "neon --account refusal was unclear"
+
+  # The real exec path: agy runs at the root with the cap and the harness marker.
+  : > "$LOG"
+  ( cd "$TMP_ROOT" && \
+    env -u HERDR_ENV -u HERDR_SESSION -u HERDR_PANE_ID -u TMUX_PANE -u AGY_CLI_AUTO_COMPACT_OVERRIDE \
+      PATH="$FAKEBIN:$PATH" TERM=dumb FM_HOME="$HOME_FIX" FM_PRIMARY_TEST_LOG="$LOG" \
+      "$ROOT/bin/fm-primary.sh" neon )
+  out=$(cat "$LOG")
+  assert_contains "$out" 'cli=agy' "neon did not exec agy"
+  assert_contains "$out" "pwd=$ROOT" "neon did not run agy at the tracked root"
+  assert_contains "$out" 'harness=agy' "neon did not export FM_PRIMARY_HARNESS=agy"
+  assert_contains "$out" 'agy_auto_compact=500K' "the launched agy did not inherit the 500K cap"
+  assert_contains "$out" 'argv=<--model><gemini-4-neon-high><--dangerously-skip-permissions>' \
+    "neon lost the model pin or the permission skip at exec"
+
+  # A plan that does not offer the model refuses, live and under --preflight,
+  # without launching; the dry-run preview still prints argv.
+  for mode in '' --preflight; do
+    : > "$LOG"
+    status=0
+    # shellcheck disable=SC2086 # $mode is deliberately empty or one flag
+    out=$(FM_PRIMARY_TEST_AGY_MODELS='gemini-3.8-flash-low\tGemini 3.8 Flash (Low)' live neon $mode 2>&1) || status=$?
+    [ "$status" -ne 0 ] || fail "neon ${mode:-live} launched although agy models lacks the model"
+    assert_contains "$out" "does not offer gemini-4-neon-high" "missing-model refusal ${mode:-live} did not name the model: $out"
+    [ ! -s "$LOG" ] || fail "neon ${mode:-live} launched agy despite the missing model"
+  done
+  # When agy models cannot answer at all, --preflight refuses, so a handoff
+  # never stops a working session for one that cannot reach its service; a
+  # real launch (the step after the old session stopped) warns and launches.
+  : > "$LOG"
+  status=0
+  out=$(FM_PRIMARY_TEST_AGY_MODELS_FAIL='network unreachable' live neon --preflight 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "neon preflight passed although agy models failed"
+  assert_contains "$out" "'agy models' did not answer" "failed-models preflight refusal was unclear: $out"
+  assert_contains "$out" 'network unreachable' "failed-models preflight refusal hid agy's own words"
+  [ ! -s "$LOG" ] || fail "neon preflight launched agy"
+  : > "$LOG"
+  status=0
+  out=$(FM_PRIMARY_TEST_AGY_MODELS_FAIL='network unreachable' live neon 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "a neon launch was refused only because agy models did not answer: $out"
+  assert_contains "$out" 'launching gemini-4-neon-high unvalidated' "unanswered agy models gave no notice: $out"
+  assert_contains "$(cat "$LOG")" 'cli=agy' "an unanswered agy models stopped the neon launch"
+  out=$(FM_PRIMARY_TEST_AGY_MODELS_FAIL='network unreachable' dry neon 2>/dev/null)
+  assert_contains "$out" "'agy' '--model' 'gemini-4-neon-high'" "the models gate hid the dry-run argv"
+
+  # The tracked agy hook file is checked before launch: agy ignores the whole
+  # file when any top-level entry is not a named hook spec.
+  mkdir -p "$mini/bin" "$mini/.agents"
+  cp "$ROOT/bin/fm-primary.sh" "$ROOT/bin/fm-lock.sh" "$ROOT"/bin/fm-*-lib.sh \
+    "$ROOT/bin/fm-sessionstart-agy.sh" "$ROOT/bin/fm-turnend-guard-agy.sh" "$mini/bin/"
+  jq '. + {"version": 1}' "$ROOT/.agents/hooks.json" > "$mini/.agents/hooks.json"
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 "$mini/bin/fm-primary.sh" neon 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "neon accepted a hook file agy would ignore"
+  assert_contains "$out" 'agy primary hooks are incomplete' "invalid hook file refusal was unclear: $out"
+  jq '.firstmate |= del(.Stop)' "$ROOT/.agents/hooks.json" > "$mini/.agents/hooks.json"
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 "$mini/bin/fm-primary.sh" neon 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "neon accepted a hook file with no Stop hook"
+  cp "$ROOT/.agents/hooks.json" "$mini/.agents/hooks.json"
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 "$mini/bin/fm-primary.sh" neon 2>&1) \
+    || fail "neon refused the tracked hook file: $out"
+  rm "$mini/bin/fm-turnend-guard-agy.sh"
+  status=0
+  out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 "$mini/bin/fm-primary.sh" neon 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "neon launched without the agy turn-end guard"
+  assert_contains "$out" 'missing tracked primary integration: bin/fm-turnend-guard-agy.sh' "missing guard refusal was unclear"
+  pass "fm-primary: neon launches Gemini 4 Neon at the chosen effort with the 500K cap, and refuses bad effort, accounts, hooks, and models"
+}
+
 test_preflight_is_read_only_and_checks_accounts
 
 test_profiles_and_root
+test_neon_primary_profile
 test_context_window_is_capped_at_500k
 test_claude_effort
 test_claude_fable52_primary_profile

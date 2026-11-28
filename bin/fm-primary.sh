@@ -86,6 +86,27 @@
 #                 warning and login gate, the same session lock, the same
 #                 FM_PRIMARY_HARNESS=cursor, and no companion status bar.
 #                 The model id is the only difference.
+#   neon          agy --model gemini-4-neon-<value> --dangerously-skip-permissions
+#                 Gemini 4 Neon through the Antigravity CLI. The effort is the
+#                 model id's suffix, from the first trimmed line of local
+#                 gitignored config/neon-effort when that file exists,
+#                 otherwise high. Accepted tokens: low, medium, high, xhigh,
+#                 the Neon tiers `agy models` lists; any other content,
+#                 including an empty token, refuses.
+#                 Exports AGY_CLI_AUTO_COMPACT_OVERRIDE=500K (see "Context
+#                 window" below) and FM_PRIMARY_HARNESS=agy.
+#                 Primary lifecycle hooks are the tracked .agents/hooks.json,
+#                 which must hold only named hook specs (agy ignores the whole
+#                 file when any top-level entry is not one) with SessionStart,
+#                 PreToolUse, and Stop. No companion status bar is installed.
+#                 Every launch except a dry run asks `agy models` and refuses
+#                 when its answer does not list the chosen model, so a plan
+#                 without that Neon tier never boots a dead primary. When
+#                 `agy models` does not answer at all, --preflight refuses, so a
+#                 handoff never stops a working session for one that cannot
+#                 reach its service, while a real launch prints a notice and
+#                 launches unvalidated, so a passing network fault after the
+#                 old session stopped never leaves no first mate running.
 #
 # Context window (captain's order 2026-09-13: cap every future session at 500k
 # tokens so the orchestrator compacts itself). The exact per-harness mechanism,
@@ -105,6 +126,10 @@
 #     compaction.reserveTokens, and reserveTokens exists only in a settings file.
 #   cursor-grok  nothing is passed. The Cursor CLI exposes no context or
 #     compaction setting.
+#   neon  exports AGY_CLI_AUTO_COMPACT_OVERRIDE=500K, agy's own override; agy
+#     1.5.18's /context then reads "Auto-compact at 500.0k tokens (overridden
+#     by AGY_CLI_AUTO_COMPACT_OVERRIDE=500K)", and the agy settings file is
+#     never touched.
 # opencode and grok are outside that order and are unchanged.
 #
 # --preflight checks the CLI, integrations, configuration, and account without
@@ -124,7 +149,7 @@
 # It pins the launch to a NAMED VENDOR ACCOUNT: the Claude profiles take a claude
 # account, exported as CLAUDE_CONFIG_DIR, and the Codex-backed profiles codex and
 # astra take a codex account, exported as CODEX_HOME. A profile whose vendor has no account concept (pi,
-# opencode, grok, cursor-grok, cursor-grok45) refuses --account rather
+# opencode, grok, cursor-grok, cursor-grok45, neon) refuses --account rather
 # than ignoring it.
 # Accounts are named in local, gitignored config/accounts.json (docs/fork-configuration.md
 # owns that schema) and their homes are DERIVED as data/accounts/<vendor>/<name>,
@@ -461,30 +486,31 @@ resolve_claude_effort() {
   esac
 }
 
-# Resolve Astra primary effort from local config/astra-effort.
-# An absent file defaults to xhigh. A present file must have a first line that
-# trims to exactly one accepted token; anything else, including an empty token,
-# refuses rather than falling back. Call this only for the astra profile so a
-# bad file cannot block other primaries.
-# Accepted tokens are low, medium, high, and xhigh only. max is refused, and that
-# refusal is retained pending the separate follow-up astra-max-effort rather than
-# widened here.
-# This deliberately stays a sibling of resolve_claude_effort rather than a shared
-# parameterised helper: the accepted token sets differ on purpose, and folding
-# them together would rewrite the reader the live Fable and Opus primaries
-# depend on for no real saving. Revisit only if a third caller appears.
-resolve_astra_effort() {
+# Resolve a model-tier effort from a one-token local config file, for the
+# astra (config/astra-effort, default xhigh) and neon (config/neon-effort,
+# default high) profiles. Sets TIER_EFFORT. An absent file takes the default.
+# A present file must have a first line that trims to exactly one of low,
+# medium, high, or xhigh; anything else, including an empty token, refuses
+# rather than falling back. Call this only for the profile that owns the file
+# so a bad file cannot block other primaries.
+# max is refused for both: Astra's refusal is retained pending the separate
+# follow-up astra-max-effort, and agy lists no Neon max tier.
+# This deliberately stays a sibling of resolve_claude_effort rather than one
+# parameterised helper: Claude's accepted set and its plan default differ on
+# purpose, and folding them together would rewrite the reader the live Fable
+# and Opus primaries depend on for no real saving.
+resolve_tier_effort() {  # <config file name> <default>
   local file value
-  file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/astra-effort"
+  file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/$1"
   if [ ! -f "$file" ]; then
-    ASTRA_EFFORT=xhigh
+    TIER_EFFORT=$2
     return 0
   fi
   IFS= read -r value < "$file" || true
   value=${value#"${value%%[![:space:]]*}"}
   value=${value%"${value##*[![:space:]]}"}
   case "$value" in
-    low|medium|high|xhigh) ASTRA_EFFORT=$value ;;
+    low|medium|high|xhigh) TIER_EFFORT=$value ;;
     *) die "invalid effort in $file: '$value' (accepted: low medium high xhigh)" ;;
   esac
 }
@@ -866,6 +892,20 @@ verify_integrations() {
       require_file .grok/hooks/fm-primary-cd-check.json
       require_file .grok/hooks/fm-primary-turnend-guard.json
       ;;
+    neon)
+      require_file .agents/hooks.json
+      require_file bin/fm-sessionstart-agy.sh
+      require_file bin/fm-turnend-guard-agy.sh
+      require_command jq
+      jq -e '
+        type == "object" and length > 0
+        and all(.[]; type == "object")
+        and any(.[]; (.SessionStart | type) == "array"
+          and (.PreToolUse | type) == "array"
+          and (.Stop | type) == "array")
+      ' "$FM_ROOT/.agents/hooks.json" >/dev/null 2>&1 \
+        || die "agy primary hooks are incomplete (.agents/hooks.json must hold only named hook specs, one with SessionStart, PreToolUse, and Stop)"
+      ;;
     cursor-grok|cursor-grok45)
       require_file .claude/settings.json
       require_file docs/supervision-protocols/cursor.md
@@ -923,8 +963,8 @@ case "$PROFILE" in
   cursor) PROFILE=cursor-grok ;;
 esac
 case "$PROFILE" in
-  pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45) ;;
-  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45)" ;;
+  pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45|neon) ;;
+  *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45 neon)" ;;
 esac
 
 validate_visible_prefix
@@ -948,6 +988,7 @@ case "$PROFILE" in
   opencode) CLI=opencode ;;
   grok) CLI=grok ;;
   cursor-grok|cursor-grok45) CLI=${FM_CURSOR_BIN:-agent} ;;
+  neon) CLI=agy ;;
 esac
 require_command "$CLI"
 # Exported here, before the remaining profile checks, so anything this launcher
@@ -1005,7 +1046,8 @@ case "$PROFILE" in
     argv=(codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -c model_auto_compact_token_limit=500000)
     ;;
   astra)
-    resolve_astra_effort
+    resolve_tier_effort astra-effort xhigh
+    ASTRA_EFFORT=$TIER_EFFORT
     resolve_astra_context
     resolve_astra_compact_at
     argv=(codex --model gpt-6-astra -c "model_reasoning_effort=\"$ASTRA_EFFORT\"" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox)
@@ -1035,6 +1077,15 @@ case "$PROFILE" in
   cursor-grok45)
     argv=("$CLI" --yolo --model cursor-grok-4.5-high)
     ;;
+  neon)
+    resolve_tier_effort neon-effort high
+    NEON_MODEL=gemini-4-neon-$TIER_EFFORT
+    # Cap auto-compaction at 500k tokens through agy's own override, so the
+    # agy settings file is never touched (header "Context window").
+    export AGY_CLI_AUTO_COMPACT_OVERRIDE=500K
+    argv=(agy --model "$NEON_MODEL" --dangerously-skip-permissions)
+    printf 'fm-primary: launching model %s at effort %s\n' "$NEON_MODEL" "$TIER_EFFORT" >&2
+    ;;
 esac
 
 if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ] && [ "$PREFLIGHT" -ne 1 ]; then
@@ -1045,6 +1096,8 @@ if [ "${FM_PRIMARY_DRY_RUN:-0}" = 1 ] && [ "$PREFLIGHT" -ne 1 ]; then
     printf 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=%s\n' "$CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP"
   [ -z "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ] || \
     printf 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=%s\n' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+  [ -z "${AGY_CLI_AUTO_COMPACT_OVERRIDE:-}" ] || \
+    printf 'AGY_CLI_AUTO_COMPACT_OVERRIDE=%s\n' "$AGY_CLI_AUTO_COMPACT_OVERRIDE"
   if [ -n "$ACCOUNT_HOME" ]; then
     printf 'account=%s\n' "$ACCOUNT_NAME"
     printf '%s=%s\n' "$ACCOUNT_ENV" "$ACCOUNT_HOME"
@@ -1087,6 +1140,23 @@ if [ "$PROFILE" = codex ] || [ "$PROFILE" = astra ]; then
   esac
 fi
 
+if [ "$PROFILE" = neon ]; then
+  # agy reports its plan's models on the merged stream as "<id><TAB><name>"
+  # rows (header "neon" owns when a missing answer refuses).
+  agy_models_status=0
+  agy_models=$(fm_run_timed 30 "$CLI" models </dev/null 2>&1) || agy_models_status=$?
+  if [ "$agy_models_status" -ne 0 ]; then
+    agy_models_said=$(printf '%s' "$agy_models" | tr '\n' ' ' | cut -c1-200)
+    [ "$PREFLIGHT" -ne 1 ] \
+      || die "'$CLI models' did not answer (exit $agy_models_status: $agy_models_said); the new session could not reach its model - check the agy sign-in and network, then try again"
+    printf "fm-primary: notice: '%s models' did not answer (exit %s: %s); launching %s unvalidated\n" \
+      "$CLI" "$agy_models_status" "$agy_models_said" "$NEON_MODEL" >&2
+  else
+    printf '%s\n' "$agy_models" | awk -F'\t' -v m="$NEON_MODEL" '$1 == m { found = 1 } END { exit !found }' \
+      || die "this agy sign-in does not offer $NEON_MODEL ('$CLI models'); choose a listed Neon tier in config/neon-effort or use a plan that includes it"
+  fi
+fi
+
 [ "$PREFLIGHT" -ne 1 ] || exit 0
 
 case "$PROFILE" in
@@ -1125,6 +1195,10 @@ case "$PROFILE" in
     ;;
   astra)
     export FM_PRIMARY_HARNESS=codex
+    exec "${argv[@]}"
+    ;;
+  neon)
+    export FM_PRIMARY_HARNESS=agy
     exec "${argv[@]}"
     ;;
   *) exec "${argv[@]}" ;;

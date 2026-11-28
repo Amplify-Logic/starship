@@ -26,7 +26,7 @@ LAUNCH_LOG="$TMP_ROOT/launch.log"
 HOLDER_BIN="$TMP_ROOT/harness/codex"
 mkdir -p "${HOLDER_BIN%/*}"
 ln -s /bin/bash "$HOLDER_BIN"
-for cli in pi claude codex opencode grok agent; do
+for cli in pi claude codex opencode grok agent agy; do
   printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/$cli"
   chmod +x "$FAKEBIN/$cli"
 done
@@ -1953,7 +1953,7 @@ test_herdr_route_refuses_a_pane_it_cannot_confirm() {
 # line it prints, so the fresh session restarts what is actually running.
 test_profile_reads_back_from_every_launch_line() {
   local profile line read_back
-  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45; do
+  for profile in pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45 neon; do
     line=$(PATH="$FAKEBIN:/usr/bin:/bin" FM_HOME="$HOME_FIX" FM_PRIMARY_DRY_RUN=1 \
       "$ROOT/bin/fm-primary.sh" "$profile" 2>/dev/null | tail -n 1)
     [ -n "$line" ] || fail "$profile printed no launch line"
@@ -1967,6 +1967,29 @@ test_profile_reads_back_from_every_launch_line() {
   read_back=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_profile_from_argv "node /x/pi --name FIRSTMATE"' _ "$ROOT")
   assert_equals pi "$read_back" "a node-hosted launch line did not read back"
   pass "every primary profile reads back from its own launch line"
+}
+
+# The neon profile runs Gemini 4 Neon on the agy CLI. Every effort's model id
+# reads back as neon, so a fresh session restarts the Neon first mate at the
+# effort config/neon-effort chooses, whichever one was live before. It has no
+# quota source yet, so the quota axis reads it as unmonitored.
+test_neon_registered_profile() {
+  local out effort
+  out=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_normalize_profile neon' _ "$ROOT")
+  assert_equals neon "$out" "handoff did not accept neon as a launcher profile"
+  out=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_profile_cli neon' _ "$ROOT")
+  assert_equals agy "$out" "handoff did not map neon to the agy CLI"
+  out=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_min_remaining_for_profile neon' _ "$ROOT")
+  assert_equals na "$out" "neon claimed a quota source it does not have"
+  for effort in low medium high xhigh; do
+    out=$(bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_profile_from_argv "$2"' \
+      _ "$ROOT" "/Users/x/.local/bin/agy --model gemini-4-neon-$effort --dangerously-skip-permissions") \
+      || fail "a Neon $effort launch line did not read back"
+    assert_equals neon "$out" "a Neon $effort launch line read back wrong"
+  done
+  bash -c '. "$1/bin/fm-primary-handoff-lib.sh"; fm_handoff_profile_from_argv "agy --model gemini-3.8-flash-low"' _ "$ROOT" \
+    && fail "an agy launch on another model read back as a Starship profile"
+  pass "handoff accepts neon on the agy CLI and reads every Neon launch line back as neon"
 }
 
 test_fresh_session_needs_no_handoff_config
@@ -2030,6 +2053,7 @@ test_status_bar_persists_context_sample
 test_context_axis_absent_is_quota_only
 test_claude_opus_chain_profile
 test_claude_fable52_registered_profile
+test_neon_registered_profile
 test_check_stays_put_when_chain_exhausted
 test_check_context_refresh_when_chain_exhausted
 test_fable_model_window_rotates_to_opus
