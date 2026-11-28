@@ -23,6 +23,7 @@ Each setting section keeps the heading it had in configuration.md, so its title 
 | The meeting intake | [Meeting intake](#meeting-intake-configmeetings) |
 | Answering held decisions by tapping on the phone, and ready merges too once switched on | [Phone tap desk](#phone-tap-desk-configtap-desk) |
 | Which pull requests land by themselves and who must say yes to the rest | [Merge rule table](#merge-rule-table-configmerge-rules) |
+| Stopping workers that have waited on the captain for a day, and bringing them back when he answers | [Idle stop](#idle-stop-configidle-park-hours) |
 | Waking the first mate when something arrives in a Mothership room | [Mothership monitoring](#mothership-monitoring-configmothership-monitor) |
 | The morning intake, the continuous channel intake and the daily to-do page | [Daily intake and to-do page](#daily-intake-and-to-do-page-configmorning-intake-configchannel-intake) |
 | Which Starship version "update starship" follows | [Update channel](#update-channel-configupdate-channel) |
@@ -944,6 +945,20 @@ A project with no row, a mixed or unlisted class, and a pull request that no tas
 Each merge it confirms on GitHub then gets one generic comment saying who let it land and under which rule, such as "merged on the owner's yes" or "landed by itself under this project's merge rule (docs only)", with no names.
 A dependency pull request says "dependency updates within the same major version" only when every package.json it changes passed the version check; one that changes only lockfiles had no version check and says "lockfile-only dependency refresh".
 `bin/fm-merge-rules.sh`'s header owns the table format, row matching, the file classes, and the trail lines, and `bin/fm-pr-merge.sh`'s header owns how a merge uses them.
+
+## Idle stop (config/idle-park-hours)
+
+A worker that has waited on the captain for a day is stopped, and brought back when he answers, so a held decision, a board waiting for answers, a preview held for a look or credentials he must supply no longer keeps a full agent running for days.
+A worker waits on the captain when its newest report is a question or blocker nobody has answered yet, or when its task is held for the captain (`bin/fm-captain-hold.sh hold`).
+The clock starts at its last report or the last instruction it read.
+The stop keeps the worker's local copy, branch, records and open question, and also stops its own browser session and anything it left running in its local copy; a later answer, a steer, or a lifted hold relaunches it first, and the fresh agent reads the waiting instruction before anything else except one step: a preview or dev server held for the captain's look is stopped with the worker, so the relaunched worker first restarts it and posts its link again.
+A busy worker, a running validation, a wait on anything but the captain, a second mate, and a task marked keep-alive are never stopped, and neither is a worker with uncommitted changes, which is reported instead.
+Routine stops are silent; one that could not be done cleanly, and a relaunch that failed, are reported.
+It is on by default with a threshold of 24 hours.
+The optional local, gitignored `config/idle-park-hours` holds a different whole number of hours; `0`, or anything that is not a whole number, turns it off.
+It is home-local and not inherited by secondmate homes.
+`bin/fm-park.sh keep <task-id>` marks one task keep-alive and `bin/fm-park.sh unkeep <task-id>` clears it.
+`bin/fm-park.sh`'s header owns the full behavior contract and its commands, beside [Park on review](configuration.md#park-on-review), and the watcher runs it on each check sweep.
 
 ## Supervision active alert channels (config/wedge-alarm)
 

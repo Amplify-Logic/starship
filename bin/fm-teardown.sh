@@ -4462,6 +4462,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.polytoken-busy.sh" "$STATE/$ID.pr-register-refused" \
   "$STATE/$ID.outward-seen.json" \
   "$STATE/$ID.review-park" "$STATE/.review-park-closed-$ID" \
+  "$STATE/$ID.idle-park" "$STATE/.idle-park-reported-$ID" "$STATE/$ID.keep-alive" \
   "$STATE/$ID.pr-register-timed-out" \
   "$STATE/.$ID.branch-outcome-index" "$STATE/$ID.steers" \
   "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID" \

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # fm-park.sh - park a ship lane whose PR or MR only awaits human review, watch
 # it while its agent is stopped, relaunch a fresh worker on review activity,
-# and clean the lane up once the merge poll sees it merged.
+# and clean the lane up once the merge poll sees it merged. It also stops the
+# agent of any worker that has waited on the captain past a threshold and
+# relaunches it when an answer can reach it (the idle stop, below).
 #
 # Usage:
 #   fm-park.sh gate <task-id> [--expect-head <sha>]
@@ -10,7 +12,12 @@
 #   fm-park.sh land <task-id> [--if-eligible] [--detach]
 #   fm-park.sh tick
 #   fm-park.sh list
-#   fm-park.sh run <task-id> park|resume|land [<args>...]   (internal)
+#   fm-park.sh idle-park <task-id>
+#   fm-park.sh idle-resume <task-id> --trigger <text>
+#   fm-park.sh idle-wake <task-id>
+#   fm-park.sh keep <task-id>
+#   fm-park.sh unkeep <task-id>
+#   fm-park.sh run <task-id> park|resume|land|idle-park|idle-resume [<args>...]   (internal)
 #
 # gate is read-only: one fresh forge read of the task's recorded pr= (GitHub
 # through one gh GraphQL read, GitLab through glab api for the merge request and
@@ -97,9 +104,9 @@
 # first, which makes the watcher the one owner of a merged lane's teardown.
 #
 # tick is what bin/fm-watch.sh runs every check interval. With
-# neither config/auto-land nor config/park-on-review, and no park record, it exits
-# after those file tests. Otherwise, holding state/.review-park-tick.lock (a
-# held lock exits silently):
+# neither config/auto-land nor config/park-on-review, the idle stop turned off,
+# and no park or stop record, it exits after those file tests. Otherwise,
+# holding state/.review-park-tick.lock (a held lock exits silently):
 #   - pending merged-lane cleanup requests (state/<id>.review-park-land) are
 #     retried when the lane lock is free; outcome reports survive task teardown;
 #   - the outcome lines detached actions published since the last tick are
@@ -141,7 +148,59 @@
 # Parked lanes use only the first half of the tick, reserving the rest for
 # unparked lanes.
 #
-# list prints each parked lane: id, PR, parked head, and when it parked.
+# The idle stop. A worker waits on the captain when its newest status event is
+# a needs-decision or blocked line it wrote that nobody has answered
+# (bin/fm-classify-lib.sh status_worker_wait_verb), or when its task is held for
+# the captain (bin/fm-captain-hold.sh open). Once it has waited the threshold,
+# timed from the newer of its status log and its newest handled steering
+# instruction, the tick starts idle-park. The threshold is
+# config/idle-park-hours (whole hours, default 24 when the file is absent; 0, or
+# anything that is not a whole number, turns the idle stop off);
+# FM_PARK_IDLE_SECS overrides it in seconds for tests. The scan and the captain-hold reads it needs run at most
+# every FM_PARK_IDLE_SCAN_SECS (default 600) in one bin/fm-captain-hold.sh
+# open-each call.
+#
+# idle-park re-establishes everything itself and refuses, leaving the agent
+# running, unless: the backend can prove a stop and launch a replacement; the
+# task is not a secondmate, not remote, not kept alive (state/<id>.keep-alive,
+# written by keep and removed by unkeep), and not parked on review; the wait is
+# still on the captain and past the threshold; the agent is idle with no
+# instruction waiting; bin/fm-crew-state.sh reads its state from the status log
+# (so no validation run is active) and not as working; and its local copy is
+# present and clean. A copy with uncommitted changes is never stopped; that
+# refusal prints "idle-stop-refused <id>: ...", which the tick reports once per
+# status-log state (marker state/.idle-park-reported-<id>); once the copy is
+# clean again a later tick may stop it without a new status line. It then leases the
+# pool slot as park does, takes the inbox delivery lock, checks once more that
+# the agent is idle and the inbox empty, writes state/<id>.idle-park (basis
+# decision with its key, or hold; waiting_since; parked_at; slot_leased;
+# pending=1 until the stop is confirmed), stops the agent with
+# bin/fm-control.sh exit, which keeps the endpoint, branch, copy and records,
+# and appends a declared paused: line; the open decision itself stays open.
+# Last it stops what the agent left running: the task's own browser session
+# (bin/fm-browse-session.sh stop, profile kept) and every orphaned process tree
+# in its local copy, never the endpoint that stays there
+# (bin/fm-task-reap-lib.sh FM_REAP_ORPHANS_ONLY). A routine stop prints
+# nothing; a stop that fails or leaves processes behind prints one
+# idle-stop-failed or idle-stopped line for the tick to report.
+#
+# Each tick relaunches a stopped lane once an answer can reach it: an
+# instruction waiting in its steering inbox, its decision key closed in the
+# status log (a resolved line, whose answer the trigger quotes), or, at the scan
+# cadence, its captain hold answered or released. bin/fm-send.sh records a
+# steer to a stopped lane first and then calls idle-wake, which starts that
+# relaunch at once. idle-resume writes a note naming how long the worker
+# waited and why it was relaunched, quoting the previous agent's last report,
+# and telling the fresh agent to restart any preview or server it held for the
+# captain (the stop ended it) and then act on its steering inbox, appends a
+# working: line, and runs bin/fm-control.sh relaunch --note-file; success
+# removes the record, and failure keeps it with resume_error=, which crew state
+# reports as blocked, prints "idle-relaunch-failed <id>: ..." for the tick to
+# report, and stops tick retrying until idle-resume runs by hand. A stopped lane
+# is relaunched only through idle-resume or idle-wake.
+#
+# list prints each parked lane: id, PR, parked head, and when it parked, and
+# each stopped lane: id, since when it waited, and on what.
 #
 # The record is key=value lines (pr, head, parked_at, slot_leased, pending
 # until the stop is confirmed, and resume_error after a failed relaunch), mode
@@ -173,16 +232,23 @@ export FM_HOME FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-task-reap-lib.sh
+. "$SCRIPT_DIR/fm-task-reap-lib.sh"
 
 # The lifecycle owners this script drives; the overrides exist for tests.
 CONTROL_BIN="${FM_PARK_CONTROL_BIN:-$SCRIPT_DIR/fm-control.sh}"
 TEARDOWN_BIN="${FM_PARK_TEARDOWN_BIN:-$SCRIPT_DIR/fm-teardown.sh}"
 CREW_STATE_BIN="${FM_PARK_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
+CAPTAIN_HOLD_BIN="${FM_PARK_CAPTAIN_HOLD_BIN:-$SCRIPT_DIR/fm-captain-hold.sh}"
+BROWSE_BIN="${FM_PARK_BROWSE_BIN:-$SCRIPT_DIR/fm-browse-session.sh}"
 QUIET_SECS=${FM_PARK_QUIET_SECS:-900}
 READ_SECS=${FM_PARK_READ_SECS:-15}
 ACTION_SECS=${FM_PARK_ACTION_SECS:-900}
 TICK_SECS=${FM_PARK_TICK_SECS:-180}
-for v in "$QUIET_SECS" "$READ_SECS" "$ACTION_SECS" "$TICK_SECS"; do
+IDLE_SCAN_SECS=${FM_PARK_IDLE_SCAN_SECS:-600}
+for v in "$QUIET_SECS" "$READ_SECS" "$ACTION_SECS" "$TICK_SECS" "$IDLE_SCAN_SECS" "${FM_PARK_IDLE_SECS:-0}"; do
   case "$v" in ''|*[!0-9]*) printf 'fm-park: timing overrides must be whole seconds\n' >&2; exit 2 ;; esac
 done
 
@@ -268,15 +334,32 @@ task_id_ok() { [ -n "$1" ] && fm_pr_task_id_valid "$1"; }
 record_path() { printf '%s/%s.review-park' "$STATE" "$1"; }
 record_get() { fm_meta_get "$(record_path "$1")" "$2"; }
 
-record_write() {  # <id> <key=value>...
-  local id=$1 tmp dest
+# Publishes a private key=value record by rename.
+kv_write() {  # <record> <key=value>...
+  local dest=$1 tmp
   shift
-  dest=$(record_path "$id")
   tmp=$(mktemp "$STATE/.review-park.XXXXXX") || return 1
   if ! { printf '%s\n' "$@" > "$tmp" && chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
     rm -f -- "$tmp"
     return 1
   fi
+}
+
+# Rewrites a record without <drop-key>, adding any <key=value> given.
+kv_rewrite() {  # <record> <drop-key> [<key=value>...]
+  local rec=$1 drop=$2 line
+  local -a keep=()
+  shift 2
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$drop="*) ;; *) keep+=("$line") ;; esac
+  done < "$rec"
+  kv_write "$rec" ${keep[@]+"${keep[@]}"} "$@"
+}
+
+record_write() {  # <id> <key=value>...
+  local id=$1
+  shift
+  kv_write "$(record_path "$id")" "$@"
 }
 
 status_append() {  # <id> <line>
@@ -559,6 +642,7 @@ park_preflight() {  # <id>
   fi
   [ -f "$STATE/$id.check.sh" ] || { echo "no merge poll is armed (run bin/fm-pr-check.sh first)"; return 1; }
   [ ! -e "$(record_path "$id")" ] || { echo "already parked"; return 1; }
+  [ ! -e "$(idle_record_path "$id")" ] || { echo "stopped while waiting on the captain"; return 1; }
   wt=$(fm_meta_get "$meta" worktree)
   [ -n "$wt" ] && [ -d "$wt" ] || { echo "the local copy is missing"; return 1; }
   [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ] || { echo "the local copy has uncommitted changes"; return 1; }
@@ -748,14 +832,287 @@ cmd_land() {
   esac
 }
 
+# --- stop on a long wait for the captain -----------------------------------
+
+idle_record_path() { printf '%s/%s.idle-park' "$STATE" "$1"; }
+idle_get() { fm_meta_get "$(idle_record_path "$1")" "$2"; }
+idle_reported_path() { printf '%s/.idle-park-reported-%s' "$STATE" "$1"; }
+
+# The idle threshold in seconds; fails when the stop is turned off.
+idle_threshold() {
+  local v
+  if [ -n "${FM_PARK_IDLE_SECS:-}" ]; then
+    v=$FM_PARK_IDLE_SECS
+  else
+    v=24
+    [ ! -f "$CONFIG/idle-park-hours" ] || v=$(tr -d '[:space:]' < "$CONFIG/idle-park-hours" 2>/dev/null) || return 1
+    case "$v" in ''|*[!0-9]*) return 1 ;; esac
+    v=$(( 10#$v * 3600 ))
+  fi
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$v" -gt 0 ] || return 1
+  printf '%s\n' "$v"
+}
+
+idle_when() {  # <epoch>
+  date -u -r "$1" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%MZ 2>/dev/null || printf '%s' "$1"
+}
+
+# When the task was last touched: the newer of its status log and its newest
+# handled steering instruction, so an answer the worker read resets the clock.
+idle_quiet_since() {  # <id>
+  local id=$1 latest newest m
+  latest=$(_fm_status_file_mtime "$STATE/$id.status") || return 1
+  case "$latest" in ''|*[!0-9]*) return 1 ;; esac
+  # shellcheck disable=SC2012  # Only the newest name is wanted; names are fm-owned NNN.msg.
+  newest=$(ls -t "$STATE/$id.inbox/handled" 2>/dev/null | head -1)
+  if [ -n "$newest" ] && m=$(_fm_status_file_mtime "$STATE/$id.inbox/handled/$newest") \
+    && [ -n "$m" ] && [ "$m" -gt "$latest" ] 2>/dev/null; then
+    latest=$m
+  fi
+  printf '%s\n' "$latest"
+}
+
+idle_inbox_pending() {  # <id>
+  find "$STATE/$1.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null | grep -q .
+}
+
+# The status log's size and time, which any later line changes; a refusal is
+# reported once per value.
+idle_status_sig() {  # <id>
+  printf '%s:%s\n' "$(_fm_status_file_mtime "$STATE/$1.status")" "$(_fm_status_file_size "$STATE/$1.status")"
+}
+
+# The key of the decision the task's newest event leaves open: a needs-decision
+# or blocked line the worker wrote and nobody has answered
+# (bin/fm-classify-lib.sh status_worker_wait_verb). Fails when there is none.
+idle_decision_key() {  # <id>
+  local f=$STATE/$1.status
+  status_worker_wait_verb "$f" >/dev/null || return 1
+  _fm_decision_key "$(last_status_line "$f")"
+}
+
+idle_open_decision() {  # <id> <key>
+  local key
+  while IFS=$'\t' read -r key _; do
+    [ "$key" != "$2" ] || return 0
+  done <<EOF
+$(status_open_decisions "$STATE/$1.status")
+EOF
+  return 1
+}
+
+idle_basis_text() {  # <basis> <key>
+  case "$1" in
+    decision) printf 'decision %s unanswered' "$2" ;;
+    *) printf 'held for the captain' ;;
+  esac
+}
+
+# Cheap file reads only, for the tick's scan: prints "decision <key>", or
+# "hold" when only a captain hold could make the lane wait on the captain, for
+# a lane that may be stopped; fails otherwise.
+idle_candidate() {  # <id> <threshold> <now>
+  local id=$1 meta since key reported sig wt
+  meta="$STATE/$id.meta"
+  [ "$(fm_meta_get "$meta" kind)" != secondmate ] || return 1
+  [ -z "$(fm_meta_get "$meta" remote_host)" ] || return 1
+  [ ! -e "$STATE/$id.keep-alive" ] && [ ! -e "$(record_path "$id")" ] && [ ! -e "$(idle_record_path "$id")" ] || return 1
+  [ -f "$STATE/$id.status" ] || return 1
+  since=$(idle_quiet_since "$id") || return 1
+  [ $(( $3 - since )) -ge "$2" ] || return 1
+  ! idle_inbox_pending "$id" || return 1
+  reported=$(cat "$(idle_reported_path "$id")" 2>/dev/null || true)
+  sig=$(idle_status_sig "$id")
+  [ "$reported" != "$sig" ] || return 1
+  # A refusal for uncommitted changes holds only while the copy stays dirty.
+  if [ "$reported" = "$sig dirty" ]; then
+    wt=$(fm_meta_get "$meta" worktree)
+    [ -n "$wt" ] && [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ] || return 1
+  fi
+  if key=$(idle_decision_key "$id"); then printf 'decision %s\n' "$key"; else printf 'hold\n'; fi
+}
+
+# Everything a stop needs, established afresh. Sets IDLE_BASIS, IDLE_KEY and
+# IDLE_SINCE; prints the refusal and returns 1, or 2 for a refusal worth
+# reporting (work the stop could lose).
+idle_preflight() {  # <id>
+  local id=$1 meta backend threshold kind crew secs wt
+  meta="$STATE/$id.meta"
+  [ -f "$meta" ] || { echo "no task record"; return 1; }
+  threshold=$(idle_threshold) || { echo "the idle stop is turned off"; return 1; }
+  backend=$(fm_backend_of_meta "$meta")
+  if ! fm_control_backend_state_verified "$backend" ||
+    ! fm_control_backend_exit_supported "$backend" ||
+    ! fm_control_backend_relaunch_supported "$backend"; then
+    echo "the ${backend:-unknown} backend cannot stop and relaunch the agent"; return 1
+  fi
+  kind=$(fm_meta_get "$meta" kind)
+  [ "$kind" != secondmate ] || { echo "a second mate is never stopped"; return 1; }
+  [ -z "$(fm_meta_get "$meta" remote_host)" ] || { echo "the agent runs on another host"; return 1; }
+  [ ! -e "$STATE/$id.keep-alive" ] || { echo "the task is kept alive"; return 1; }
+  [ ! -e "$(record_path "$id")" ] || { echo "the lane is parked on review"; return 1; }
+  [ ! -e "$(idle_record_path "$id")" ] || { echo "already stopped"; return 1; }
+  IDLE_SINCE=$(idle_quiet_since "$id") || { echo "the status log is unreadable"; return 1; }
+  [ $(( $(date +%s) - IDLE_SINCE )) -ge "$threshold" ] || { echo "the wait is younger than the threshold"; return 1; }
+  if IDLE_KEY=$(idle_decision_key "$id"); then
+    IDLE_BASIS=decision
+  else
+    IDLE_BASIS=hold
+    IDLE_KEY=''
+    secs=$(step_secs "$READ_SECS") || { echo "out of time"; return 1; }
+    fm_run_timed "$secs" "$CAPTAIN_HOLD_BIN" open "$id" >/dev/null 2>&1 \
+      || { echo "the worker is not waiting on the captain"; return 1; }
+  fi
+  agent_quiet "$id" || return 1
+  secs=$(step_secs 60) || { echo "out of time"; return 1; }
+  crew=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE fm_run_timed "$secs" "$CREW_STATE_BIN" "$id" 2>/dev/null | head -1 || true)
+  case "$crew" in
+    'state: working '*|'') echo "the worker is not settled in a wait (${crew:-crew state unreadable})"; return 1 ;;
+    *'source: status-log'*) ;;
+    *) echo "the worker is not settled in a wait ($crew)"; return 1 ;;
+  esac
+  wt=$(fm_meta_get "$meta" worktree)
+  [ -n "$wt" ] && [ -d "$wt" ] || { echo "the local copy is missing"; return 1; }
+  [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ] || { echo "its local copy has uncommitted changes the stop could lose"; return 2; }
+}
+
+# Stops what the stopped agent left running: its own browser session, and every
+# orphaned process tree in its local copy, never the endpoint that stays there
+# (bin/fm-task-reap-lib.sh FM_REAP_ORPHANS_ONLY). Prints what could not be
+# stopped and fails then.
+idle_clear_leftovers() {  # <id>
+  local id=$1 wt err=''
+  if [ -e "$STATE/browse/$id/session.live" ]; then
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE fm_run_timed 60 "$BROWSE_BIN" stop "$id" >/dev/null 2>&1 \
+      || err="its browser session could not be stopped"
+  fi
+  wt=$(fm_meta_get "$STATE/$id.meta" worktree)
+  if [ -n "$wt" ] && [ -d "$wt" ] && ! FM_REAP_ORPHANS_ONLY=1 \
+    fm_reap_task_processes idle-park "local copy" "$id" "leaving them running" "$wt" 2>"$PARK_TMP/reap"; then
+    err="${err:+$err; }processes it left in its local copy could not all be stopped"
+  fi
+  [ -z "$err" ] || { printf '%s\n' "$err"; return 1; }
+}
+
+idle_record_write() {  # <id> <key=value>...
+  local id=$1
+  shift
+  kv_write "$(idle_record_path "$id")" "$@"
+}
+
+cmd_idle_park() {
+  local id=${1-} rc=0 lease parked_at out line inbox_lock why
+  local -a rec
+  task_id_ok "$id" || die "usage: fm-park.sh idle-park <task-id>" 2
+  lock_try "$(lane_lock "$id")" || die "another park action holds $id"
+  IDLE_BASIS=''
+  IDLE_KEY=''
+  IDLE_SINCE=''
+  idle_preflight "$id" > "$PARK_TMP/why" || rc=$?
+  why=$(cat "$PARK_TMP/why")
+  if [ "$rc" = 2 ]; then
+    printf '%s dirty\n' "$(idle_status_sig "$id")" > "$(idle_reported_path "$id")" || true
+    printf 'idle-stop-refused %s: waiting on the captain since %s (%s), but %s; its agent was left running\n' \
+      "$id" "$(idle_when "$IDLE_SINCE")" "$(idle_basis_text "$IDLE_BASIS" "$IDLE_KEY")" "$why"
+    return 1
+  fi
+  [ "$rc" = 0 ] || die "not stopping $id: $why"
+  if ! lease=$(slot_lease "$id"); then
+    idle_status_sig "$id" > "$(idle_reported_path "$id")" || true
+    printf 'idle-stop-refused %s: waiting on the captain since %s, but its pool slot could not be leased durably; its agent was left running\n' \
+      "$id" "$(idle_when "$IDLE_SINCE")"
+    return 1
+  fi
+  parked_at=$(date +%s)
+  inbox_lock=$(fm_task_inbox_delivery_lock_path "$STATE" "$id")
+  fm_task_inbox_lock_acquire "$inbox_lock" || die "not stopping $id: its inbox delivery lock could not be acquired"
+  LOCKS_HELD="$LOCKS_HELD $inbox_lock"
+  # fm-send takes the same lock before writing, so no answer lands unseen
+  # between this check and the stop; one that lands after it relaunches the lane.
+  why=$(agent_quiet "$id") || die "not stopping $id: $why"
+  rec=("basis=$IDLE_BASIS" "key=$IDLE_KEY" "waiting_since=$IDLE_SINCE" "parked_at=$parked_at" "slot_leased=$lease")
+  idle_record_write "$id" "${rec[@]}" "pending=1" || die "not stopping $id: its stop record could not be written"
+  out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$CONTROL_BIN" "$id" exit 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    idle_status_sig "$id" > "$(idle_reported_path "$id")" || true
+    printf 'idle-stop-failed %s: waiting on the captain since %s, but the agent could not be stopped: %s; the next tick settles its pending stop record\n' \
+      "$id" "$(idle_when "$IDLE_SINCE")" "$(printf '%s\n' "$out" | tail -1)"
+    return 1
+  fi
+  idle_record_write "$id" "${rec[@]}" \
+    || die "$id: the agent was stopped but its stop record could not be marked settled; the next tick settles it"
+  line="paused [at=$(date +%s)]: stopped while waiting on the captain since $(idle_when "$IDLE_SINCE") ($(idle_basis_text "$IDLE_BASIS" "$IDLE_KEY")); agent stopped, relaunches when an answer or steer arrives"
+  status_append "$id" "$line"
+  if ! why=$(idle_clear_leftovers "$id"); then
+    printf 'idle-stopped %s: stopped while waiting on the captain since %s, but %s\n' "$id" "$(idle_when "$IDLE_SINCE")" "$why"
+  fi
+}
+
+cmd_idle_resume() {
+  local id=${1-} trigger note out rc=0 rec since basis key last
+  task_id_ok "$id" || die "usage: fm-park.sh idle-resume <task-id> --trigger <text>" 2
+  shift
+  [ "${1-}" = --trigger ] && [ -n "${2-}" ] || die "usage: fm-park.sh idle-resume <task-id> --trigger <text>" 2
+  trigger=$2
+  lock_try "$(lane_lock "$id")" || die "another park action holds $id"
+  rec=$(idle_record_path "$id")
+  [ -f "$rec" ] || die "$id is not stopped"
+  [ -z "$(idle_get "$id" pending)" ] || die "$id is still being stopped; the next tick settles it"
+  since=$(idle_get "$id" waiting_since)
+  basis=$(idle_get "$id" basis)
+  key=$(idle_get "$id" key)
+  # The worker's own last report: the paused line the stop wrote, and the
+  # working line a failed relaunch left, are this script's, not the agent's.
+  grep -Ev '^[[:space:]]*(paused \[at=[0-9]+\]: stopped while waiting on the captain since |working \[at=[0-9]+\]: relaunched after a stop while waiting on the captain: )' \
+    "$STATE/$id.status" > "$PARK_TMP/worker-status" 2>/dev/null || true
+  last=$(last_crew_status_line "$PARK_TMP/worker-status")
+  note="$PARK_TMP/note"
+  {
+    printf 'This worker waited on the captain since %s (%s), so its previous agent was stopped to free the machine.\n' \
+      "$(idle_when "$since")" "$(idle_basis_text "$basis" "$key")"
+    printf 'You are a fresh agent relaunched in the same local copy on the same branch because: %s.\n' "$trigger"
+    printf 'The previous agent'"'"'s last report was: %s\n' "$last"
+    printf 'The stop also ended every preview or server the previous agent had left running, so before anything else restart any preview or server it was holding for the captain and post its link again.\n'
+    printf 'Then read your steering inbox and act on every instruction waiting there, in order, then continue the task exactly as your instructions define.\n'
+  } > "$note"
+  # Written before the launch, so the fresh worker's own reports follow it.
+  status_append "$id" "working [at=$(date +%s)]: relaunched after a stop while waiting on the captain: $trigger"
+  out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$CONTROL_BIN" "$id" relaunch --note-file "$note" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    kv_rewrite "$rec" resume_error "resume_error=$(date +%s)" || true
+    printf 'idle-relaunch-failed %s: the worker stopped while waiting on the captain could not be relaunched (%s): %s\n' \
+      "$id" "$trigger" "$(printf '%s\n' "$out" | tail -1)"
+    return 1
+  fi
+  rm -f -- "$rec" "$(idle_reported_path "$id")"
+}
+
+# The steer path's entry point (bin/fm-send.sh): relaunch a stopped lane now
+# rather than on the next tick. Fails when the lane is not stopped.
+cmd_idle_wake() {
+  local id=${1-}
+  task_id_ok "$id" || die "usage: fm-park.sh idle-wake <task-id>" 2
+  [ -f "$(idle_record_path "$id")" ] && [ -z "$(idle_get "$id" pending)" ] || return 1
+  action_start "$id" idle-resume --trigger "a new instruction arrived for it"
+}
+
+cmd_keep() {  # <on|off> <task-id>
+  local mode=$1 id=${2-} marker
+  task_id_ok "$id" || die "usage: fm-park.sh keep|unkeep <task-id>" 2
+  [ -f "$STATE/$id.meta" ] || die "no task record for $id"
+  marker="${STATE:?}/$id.keep-alive"
+  if [ "$mode" = on ]; then : > "$marker"; else rm -f -- "$marker"; fi
+}
+
 # --- detached action -------------------------------------------------------
 
 cmd_run() {
   local id=${1-} verb=${2-} out
-  task_id_ok "$id" || die "usage: fm-park.sh run <task-id> park|resume|land [<args>...]" 2
-  case "$verb" in park|resume|land) ;; *) die "usage: fm-park.sh run <task-id> park|resume|land [<args>...]" 2 ;; esac
+  task_id_ok "$id" || die "usage: fm-park.sh run <task-id> park|resume|land|idle-park|idle-resume [<args>...]" 2
+  case "$verb" in park|resume|land|idle-park|idle-resume) ;; *) die "usage: fm-park.sh run <task-id> park|resume|land|idle-park|idle-resume [<args>...]" 2 ;; esac
   shift 2
-  out=$( LOCKS_HELD=; trap release_locks EXIT; "cmd_$verb" "$id" "$@" 2>/dev/null ) || true
+  out=$( LOCKS_HELD=; trap release_locks EXIT; "cmd_${verb//-/_}" "$id" "$@" 2>/dev/null ) || true
   if [ -n "$out" ]; then
     case "$out" in *"another lifecycle action is already running"*|*"another park action still holds"*) return 0 ;; esac
     report_write "$id" "$out" || return 1
@@ -808,7 +1165,7 @@ watch_unparked() {  # <id>
   snap=$(snapshot "$pr") || return 0
   state=$(printf '%s' "$snap" | jq -r .state)
   [ "$state" != closed ] || { closed_once "$id" "$pr"; return 0; }
-  [ "$state" = open ] && [ -e "$CONFIG/park-on-review" ] || return 0
+  [ "$state" = open ] && [ -e "$CONFIG/park-on-review" ] && [ ! -e "$(idle_record_path "$id")" ] || return 0
   ! lane_busy "$id" || return 0
   local idle_secs
   idle_secs=$(step_secs "$READ_SECS") || return 0
@@ -819,25 +1176,99 @@ watch_unparked() {  # <id>
   action_start "$id" park
 }
 
+# The answer that closed <key>: the note of the newest resolved line for it.
+idle_answer() {  # <id> <key>
+  local line
+  line=$(grep -F "[key=$2]" "$STATE/$1.status" 2>/dev/null | grep -E '^[[:space:]]*resolved[[:space:]:[]' | tail -1) || true
+  [ -n "$line" ] || { printf 'its decision %s was closed' "$2"; return 0; }
+  printf 'its decision %s was answered: %s' "$2" "$(status_line_note "$line")"
+}
+
+# Relaunches a lane stopped while waiting on the captain once an answer can
+# reach it: an instruction waiting in its inbox, its open decision closed, or
+# (when HOLD_READ holds this tick's hold reads) its captain hold lifted.
+watch_idle_parked() {  # <id>
+  local id=$1 rec basis key trigger
+  rec=$(idle_record_path "$id")
+  ! lane_busy "$id" || return 0
+  if [ -n "$(idle_get "$id" pending)" ]; then
+    ( LOCKS_HELD=; trap release_locks EXIT; settle_pending "$id" "$rec" ) || true
+    [ -e "$rec" ] && [ -z "$(idle_get "$id" pending)" ] || return 0
+  fi
+  [ -z "$(idle_get "$id" resume_error)" ] || return 0
+  basis=$(idle_get "$id" basis)
+  key=$(idle_get "$id" key)
+  if idle_inbox_pending "$id"; then
+    trigger="an instruction is waiting in its steering inbox"
+  elif [ "$basis" = decision ] && ! idle_open_decision "$id" "$key"; then
+    trigger=$(idle_answer "$id" "$key")
+  elif [ "$basis" = hold ] && printf '%s' "$HOLD_READ" | grep -qx "$id	1"; then
+    trigger="the captain's hold on it was answered or released"
+  else
+    return 0
+  fi
+  action_start "$id" idle-resume --trigger "$trigger"
+}
+
+# One captain-hold read for every id named: sets HOLD_READ to "<id>\t<exit>"
+# lines (0 held, 1 not held); an id whose read failed is left out.
+idle_read_holds() {  # <id>...
+  local secs
+  HOLD_READ=
+  [ "$#" -gt 0 ] || return 0
+  # One backlog read per id, eight at a time, so this bound is wider than a forge read's.
+  secs=$(step_secs 60) || return 0
+  HOLD_READ=$(fm_run_timed "$secs" "$CAPTAIN_HOLD_BIN" open-each "$@" 2>/dev/null \
+    | awk -F '\t' '$2 == "0" || $2 == "1" { print $1 "\t" $2 }') || HOLD_READ=
+}
+
+# The idle scan: every lane that has waited on the captain past the threshold
+# gets a detached stop, which re-establishes everything itself.
+idle_scan() {  # <threshold> <parked-hold-id>...
+  local threshold=$1 now meta id basis
+  local -a decided=() maybe=()
+  shift
+  now=$(date +%s)
+  for meta in "$STATE"/*.meta; do
+    [ -e "$meta" ] || continue
+    id=$(basename "$meta" .meta)
+    fm_pr_task_id_valid "$id" || continue
+    basis=$(idle_candidate "$id" "$threshold" "$now") || continue
+    case "$basis" in
+      decision\ *) decided+=("$id") ;;
+      *) maybe+=("$id") ;;
+    esac
+  done
+  idle_read_holds ${maybe[@]+"${maybe[@]}"} "$@"
+  for id in ${decided[@]+"${decided[@]}"}; do
+    ! lane_busy "$id" || continue
+    action_start "$id" idle-park
+  done
+  for id in ${maybe[@]+"${maybe[@]}"}; do
+    printf '%s' "$HOLD_READ" | grep -qx "$id	0" || continue
+    ! lane_busy "$id" || continue
+    action_start "$id" idle-park
+  done
+}
+
 # A pending record stays watched while its agent stop may still be in flight.
 # Confirmed dead is promoted to parked; confirmed alive after the stop bound is dropped.
-settle_pending() {  # <id>
-  local id=$1 meta secs alive parked_at
+settle_pending() {  # <id> [<record>]
+  local id=$1 rec=${2:-} meta secs alive parked_at
+  [ -n "$rec" ] || rec=$(record_path "$id")
   lock_try "$(lane_lock "$id")" || return 0
-  [ -n "$(record_get "$id" pending)" ] || return 0
+  [ -n "$(fm_meta_get "$rec" pending)" ] || return 0
   meta="$STATE/$id.meta"
   secs=$(step_secs "$READ_SECS") || return 0
   # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
   alive=$(fm_run_timed "$secs" bash -c '. "$1"; fm_backend_agent_alive "$2" "$3"' _ \
     "$SCRIPT_DIR/fm-backend.sh" "$(fm_backend_of_meta "$meta")" "$(fm_backend_target_of_meta "$meta")" 2>/dev/null) || true
   case "$alive" in
-    dead)
-      record_write "$id" "pr=$(record_get "$id" pr)" "head=$(record_get "$id" head)" \
-        "parked_at=$(record_get "$id" parked_at)" "slot_leased=$(record_get "$id" slot_leased)" ;;
+    dead) kv_rewrite "$rec" pending ;;
     alive)
-      parked_at=$(record_get "$id" parked_at)
+      parked_at=$(fm_meta_get "$rec" parked_at)
       [[ "$parked_at" =~ ^[0-9]+$ ]] || return 0
-      [ "$(( $(date +%s) - parked_at ))" -ge "$ACTION_SECS" ] && rm -f -- "$(record_path "$id")" ;;
+      [ "$(( $(date +%s) - parked_at ))" -ge "$ACTION_SECS" ] && rm -f -- "$rec" ;;
   esac
 }
 
@@ -865,8 +1296,10 @@ visit_lanes() {  # <cursor> <visit> <id>...
 cmd_tick() {
   local rec id meta any=0
   local -a parked=() unparked=()
-  for rec in "$STATE"/*.review-park "$STATE"/*.review-park-land "$STATE"/.review-park-report-*; do [ -e "$rec" ] && any=1 && break; done
-  [ "$any" = 1 ] || [ -e "$CONFIG/park-on-review" ] || [ -e "$CONFIG/auto-land" ] || return 0
+  local threshold=''
+  threshold=$(idle_threshold) || threshold=''
+  for rec in "$STATE"/*.review-park "$STATE"/*.idle-park "$STATE"/*.review-park-land "$STATE"/.review-park-report-*; do [ -e "$rec" ] && any=1 && break; done
+  [ "$any" = 1 ] || [ -e "$CONFIG/park-on-review" ] || [ -e "$CONFIG/auto-land" ] || [ -n "$threshold" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   lock_try "$STATE/.review-park-tick.lock" || return 0
   DEADLINE=$(( $(date +%s) + TICK_SECS ))
@@ -894,6 +1327,29 @@ cmd_tick() {
   DEADLINE=$(( $(date +%s) + (TICK_SECS + 1) / 2 ))
   lines+=$(visit_lanes "$STATE/.review-park-tick-next" watch_parked ${parked[@]+"${parked[@]}"})$'\n' || true
   DEADLINE=$full_deadline
+  # Lanes stopped while waiting on the captain need no forge read; their holds
+  # and the idle scan share one captain-hold read every IDLE_SCAN_SECS.
+  local -a stopped=() stopped_holds=()
+  local scan_at
+  for rec in "$STATE"/*.idle-park; do
+    [ -e "$rec" ] || continue
+    id=$(basename "$rec" .idle-park)
+    fm_pr_task_id_valid "$id" && [ -f "$STATE/$id.meta" ] || continue
+    stopped+=("$id")
+    [ "$(fm_meta_get "$rec" basis)" != hold ] || stopped_holds+=("$id")
+  done
+  HOLD_READ=
+  scan_at=$(cat "$STATE/.idle-park-scan-at" 2>/dev/null || echo 0)
+  case "$scan_at" in ''|*[!0-9]*) scan_at=0 ;; esac
+  if [ $(( $(date +%s) - scan_at )) -ge "$IDLE_SCAN_SECS" ]; then
+    date +%s > "$STATE/.idle-park-scan-at" || true
+    if [ -n "$threshold" ]; then
+      idle_scan "$threshold" ${stopped_holds[@]+"${stopped_holds[@]}"}
+    else
+      idle_read_holds ${stopped_holds[@]+"${stopped_holds[@]}"}
+    fi
+  fi
+  for id in ${stopped[@]+"${stopped[@]}"}; do watch_idle_parked "$id"; done
   if [ -e "$CONFIG/park-on-review" ] || [ -e "$CONFIG/auto-land" ]; then
     for meta in "$STATE"/*.meta; do
       [ -e "$meta" ] || continue
@@ -914,6 +1370,14 @@ cmd_tick() {
 
 cmd_list() {
   local rec id
+  for rec in "$STATE"/*.idle-park; do
+    [ -e "$rec" ] || continue
+    id=$(basename "$rec" .idle-park)
+    printf '%s\tstopped while waiting on the captain since %s\t%s%s\n' "$id" \
+      "$(idle_when "$(idle_get "$id" waiting_since)")" \
+      "$(idle_basis_text "$(idle_get "$id" basis)" "$(idle_get "$id" key)")" \
+      "$([ -z "$(idle_get "$id" pending)" ] || printf '\tstopping; stop not yet confirmed')$([ -z "$(idle_get "$id" resume_error)" ] || printf '\trelaunch failed; run fm-park.sh idle-resume by hand')"
+  done
   for rec in "$STATE"/*.review-park; do
     [ -e "$rec" ] || continue
     id=$(basename "$rec" .review-park)
@@ -934,5 +1398,10 @@ case "${1:-}" in
   tick) cmd_tick ;;
   list) cmd_list ;;
   run) shift; cmd_run "$@" ;;
+  idle-park) shift; cmd_idle_park "$@" ;;
+  idle-resume) shift; cmd_idle_resume "$@" ;;
+  idle-wake) shift; cmd_idle_wake "$@" ;;
+  keep) shift; cmd_keep on "$@" ;;
+  unkeep) shift; cmd_keep off "$@" ;;
   *) usage >&2; exit 2 ;;
 esac

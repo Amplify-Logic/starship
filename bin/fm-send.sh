@@ -224,6 +224,11 @@
 # refused with --key, with an explicit backend target (no task ledger in this
 # home), and with an empty message.
 #
+# A task stopped while waiting on the captain (bin/fm-park.sh idle-park) has
+# no agent: an inbox-plane steer to it is recorded first, then relaunches the
+# worker instead of ringing, and the fresh agent reads the record before
+# anything else.
+#
 # After a successful TYPED-plane submit fm-send pauses FM_SEND_SETTLE seconds
 # (default 1, 0 disables) before returning: submit confirmation only proves the
 # text was accepted, but the harness needs a beat to spin up the turn before its
@@ -1237,6 +1242,19 @@ else
     if [ -n "$RESOLVE_KEYS" ]; then
       fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
+    fi
+    # A worker stopped while waiting on the captain has no agent to ring: the
+    # steer is already recorded, so relaunch it now and its fresh agent reads
+    # the record first (bin/fm-park.sh idle-wake); the park tick retries a
+    # relaunch that could not start here.
+    if [ -f "$STATE/$INBOX_TASK_ID.idle-park" ]; then
+      # FM_SEND_PARK_BIN exists for tests.
+      if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "${FM_SEND_PARK_BIN:-$SCRIPT_DIR/fm-park.sh}" idle-wake "$INBOX_TASK_ID" >/dev/null 2>&1; then
+        echo "fm-send: $INBOX_TASK_ID was stopped while waiting on the captain; relaunching it now, and its fresh agent reads the steer recorded at $INBOX_RECORD" >&2
+      else
+        echo "fm-send: $INBOX_TASK_ID was stopped while waiting on the captain; the steer is durably recorded at $INBOX_RECORD and the next park tick relaunches it" >&2
+      fi
+      exit 0
     fi
     # Ring the doorbell, best-effort: no ring outcome changes the exit status,
     # because the watcher owns loss detection from here, either through its
