@@ -1383,6 +1383,10 @@ expect_idle_relaunch() {  # <world> <label> <note-substring>
   grep -qF "$3" "$1/control.log" || fail "$2: the relaunch note lacks '$3': $(cat "$1/control.log")"
   grep -qF 'steering inbox' "$1/control.log" || fail "$2: the note does not point the fresh agent at its inbox"
   grep -qF 'restart any preview or server it was holding for the captain' "$1/control.log" || fail "$2: the note does not tell the fresh agent to restart a held preview"
+  # The worker's own last report is the fixture's first status line; the stop's
+  # own paused line, which came after it, is not the previous agent's report.
+  grep -qF "The previous agent's last report was: $(head -1 "$1/state/lane.status")" "$1/control.log" \
+    || fail "$2: the note does not quote the worker's own last report: $(grep -F 'last report was' "$1/control.log")"
   tail -1 "$1/state/lane.status" | grep -q '^working \[at=[0-9]*\]: relaunched after a stop while waiting on the captain' \
     || fail "$2: no working line: $(tail -1 "$1/state/lane.status")"
 }

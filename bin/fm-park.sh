@@ -1053,7 +1053,11 @@ cmd_idle_resume() {
   since=$(idle_get "$id" waiting_since)
   basis=$(idle_get "$id" basis)
   key=$(idle_get "$id" key)
-  last=$(last_crew_status_line "$STATE/$id.status")
+  # The worker's own last report: the paused line the stop wrote, and the
+  # working line a failed relaunch left, are this script's, not the agent's.
+  grep -Ev '^[[:space:]]*(paused \[at=[0-9]+\]: stopped while waiting on the captain since |working \[at=[0-9]+\]: relaunched after a stop while waiting on the captain: )' \
+    "$STATE/$id.status" > "$PARK_TMP/worker-status" 2>/dev/null || true
+  last=$(last_crew_status_line "$PARK_TMP/worker-status")
   note="$PARK_TMP/note"
   {
     printf 'This worker waited on the captain since %s (%s), so its previous agent was stopped to free the machine.\n' \
