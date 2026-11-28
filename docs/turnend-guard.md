@@ -568,7 +568,7 @@ It polls the child every `FM_AGY_PARK_POLL` seconds (default 2) and waits on it 
 - A non-actionable close beside a verified healthy watcher, a host that stood down, or a fleet that no longer needs supervision resets `state/.turnend-blocks`, emits `{}`, and lets the turn end cleanly.
 - A park that cannot establish a cycle after two bounded attempts delegates to `bin/fm-turnend-guard.sh --agy` for a bounded 3-block repair nag before failing open.
 
-Before parking, the hook stands down with `{}` in crewmate or scout linked worktrees, passes through non-normal termination reasons, and verifies session-lock ownership so a foreign session never steals supervision.
+Before parking, the hook stands down with `{}` in crewmate or scout linked worktrees, passes through termination reasons other than a normal end, a `/compact` end, or an error end (the agy supervision protocol owns which park), and verifies session-lock ownership so a foreign session never steals supervision.
 When `executionNum` reaches the loop ceiling (`FM_AGY_TURNEND_LOOP_CEILING`, default 180) while supervision is still needed, it returns one ceiling notice instead of parking; past the ceiling it emits `{}`.
 Each invocation publishes a unique claim in `state/.agy-park-owner` and yields cleanly with `{}` if a newer Stop hook supersedes this park while waiting.
 

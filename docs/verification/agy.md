@@ -162,6 +162,20 @@ In primary and secondmate homes, watcher commands are classified by the shared a
 Supervision continuity uses synchronous Stop-hook parking via `bin/fm-turnend-guard-agy.sh`, running `bin/fm-watch-arm.sh` (or the supervision host) which waits under the 28800s hook timeout until woken by an incoming event (bounded only when the optional `FM_AGY_PARK_TIMEOUT` is set) and falls back to bounded repair nagging via `bin/fm-turnend-guard.sh --agy`.
 Session lock verification recognizes `agy` process ancestry via `bin/fm-session-lock-lib.sh`.
 
+### Stop hook termination reasons (agy 1.5.18, 2026-11-28, macOS arm64)
+
+agy's built-in hook reference (`strings` of the binary) documents the Stop payload's `terminationReason` as the name of the executor's termination enum value without its `EXECUTOR_TERMINATION_REASON_` prefix, with an `error` field present when the turn stopped on an error.
+Each value below was observed live with a Stop hook that only recorded its stdin, in a scratch workspace outside every firstmate home, signed in with the host's existing agy configuration.
+
+- Error end: a local CONNECT proxy (`HTTPS_PROXY`) cut and refused `daily-cloudcode-pa.googleapis.com` after the model's first tool call, and agy printed `Error: agent executor error: generating and executing: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": Forbidden`.
+  The Stop hook received `"terminationReason":"ERROR"`, `"executionNum":0`, `"continuationActive":false`, `"fullyIdle":true`, and that message in `"error"`.
+  A provider HTTP 404 end (`transport error (NotFound, HTTP 404)`) records the same reason: the conversation's executor record holds `termination_reason` 1, which the binary's enum descriptor maps to `ERROR`.
+- A Stop hook answering that error end with `{"decision":"continue","reason":"..."}` re-entered the loop: the next Stop arrived with `"terminationReason":"NO_TOOL_CALL"` and `"executionNum":1`.
+- `/compact`: `agy -p "/compact" --conversation <id>` ended with `"terminationReason":"TERMINAL_CUSTOM_HOOK"`.
+- Esc: pressing Escape in a tmux session (private socket, `--settings` carrying `trustedWorkspaces` so the stored trust list stayed unchanged) while the turn showed `esc to cancel` printed `Interrupted · What should Antigravity CLI do instead?` and ran no Stop hook.
+
+`tests/fm-agy-primary.test.sh` pins the hook's verdict for each reason, and the live guard below drives the error end through the real hook.
+
 ## What is still unproven
 
 The unauthenticated failure mode was never observed; this host's agy runs signed in, so any auth prompt is a fail-loud credential blocker, not a handled dialog.
@@ -175,4 +189,5 @@ Run the portable suite and the live guard after any agy upgrade, because the pro
 ```
 bin/fm-test-run.sh tests/fm-agy-harness.test.sh
 FM_AGY_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
+FM_AGY_PRIMARY_LIVE=1 bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
 ```

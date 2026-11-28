@@ -397,7 +397,7 @@ test_turnend_guard_agy_non_normal_termination_reasons() {
   dir=$(make_primary_dir "$TMP_ROOT/stop-reasons")
   : > "$dir/state/task1.meta"
   write_arm_fixture "$dir" actionable
-  for reason_code in USER_CANCELED ERROR MAX_INVOCATIONS MAX_FORCED_INVOCATIONS MAX_TOKEN_BUDGET_EXCEEDED; do
+  for reason_code in USER_CANCELED MAX_INVOCATIONS MAX_FORCED_INVOCATIONS MAX_TOKEN_BUDGET_EXCEEDED TERMINAL_STEP_TYPE INJECTED_RESPONSE; do
     payload=$(printf '{"sessionId":"s-1","conversationId":"c-1","executionNum":1,"terminationReason":"%s"}' "$reason_code")
     out=$(run_agy_stop "$dir" "$payload")
     status=$?
@@ -406,6 +406,96 @@ test_turnend_guard_agy_non_normal_termination_reasons() {
     [ ! -e "$dir/state/arm-ran" ] || fail "terminationReason=$reason_code must not park"
   done
   pass "fm-turnend-guard-agy: non-normal terminationReason values pass through with {}"
+}
+
+# The Stop payload agy 1.5.18 sent for a turn its model call ended with a
+# transport error (docs/verification/agy.md "Error-ended turn").
+agy_error_payload() {  # [executionNum]
+  jq -cn --argjson n "${1:-0}" '{conversationId:"c-1",executionNum:$n,
+    terminationReason:"ERROR",continuationActive:false,fullyIdle:true,
+    error:"generating and executing: transport error (NotFound, HTTP 404): Requested entity was not found.",
+    hookEventName:"Stop",modelName:"fixture-model"}'
+}
+
+test_turnend_guard_agy_error_end_keeps_supervising() {
+  local dir out decision reason
+  dir=$(make_primary_dir "$TMP_ROOT/stop-error")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(run_agy_stop "$dir" "$(agy_error_payload)")
+  decision=$(printf '%s' "$out" | jq -r '.decision // empty' 2>/dev/null)
+  reason=$(printf '%s' "$out" | jq -r '.reason // empty' 2>/dev/null)
+  [ -e "$dir/state/arm-ran" ] || fail "an error-ended turn with work in flight must park on the watcher cycle"
+  assert_equals "continue" "$decision" "an error-ended turn with work in flight must continue on the wake"
+  assert_contains "$reason" "signal: state/task1.status" "the error-end continuation must carry the wake line"
+  assert_contains "$reason" "bin/fm-wake-drain.sh" "the error-end continuation must carry the drain instruction"
+  assert_contains "$reason" "error" "the error-end continuation must say the previous turn ended on an error"
+
+  dir=$(make_primary_dir "$TMP_ROOT/stop-error-empty")
+  write_arm_fixture "$dir" actionable
+  out=$(run_agy_stop "$dir" "$(agy_error_payload)")
+  assert_equals "{}" "$out" "an error-ended turn with nothing to supervise must return {}"
+  [ ! -e "$dir/state/arm-ran" ] || fail "an error-ended turn with nothing to supervise must not park"
+
+  dir=$(make_primary_dir "$TMP_ROOT/stop-error-afk")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/.afk"
+  write_arm_fixture "$dir" actionable
+  out=$(run_agy_stop "$dir" "$(agy_error_payload)")
+  assert_equals "{}" "$out" "an error-ended turn in away mode must return {}"
+  [ ! -e "$dir/state/arm-ran" ] || fail "an error-ended turn in away mode must not park"
+
+  dir=$(make_primary_dir "$TMP_ROOT/stop-error-ceiling")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_AGY_TURNEND_LOOP_CEILING=4 run_agy_stop "$dir" "$(agy_error_payload 5)")
+  assert_equals "{}" "$out" "an error-ended turn past the loop ceiling must return {}"
+  [ ! -e "$dir/state/arm-ran" ] || fail "an error-ended turn past the loop ceiling must not park"
+
+  # agy ends a /compact turn with TERMINAL_CUSTOM_HOOK; supervision resumes.
+  dir=$(make_primary_dir "$TMP_ROOT/stop-compact")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(run_agy_stop "$dir" '{"conversationId":"c-1","executionNum":0,"terminationReason":"TERMINAL_CUSTOM_HOOK","lastUserInput":"/compact"}')
+  assert_equals "continue" "$(printf '%s' "$out" | jq -r '.decision // empty')" "a /compact turn end with work in flight must continue on the wake"
+  [ -e "$dir/state/arm-ran" ] || fail "a /compact turn end with work in flight must park"
+  [ ! -e "$dir/state/.agy-error-rewake" ] || fail "a /compact turn end must not be treated as an error end"
+  pass "fm-turnend-guard-agy: error-ended and /compact turns keep supervising while supervision is needed"
+}
+
+test_turnend_guard_agy_error_end_paced() {
+  local dir out decision start elapsed payload
+  # A second error-end continuation inside the cooldown waits out the rest.
+  dir=$(make_primary_dir "$TMP_ROOT/stop-error-pace")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_AGY_ERROR_REWAKE_COOLDOWN=60 run_agy_stop "$dir" "$(agy_error_payload)")
+  assert_equals "continue" "$(printf '%s' "$out" | jq -r '.decision // empty')" "the first error end must continue at once"
+  [ -e "$dir/state/.agy-error-rewake" ] || fail "an error-end continuation must record its pacing marker"
+  touch -t "$(date -r "$(( $(date +%s) - 57 ))" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$(( $(date +%s) - 57 ))" +%Y%m%d%H%M.%S)" "$dir/state/.agy-error-rewake"
+  start=$(date +%s)
+  out=$(FM_AGY_ERROR_REWAKE_COOLDOWN=60 run_agy_stop "$dir" "$(agy_error_payload 1)")
+  elapsed=$(( $(date +%s) - start ))
+  decision=$(printf '%s' "$out" | jq -r '.decision // empty' 2>/dev/null)
+  assert_equals "continue" "$decision" "a paced error end must still continue, never drop the wake"
+  [ "$elapsed" -ge 2 ] || fail "a second error end inside the cooldown must wait out the remainder (waited ${elapsed}s)"
+
+  # A normal end is never paced, even right after an error-end continuation.
+  : > "$dir/state/.agy-error-rewake"
+  payload='{"sessionId":"s-1","conversationId":"c-1","executionNum":2,"terminationReason":"NO_TOOL_CALL"}'
+  start=$(date +%s)
+  out=$(FM_AGY_ERROR_REWAKE_COOLDOWN=60 run_agy_stop "$dir" "$payload")
+  elapsed=$(( $(date +%s) - start ))
+  assert_equals "continue" "$(printf '%s' "$out" | jq -r '.decision // empty')" "a normal end must continue on the wake"
+  [ "$elapsed" -lt 10 ] || fail "a normal end must not be paced by the error cooldown (waited ${elapsed}s)"
+
+  # The need vanishing during the wait ends it silently.
+  : > "$dir/state/.agy-error-rewake"
+  ( sleep 1; rm -f "$dir/state/task1.meta" ) &
+  out=$(FM_AGY_ERROR_REWAKE_COOLDOWN=60 run_agy_stop "$dir" "$(agy_error_payload 3)")
+  wait
+  assert_equals "{}" "$out" "a paced error end whose supervision need vanished must return {}"
+  pass "fm-turnend-guard-agy: repeated error-end continuations are paced by FM_AGY_ERROR_REWAKE_COOLDOWN"
 }
 
 test_turnend_guard_agy_loop_ceiling() {
@@ -622,6 +712,8 @@ fm_test_run \
   test_turnend_guard_agy_park_timeout_rearms \
   test_turnend_guard_agy_fleet_empty_and_healthy_close \
   test_turnend_guard_agy_non_normal_termination_reasons \
+  test_turnend_guard_agy_error_end_keeps_supervising \
+  test_turnend_guard_agy_error_end_paced \
   test_turnend_guard_agy_loop_ceiling \
   test_turnend_guard_agy_supersession \
   test_turnend_guard_agy_bounded_repair_nag \

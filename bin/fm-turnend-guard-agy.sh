@@ -25,8 +25,23 @@
 #
 # Guard rails before parking:
 #   - Stand down in crewmate/scout linked worktrees (fm_primary_scope_matches).
-#   - Pass through non-normal terminationReason values (anything non-empty
-#     other than NO_TOOL_CALL) with {} without parking.
+#   - Park on a normal end (terminationReason NO_TOOL_CALL, or absent), on the
+#     end of a /compact turn (TERMINAL_CUSTOM_HOOK; firstmate registers no
+#     model-call hook that could end a turn this way),
+#     and on an error end (ERROR: agy's model call failed, for example a provider
+#     HTTP 404 or a transport failure; the payload's "error" field holds the
+#     message). Pass every other terminationReason through with {} without
+#     parking, including USER_CANCELED (the person stopped the turn) and the
+#     MAX_* limits. An Esc interrupt runs no Stop hook at all, so supervision
+#     stays down after one until the next turn end.
+#   - Error-end pacing: when the provider is still failing, every continuation
+#     after an error end can end on another error at once, so the
+#     continuations an error end delivers are paced to one per
+#     FM_AGY_ERROR_REWAKE_COOLDOWN seconds (default 300), recorded by
+#     state/.agy-error-rewake. One inside the window waits out the remainder
+#     and is then delivered, never dropped; it ends with {} instead when the
+#     park is superseded, the lock moves, away mode starts, or supervision is
+#     no longer needed meanwhile. A normal end is never paced.
 #   - Verify session-lock ownership via bin/fm-session-lock-lib.sh so a
 #     read-only or foreign session never steals supervision.
 #   - At executionNum == the loop ceiling (default 180, overridable via
@@ -48,9 +63,12 @@ ARM_ATTEMPTS=2
 POLL=${FM_AGY_PARK_POLL:-2}
 PARK_TIMEOUT=${FM_AGY_PARK_TIMEOUT:-0}
 LOOP_CEILING=${FM_AGY_TURNEND_LOOP_CEILING:-180}
+ERROR_REWAKE_COOLDOWN=${FM_AGY_ERROR_REWAKE_COOLDOWN:-300}
 case "$POLL" in ''|*[!0-9]*|0) POLL=2 ;; esac
 case "$PARK_TIMEOUT" in ''|*[!0-9]*) PARK_TIMEOUT=0 ;; esac
 case "$LOOP_CEILING" in ''|*[!0-9]*|0) LOOP_CEILING=180 ;; esac
+case "$ERROR_REWAKE_COOLDOWN" in ''|*[!0-9]*) ERROR_REWAKE_COOLDOWN=300 ;; esac
+ERROR_REWAKE_COOLDOWN=$((10#$ERROR_REWAKE_COOLDOWN))
 
 allow_stop() {
   printf '{}\n'
@@ -80,9 +98,38 @@ command -v jq >/dev/null 2>&1 || allow_stop
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || allow_stop
 
 TERM_REASON=$(printf '%s' "$PAYLOAD" | jq -r '.terminationReason // empty' 2>/dev/null || true)
-if [ -n "$TERM_REASON" ] && [ "$TERM_REASON" != "NO_TOOL_CALL" ]; then
-  allow_stop
-fi
+ERROR_END=0
+case "$TERM_REASON" in
+  ''|NO_TOOL_CALL|TERMINAL_CUSTOM_HOOK) ;;
+  ERROR) ERROR_END=1 ;;
+  *) allow_stop ;;
+esac
+ERROR_REWAKE_MARKER="$STATE/.agy-error-rewake"
+ERROR_NOTE="The previous turn ended on a model or transport error, not by choice; supervision continues.
+"
+PARK_OWNER=
+
+# Before a continuation that follows an error end, wait out what remains of
+# the previous error-end continuation's cooldown, then record this one (header
+# "Error-end pacing"). A normal end returns at once.
+error_end_pace() {
+  local m remaining
+  [ "$ERROR_END" -eq 1 ] || return 0
+  m=$(fm_sup_stat_mtime "$ERROR_REWAKE_MARKER" 2>/dev/null || true)
+  if [ -n "$m" ]; then
+    remaining=$(( m + ERROR_REWAKE_COOLDOWN - $(date +%s) ))
+    while [ "$remaining" -gt 0 ]; do
+      if [ -n "$PARK_OWNER" ] && ! park_still_ours; then allow_stop; fi
+      fm_session_lock_owned_by_self "$STATE" || allow_stop
+      [ -e "$STATE/.afk" ] && allow_stop
+      fm_supervision_needed "$STATE" "$GRACE" || allow_stop
+      sleep "$POLL"
+      remaining=$(( m + ERROR_REWAKE_COOLDOWN - $(date +%s) ))
+    done
+  fi
+  mkdir -p "$STATE" 2>/dev/null || true
+  : > "$ERROR_REWAKE_MARKER" 2>/dev/null || true
+}
 
 EXEC_NUM=$(printf '%s' "$PAYLOAD" | jq -r 'if (.executionNum | type) == "number" then (.executionNum | floor | tostring) else "" end' 2>/dev/null || true)
 
@@ -102,6 +149,7 @@ fi
 if [ -n "$EXEC_NUM" ] && [ "$EXEC_NUM" -ge "$LOOP_CEILING" ]; then
   [ "$EXEC_NUM" -eq "$LOOP_CEILING" ] || allow_stop
   fm_supervision_needed "$STATE" "$GRACE" || allow_stop
+  error_end_pace
   continue_turn "FIRSTMATE SUPERVISION FOLLOW-UP CEILING REACHED - this session has taken $EXEC_NUM consecutive hook-driven turns, so automatic wake delivery stops here to bound the loop. Queued wakes stay durable: run bin/fm-wake-drain.sh, handle them, and run its exact WAKE_ACK_REQUIRED command. Supervision resumes automatically at the next turn end after the captain's next message."
 fi
 
@@ -154,6 +202,7 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
     if [ "$PARK_TIMEOUT" -gt 0 ] && [ "$waited" -ge "$PARK_TIMEOUT" ]; then
       kill "$ARM_PID" 2>/dev/null
       ARM_PID=
+      error_end_pace
       continue_turn "[supervision-park] No actionable wake arrived within ${PARK_TIMEOUT}s while supervision is still needed. End your turn briefly so the Antigravity Stop hook can re-park on the next turn boundary."
     fi
     sleep "$POLL"
@@ -207,7 +256,9 @@ if [ "$ACTIONABLE" -eq 1 ]; then
     WAKE=$(grep -E '^(signal:|stale:|check:|heartbeat)' "$ARM_OUT" 2>/dev/null | head -8)
   fi
   rm -f "$STATE/.turnend-blocks" 2>/dev/null || true
-  continue_turn "firstmate watcher wake - one supervision event needs a handling turn now.
+  error_end_pace
+  [ "$ERROR_END" -eq 1 ] || ERROR_NOTE=
+  continue_turn "${ERROR_NOTE}firstmate watcher wake - one supervision event needs a handling turn now.
 $WAKE
 
 Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle parks automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake."

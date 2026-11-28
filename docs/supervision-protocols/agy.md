@@ -14,7 +14,10 @@ When this session owns supervision and away mode is not active:
    Only when the optional `FM_AGY_PARK_TIMEOUT` bound is set and passes without a wake does it stop the child and returns `{"decision":"continue","reason":"..."}` carrying `[supervision-park]`; end the turn briefly so the next turn boundary parks again.
    When nothing needs supervision, or the park closed beside a verified healthy watcher, the hook returns `{}` and allows normal turn completion.
    When `.executionNum` reaches the loop ceiling (`FM_AGY_TURNEND_LOOP_CEILING`, default 180) while supervision is still needed, the hook returns one `FIRSTMATE SUPERVISION FOLLOW-UP CEILING REACHED` notice; drain and handle queued wakes yourself, and past the ceiling the hook returns `{}`.
-   Only normal turn completions with `.terminationReason == "NO_TOOL_CALL"` trigger a park; other termination reasons pass through with `{}`.
+   A park follows a normal turn end (`.terminationReason` `NO_TOOL_CALL`), a `/compact` turn (`TERMINAL_CUSTOM_HOOK`), and a turn a model or transport error ended (`ERROR`); every other termination reason, including a cancel, passes through with `{}`.
+   After an error end the follow-up turn opens with a line saying the previous turn ended on an error; handle the wake as usual.
+   Follow-ups after error ends are spaced at least `FM_AGY_ERROR_REWAKE_COOLDOWN` seconds (default 300) apart, so a provider outage cannot loop hot; a held follow-up is delayed, never dropped.
+   An Esc interrupt runs no Stop hook, so supervision stays down after one until the next turn ends.
 5. The captain keeps control while the hook is parked.
    A message sent while parked supersedes the older park through `state/.agy-park-owner`, making the older park stand down cleanly with `{}` without emitting duplicate wakes.
 6. On a `turn-end-guard` follow-up, the park could not establish a live cycle.
