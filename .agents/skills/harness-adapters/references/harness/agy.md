@@ -54,7 +54,7 @@ Antigravity CLI loads `<workspace>/.agents/hooks.json` for hook lifecycle events
 agy 1.4.9 reads every top-level key as a named hook spec (firstmate ships one, `firstmate`), with flat `SessionStart` and `Stop` handler lists and `PreToolUse` grouped under `matcher` and `hooks`; any other top-level key, such as a `version` field, silently disables the whole file (verified live).
 A PreToolUse handler that prints nothing allows the call, while a printed object without a `decision` denies it, so the seatbelts print only on deny.
 SessionStart executes `bin/fm-sessionstart-agy.sh` to inject the session-start digest into model context.
-PreToolUse invokes `bin/fm-arm-pretool-check.sh --agy`, `bin/fm-cd-pretool-check.sh --agy`, and `bin/fm-subagent-pretool-check.sh --agy`.
+PreToolUse invokes `bin/fm-arm-pretool-check.sh --agy`, `bin/fm-cd-pretool-check.sh --agy`, `bin/fm-pr-text-pretool-check.sh --agy` (the PR text check), and `bin/fm-subagent-pretool-check.sh --agy`.
 Stop executes `bin/fm-turnend-guard-agy.sh`, which parks on a home-scoped watcher cycle through `bin/fm-watch-arm.sh` (or `bin/fm-supervision-host.sh park` on a home that runs the host) under the registered 28800s hook timeout and delivers actionable wake output; only an optional `FM_AGY_PARK_TIMEOUT` bound re-arms via `{"decision":"continue","reason":"..."}` with `[supervision-park]`, and `FM_AGY_TURNEND_LOOP_CEILING` (default 180) bounds hook-driven turns.
 A bounded 3-block repair nag is enforced via `bin/fm-turnend-guard.sh --agy` before failing open with `{}`.
 See `../../../../../docs/supervision-protocols/agy.md` for the complete supervision protocol.

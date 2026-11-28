@@ -853,6 +853,70 @@ EOF
   pass "the tracked Claude settings check a first mate's and a second mate's PR text, and leave workers and other copies alone"
 }
 
+test_agy_first_and_second_mate_sessions_get_the_hook() {
+  local case_dir="$TMP_ROOT/agy-primary" primary mate task cmd script publish
+  primary="$case_dir/home"
+  mate="$case_dir/mate"
+  task="$case_dir/task"
+  mkdir -p "$primary/bin" "$primary/config" "$primary/.agents"
+  for script in fm-pr-text-pretool-check.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh fm-omp-process-lib.sh fm-cursor-lib.sh \
+    fm-hook-host-lib.sh fm-pr-text-guard.py fm-leak-guard.sh fm-leak-lib.sh fm-leak-shapes.py fm_secret_shapes.py \
+    fm-addon.sh fm-timeout-lib.sh; do
+    cp "$ROOT/bin/$script" "$primary/bin/"
+  done
+  cp "$ROOT/.agents/hooks.json" "$primary/.agents/"
+  printf '# Home\n' > "$primary/AGENTS.md"
+  printf '/config/\n/.fm-secondmate-home\n' > "$primary/.gitignore"
+  git -C "$primary" init -q
+  git -C "$primary" add -A
+  git -C "$primary" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+  git -C "$primary" worktree add -q --detach "$mate" HEAD
+  git -C "$primary" worktree add -q --detach "$task" HEAD
+  mkdir -p "$mate/config"
+  printf 'mate-1\n' > "$mate/.fm-secondmate-home"
+  printf 'Robin\n' > "$primary/config/leak-words"
+  printf 'Robin\n' > "$mate/config/leak-words"
+  # The one PR text check registered for agy's shell tool, run_command.
+  cmd=$(jq -r '[.[] | .PreToolUse // empty | .[] | select(.matcher as $m | "run_command" | test("^(" + $m + ")$")) | .hooks[].command
+      | select(test("fm-pr-text-pretool-check[.]sh"))] | if length == 1 then .[0] else error("not exactly one") end' \
+    "$ROOT/.agents/hooks.json") || fail "the tracked agy hooks must register the PR text check on run_command exactly once"
+  publish='true && gh pr create --repo o/public --title "for Robin" --body x'
+
+  # agy_session <home dir> <tool name> [env...]: the registered hook on the
+  # publishing command, run from that home's .agents/ as agy runs it, with the
+  # payload shape agy 1.5.18 sends (it escapes & as &); output in OUT.
+  agy_session() {
+    local dir=$1 tool=$2 payload
+    shift 2
+    payload=$(jq -cn --arg c "$publish" --arg t "$tool" --arg cwd "$WORK" \
+        '{hookEventName: "PreToolUse", cwd: $cwd, toolCall: {name: $t, args: {CommandLine: $c}}}' \
+      | sed 's/&/\\u0026/g')
+    OUT=$(cd "$dir/.agents" && printf '%s' "$payload" | env -u FM_TASK_ID -u FM_HOME PATH="$FAKEBIN:$PATH" FAKE_GH_LOG="$GH_LOG" \
+      FAKE_GH_PRIVATE=false "$@" sh -c "$cmd") || fail "the agy hook exited nonzero in $dir"
+  }
+
+  agy_session "$primary" run_command
+  printf '%s' "$OUT" | jq -e '.decision == "deny" and (.reason | type) == "string"' >/dev/null \
+    || fail "an agy first mate's publishing command must be refused in agy's deny shape (got: $OUT)"
+  assert_contains "$OUT" "1 word from this home's private word list (the command, line 1)" \
+    "the agy first mate's refusal must count the word and place it"
+  assert_not_contains "$OUT" "Robin" "the agy first mate's refusal must never name the word"
+  mkdir -p "$mate/.agents"
+  agy_session "$mate" run_command
+  assert_contains "$OUT" '"deny"' "an agy second mate session must have its publishing command checked"
+  agy_session "$primary" run_command FM_TASK_ID=t-1
+  assert_equals "" "$OUT" "an agy ship or scout worker must not be checked by the first mate's hook"
+  mkdir -p "$task/.agents"
+  agy_session "$task" run_command
+  assert_equals "" "$OUT" "an agy task copy that is not a home must not be checked"
+  agy_session "$primary" view_file
+  assert_equals "" "$OUT" "a tool other than the shell must pass"
+  publish='gh pr create --repo o/public --title "clean title" --body x'
+  agy_session "$primary" run_command
+  assert_equals "" "$OUT" "a clean publishing command must pass with no output, which agy reads as allow"
+  pass "the tracked agy hooks check a first mate's and a second mate's PR text and refuse in agy's shape"
+}
+
 test_ship_brief_tells_the_worker_to_check() {
   local home="$TMP_ROOT/brief-home" id brief check
   mkdir -p "$home/data" "$home/config"
@@ -1075,6 +1139,7 @@ test_hook_reads_visibility_through_the_job_account
 test_spawn_installs_the_hook
 test_spawn_carries_the_job_account
 test_first_and_second_mate_sessions_get_the_hook
+test_agy_first_and_second_mate_sessions_get_the_hook
 test_ship_brief_tells_the_worker_to_check
 test_draft_check_names_new_words_and_shapes
 test_draft_check_never_names_a_listed_phrase_as_new
