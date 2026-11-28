@@ -94,7 +94,7 @@ SH
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.59.2 (fake) 2026-06-27T00:02:18Z}"
+  printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.80.0 (fake) 2026-06-27T00:02:18Z}"
   exit 0
 fi
 exit 0
@@ -586,16 +586,17 @@ test_no_mistakes_min_version() {
       missing)
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
       outdated)
-        expect="OUTDATED: no-mistakes (installed: $installed; requires 1.59.2; upgrade: no-mistakes update)"
+        expect="OUTDATED: no-mistakes (installed: $installed; requires 1.80.0; upgrade: no-mistakes update)"
         [ "$out" = "$expect" ] || fail "$label: expected '$expect', got: $out" ;;
     esac
   done <<'ROWS'
-minimum no-mistakes version is accepted^no-mistakes version v1.59.2 (fake)^empty^
-newer no-mistakes minor is accepted^no-mistakes version v1.60.0 (fake)^empty^
+minimum no-mistakes version is accepted^no-mistakes version v1.80.0 (fake)^empty^
+newer no-mistakes minor is accepted^no-mistakes version v1.81.0 (fake)^empty^
 newer no-mistakes major is accepted^no-mistakes version v2.0.0 (fake)^empty^
 absent no-mistakes reports a missing tool^absent^missing^
-older no-mistakes patch reports an upgrade^no-mistakes version v1.59.1 (fake)^outdated^1.59.1
-older no-mistakes minor reports an upgrade^no-mistakes version v1.58.9 (fake)^outdated^1.58.9
+release before --no-publish-intent reports an upgrade^no-mistakes version v1.79.0 (fake)^outdated^1.79.0
+older no-mistakes minor reports an upgrade^no-mistakes version v1.78.9 (fake)^outdated^1.78.9
+previous 1.59.2 floor reports an upgrade^no-mistakes version v1.59.2 (fake)^outdated^1.59.2
 previous 1.46.0 floor reports an upgrade^no-mistakes version v1.46.0 (fake)^outdated^1.46.0
 unparseable no-mistakes version reports an upgrade^no-mistakes development build^outdated^unparseable
 ROWS
@@ -1082,7 +1083,7 @@ SH
 #!/usr/bin/env bash
 [ "${1:-}" = --version ] && { echo "no-mistakes version v${FM_FAKE_NM_VERSION:-1.50.0} (fake)"; exit 0; }
 printf 'no-mistakes %s\n' "$*" >> "$FAKE_CALLS"
-[ "${1:-}" = update ] && sed -i.bak 's/FM_FAKE_NM_VERSION:-1.50.0/FM_FAKE_NM_VERSION:-1.59.2/' "$0"
+[ "${1:-}" = update ] && sed -i.bak 's/FM_FAKE_NM_VERSION:-1.50.0/FM_FAKE_NM_VERSION:-1.80.0/' "$0"
 exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
@@ -1116,7 +1117,7 @@ exit 0
 SH
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
-[ "${1:-}" = --version ] && echo "no-mistakes version v1.59.2 (fake)"
+[ "${1:-}" = --version ] && echo "no-mistakes version v1.80.0 (fake)"
 exit 0
 SH
   chmod +x "$fakebin/treehouse" "$fakebin/no-mistakes"

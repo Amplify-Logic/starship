@@ -211,7 +211,7 @@ In the installer notes of the same section, these lines replace upstream's confi
 
 In [Toolchain](configuration.md#toolchain), this fork requires a newer no-mistakes and names the watched instruction paths by their owner, so these lines replace upstream's:
 
-- no-mistakes v1.59.2 or newer.
+- no-mistakes v1.80.0 or newer.
 - When a running home advances and its loaded instruction surface (the paths `changed_instr` in `bin/fm-ff-lib.sh` watches) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
 
 ### Process-to-event sources
