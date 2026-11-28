@@ -53,7 +53,7 @@ Teardown removes nothing agy-specific because the spawn leaves nothing behind.
 A primary launches through `../../../../../bin/fm-primary.sh neon` (Gemini 4 Neon), whose header owns the launch line, effort file, context cap, and pre-launch checks.
 
 Antigravity CLI loads `<workspace>/.agents/hooks.json` for hook lifecycle events, running each command from `.agents/` itself.
-agy 1.4.9 reads every top-level key as a named hook spec (firstmate ships one, `firstmate`), with flat `SessionStart` and `Stop` handler lists and `PreToolUse` grouped under `matcher` and `hooks`; any other top-level key, such as a `version` field, silently disables the whole file (verified live).
+agy 1.4.9 reads every top-level key as a named hook spec (firstmate ships one, `firstmate`), with flat `SessionStart`, `PreInvocation`, and `Stop` handler lists and `PreToolUse` grouped under `matcher` and `hooks`; any other top-level key, such as a `version` field, silently disables the whole file (verified live).
 A PreToolUse handler that prints nothing allows the call, while a printed object without a `decision` denies it, so the seatbelts print only on deny.
 SessionStart executes `bin/fm-sessionstart-agy.sh` to inject the session-start digest into model context.
 PreToolUse invokes `bin/fm-arm-pretool-check.sh --agy`, `bin/fm-cd-pretool-check.sh --agy`, and `bin/fm-subagent-pretool-check.sh --agy`.
@@ -61,4 +61,5 @@ Stop executes `bin/fm-turnend-guard-agy.sh`, which parks on a home-scoped watche
 The Stop payload's `terminationReason` decides whether the hook parks: `NO_TOOL_CALL` (normal end), `TERMINAL_CUSTOM_HOOK` (agy 1.5.18 ends a `/compact` turn this way), and `ERROR` (a model or transport error, with the message in the payload's `error` field) park; every other value, including `USER_CANCELED`, passes through with `{}`, and an Esc interrupt runs no Stop hook at all (verified live on agy 1.5.18, `../../../../../docs/verification/agy.md`).
 Follow-ups after error ends are paced to one per `FM_AGY_ERROR_REWAKE_COOLDOWN` seconds (default 300) through `state/.agy-error-rewake`; the script header owns the mechanics.
 A bounded 3-block repair nag is enforced via `bin/fm-turnend-guard.sh --agy` before failing open with `{}`.
+A primary's plain-language reply check (`bin/fm-agy-plain-language.sh`) runs as a `stop` Stop entry listed before the park, because agy runs Stop hooks one after another, and as a `before-model` `PreInvocation` entry that injects the warning at the next model call; its header owns the contract.
 See `../../../../../docs/supervision-protocols/agy.md` for the complete supervision protocol.

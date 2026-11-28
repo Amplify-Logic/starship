@@ -34,7 +34,19 @@
         ]
       }
     ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "sh -c \"[ -x ./bin/fm-agy-plain-language.sh ] && exec ./bin/fm-agy-plain-language.sh before-model || exec ../bin/fm-agy-plain-language.sh before-model\" || cd .",
+        "timeout": 5
+      }
+    ],
     "Stop": [
+      {
+        "type": "command",
+        "command": "sh -c \"[ -x ./bin/fm-agy-plain-language.sh ] && exec ./bin/fm-agy-plain-language.sh stop || exec ../bin/fm-agy-plain-language.sh stop\" || cd .",
+        "timeout": 10
+      },
       {
         "type": "command",
         "command": "sh -c \"[ -x ./bin/fm-turnend-guard-agy.sh ] && exec ./bin/fm-turnend-guard-agy.sh || exec ../bin/fm-turnend-guard-agy.sh\" || cd .",

@@ -311,6 +311,7 @@ The registrations in detail:
   pi-code stamps it with Pi's session file under `/.pi/`, a path component a Claude transcript never carries.
   The stand-down fails toward running, matching the guards above, so no payload, no `jq`, or no `transcript_path` still arms, and every other Claude-shaped hook pi-code delivers keeps running.
 - Antigravity registers a `Stop` hook in `.agents/hooks.json` with a 28800s timeout, anchoring commands safely to the project root and delegating the turn boundary to `bin/fm-turnend-guard-agy.sh`.
+  An earlier `Stop` entry, `bin/fm-agy-plain-language.sh stop`, is not part of the guard: it records a plain-language warning about the primary's final reply for its `PreInvocation` partner to hand the first mate at the next model call, prints `{}`, and never holds the turn.
   In linked crewmate worktrees or foreign checkouts, the wrapper stands down immediately with `{}`.
   In primary or persistent secondmate homes, the hook parks synchronously on `bin/fm-watch-arm.sh` (or `bin/fm-supervision-host.sh park` on a home that runs the host), keeping supervision continuity alive until an incoming wake event arrives or a bounded repair nag is returned via `bin/fm-turnend-guard.sh --agy`.
 
