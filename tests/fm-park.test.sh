@@ -1382,6 +1382,7 @@ expect_idle_relaunch() {  # <world> <label> <note-substring>
   head -1 "$1/control.log" | grep -q '^lane relaunch --note-file ' || fail "$2: no relaunch call: $(cat "$1/control.log" 2>/dev/null)"
   grep -qF "$3" "$1/control.log" || fail "$2: the relaunch note lacks '$3': $(cat "$1/control.log")"
   grep -qF 'steering inbox' "$1/control.log" || fail "$2: the note does not point the fresh agent at its inbox"
+  grep -qF 'restart any preview or server it was holding for the captain' "$1/control.log" || fail "$2: the note does not tell the fresh agent to restart a held preview"
   tail -1 "$1/state/lane.status" | grep -q '^working \[at=[0-9]*\]: relaunched after a stop while waiting on the captain' \
     || fail "$2: no working line: $(tail -1 "$1/state/lane.status")"
 }

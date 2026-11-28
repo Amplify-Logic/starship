@@ -1060,14 +1060,14 @@ cmd_idle_resume() {
       "$(idle_when "$since")" "$(idle_basis_text "$basis" "$key")"
     printf 'You are a fresh agent relaunched in the same local copy on the same branch because: %s.\n' "$trigger"
     printf 'The previous agent'"'"'s last report was: %s\n' "$last"
-    printf 'First read your steering inbox and act on every instruction waiting there, in order, then continue the task exactly as your instructions define.\n'
+    printf 'The stop also ended every preview or server the previous agent had left running, so before anything else restart any preview or server it was holding for the captain and post its link again.\n'
+    printf 'Then read your steering inbox and act on every instruction waiting there, in order, then continue the task exactly as your instructions define.\n'
   } > "$note"
   # Written before the launch, so the fresh worker's own reports follow it.
   status_append "$id" "working [at=$(date +%s)]: relaunched after a stop while waiting on the captain: $trigger"
   out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$CONTROL_BIN" "$id" relaunch --note-file "$note" 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
-    { grep -v '^resume_error=' "$rec"; printf 'resume_error=%s\n' "$(date +%s)"; } > "$PARK_TMP/rec" \
-      && mv -f -- "$PARK_TMP/rec" "$rec" || true
+    kv_rewrite "$rec" resume_error "resume_error=$(date +%s)" || true
     printf 'idle-relaunch-failed %s: the worker stopped while waiting on the captain could not be relaunched (%s): %s\n' \
       "$id" "$trigger" "$(printf '%s\n' "$out" | tail -1)"
     return 1

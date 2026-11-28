@@ -951,7 +951,7 @@ A dependency pull request says "dependency updates within the same major version
 A worker that has waited on the captain for a day is stopped, and brought back when he answers, so a held decision, a board waiting for answers, a preview held for a look or credentials he must supply no longer keeps a full agent running for days.
 A worker waits on the captain when its newest report is a question or blocker nobody has answered yet, or when its task is held for the captain (`bin/fm-captain-hold.sh hold`).
 The clock starts at its last report or the last instruction it read.
-The stop keeps the worker's local copy, branch, records and open question, and also stops its own browser session and anything it left running in its local copy; a later answer, a steer, or a lifted hold relaunches it first, and the fresh agent reads the waiting instruction before anything else.
+The stop keeps the worker's local copy, branch, records and open question, and also stops its own browser session and anything it left running in its local copy; a later answer, a steer, or a lifted hold relaunches it first, and the fresh agent reads the waiting instruction before anything else except one step: a preview or dev server held for the captain's look is stopped with the worker, so the relaunched worker first restarts it and posts its link again.
 A busy worker, a running validation, a wait on anything but the captain, a second mate, and a task marked keep-alive are never stopped, and neither is a worker with uncommitted changes, which is reported instead.
 Routine stops are silent; one that could not be done cleanly, and a relaunch that failed, are reported.
 It is on by default with a threshold of 24 hours.
