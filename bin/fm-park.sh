@@ -169,7 +169,8 @@
 # (so no validation run is active) and not as working; and its local copy is
 # present and clean. A copy with uncommitted changes is never stopped; that
 # refusal prints "idle-stop-refused <id>: ...", which the tick reports once per
-# status-log state (marker state/.idle-park-reported-<id>). It then leases the
+# status-log state (marker state/.idle-park-reported-<id>); once the copy is
+# clean again a later tick may stop it without a new status line. It then leases the
 # pool slot as park does, takes the inbox delivery lock, checks once more that
 # the agent is idle and the inbox empty, writes state/<id>.idle-park (basis
 # decision with its key, or hold; waiting_since; parked_at; slot_leased;
@@ -911,7 +912,7 @@ idle_basis_text() {  # <basis> <key>
 # "hold" when only a captain hold could make the lane wait on the captain, for
 # a lane that may be stopped; fails otherwise.
 idle_candidate() {  # <id> <threshold> <now>
-  local id=$1 meta since key
+  local id=$1 meta since key reported sig wt
   meta="$STATE/$id.meta"
   [ "$(fm_meta_get "$meta" kind)" != secondmate ] || return 1
   [ -z "$(fm_meta_get "$meta" remote_host)" ] || return 1
@@ -920,7 +921,14 @@ idle_candidate() {  # <id> <threshold> <now>
   since=$(idle_quiet_since "$id") || return 1
   [ $(( $3 - since )) -ge "$2" ] || return 1
   ! idle_inbox_pending "$id" || return 1
-  [ "$(cat "$(idle_reported_path "$id")" 2>/dev/null || true)" != "$(idle_status_sig "$id")" ] || return 1
+  reported=$(cat "$(idle_reported_path "$id")" 2>/dev/null || true)
+  sig=$(idle_status_sig "$id")
+  [ "$reported" != "$sig" ] || return 1
+  # A refusal for uncommitted changes holds only while the copy stays dirty.
+  if [ "$reported" = "$sig dirty" ]; then
+    wt=$(fm_meta_get "$meta" worktree)
+    [ -n "$wt" ] && [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ] || return 1
+  fi
   if key=$(idle_decision_key "$id"); then printf 'decision %s\n' "$key"; else printf 'hold\n'; fi
 }
 
@@ -1003,7 +1011,7 @@ cmd_idle_park() {
   idle_preflight "$id" > "$PARK_TMP/why" || rc=$?
   why=$(cat "$PARK_TMP/why")
   if [ "$rc" = 2 ]; then
-    idle_status_sig "$id" > "$(idle_reported_path "$id")" || true
+    printf '%s dirty\n' "$(idle_status_sig "$id")" > "$(idle_reported_path "$id")" || true
     printf 'idle-stop-refused %s: waiting on the captain since %s (%s), but %s; its agent was left running\n' \
       "$id" "$(idle_when "$IDLE_SINCE")" "$(idle_basis_text "$IDLE_BASIS" "$IDLE_KEY")" "$why"
     return 1

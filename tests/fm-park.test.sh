@@ -1334,7 +1334,11 @@ test_dirty_copy_is_reported_once_and_left_running() {
   out=$(run_idle "$w" tick 2>&1); sleep 0.5
   out=$out$(run_idle "$w" tick 2>&1)
   [ -z "$out" ] || fail "idle-dirty: the refusal was reported again: $out"
-  pass "a worker waiting on the captain with uncommitted work is left running and reported once"
+  # Cleaning the copy without a new status line makes the lane stoppable again.
+  rm -f -- "$(fm_meta_get_test "$w" worktree)/draft.txt"
+  out=$(run_idle "$w" tick 2>&1) || fail "idle-dirty: tick after cleaning failed: $out"
+  wait_idle_parked "$w" idle-dirty-cleaned
+  pass "a worker waiting on the captain with uncommitted work is left running and reported once, then stopped once its copy is clean"
 }
 
 test_idle_stop_clears_what_the_agent_left_running() {
