@@ -1230,7 +1230,7 @@ SH
 }
 
 run_idle() {  # <world> <args...>
-  FM_PARK_IDLE_SECS=${FM_TEST_IDLE:-3600} FM_PARK_IDLE_SCAN_SECS=0 \
+  FM_PARK_IDLE_SECS=${FM_TEST_IDLE-3600} FM_PARK_IDLE_SCAN_SECS=0 \
     FM_PARK_CAPTAIN_HOLD_BIN="$1/fakebin/fm-captain-hold.sh" run_park "$@"
 }
 
@@ -1318,7 +1318,7 @@ test_idle_stop_never_touches_busy_validating_kept_or_secondmate_lanes() {
   expect_idle_untouched "$w" idle-inbox
   w=$(idle_world idle-off)
   printf '0\n' > "$w/config/idle-park-hours"
-  FM_PARK_IDLE_SECS='' expect_idle_untouched "$w" idle-off
+  FM_TEST_IDLE='' expect_idle_untouched "$w" idle-off
   pass "the idle stop never touches a busy agent, a live validation run, a kept-alive task, a secondmate, an unread instruction, or a home that turned it off"
 }
 
