@@ -2332,6 +2332,15 @@ test_desk_voice_compact_reads_claudes_footer_only() {
   out=$(printf '%s\n' "$rule" "$box" "$rule" "  bypass permissions on $(printf '\302\267') 7% until auto-compact" \
     | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
   assert_equals "$out" "7" "a notice after another on a footer row below the box counts"
+  out=$(printf '%s\n' "$rule" "$box" "$rule" " $(printf '\342\217\265\342\217\265') bypass permissions on (shift+tab to cycle)        13% until auto-compact" \
+    | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "13" "a notice right-aligned on a footer row below the box counts"
+  out=$(printf '%s\n' "$rule" "$box" "$rule" " ? for shortcuts                    auto-compact next" \
+    | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "next" "auto-compact next right-aligned below the box counts"
+  out=$(printf '%s\n' "it said    5% until auto-compact" "$rule" "$box" "$rule" | "$DESK" compact --stdin) \
+    || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "words after a run of spaces above the box never count, got '$out'"
   quoted=$(printf '%s\n' "12% until auto-compact" "" "one" "two" "three" "four" "$rule" "$box" "$rule")
   out=$(printf '%s\n' "$quoted" | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
   [ -z "$out" ] || fail "the words in the conversation above the box never count, got '$out'"

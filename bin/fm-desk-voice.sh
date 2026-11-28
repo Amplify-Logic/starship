@@ -1178,7 +1178,8 @@ prompt() (
 # starts with the ❯ prompt right under a rule of ─), and the figure counts
 # only on the three rows above that rule or any row below the box, where
 # Claude draws its footer notices, either opening the row or following a
-# " · " between notices. Conversation text above the box never counts.
+# " · " between notices; below the box it may also stand right-aligned after
+# a run of spaces. Conversation text above the box never counts.
 claude_compact_left() {  # <plain-screen>
   printf '%s\n' "$1" | awk '
     { row[NR] = $0 }
@@ -1191,13 +1192,15 @@ claude_compact_left() {  # <plain-screen>
       for (i = box - 4; i <= NR; i++) {
         if (i < 1 || i == box) continue
         line = row[i]
-        if (match(line, /(^|· )[[:space:]]*[0-9]+% until auto-compact/)) {
+        lead = (i > box) ? "(^|· |[^[:space:]][[:space:]][[:space:]]+)" : "(^|· )"
+        if (match(line, lead "[[:space:]]*[0-9]+% until auto-compact")) {
           hit = substr(line, RSTART, RLENGTH)
-          sub(/^[^0-9]*/, "", hit)
+          match(hit, /[0-9]+% until auto-compact$/)
+          hit = substr(hit, RSTART)
           sub(/%.*/, "", hit)
           if (hit + 0 <= 100) { print hit + 0; exit }
         }
-        if (line ~ /(^|· )[[:space:]]*auto-compact next/) { print "next"; exit }
+        if (line ~ (lead "[[:space:]]*auto-compact next")) { print "next"; exit }
       }
     }'
 }
