@@ -153,6 +153,10 @@ if [ "\$*" = suggestion ]; then
   printf '%s\n' "\$said"
   exit 0
 fi
+if [ "\$*" = compact ]; then
+  cat "$home/compact" 2>/dev/null
+  exit 0
+fi
 if [ "\$*" = prompt ]; then
   printf 'prompt\n' >> "$home/prompt.reads"
   cat "$home/prompt" 2>/dev/null
@@ -1113,10 +1117,28 @@ PY
     "⚓ Opus·high │ 🧠35% 👁 not watching 1 ready to merge" "the row's words are the terminal's"
   assert_equals "$(jq -r '[.model.status[] | select(.tone != "") | "\(.tone):\(.text)"] | join("|")' <<<"$out")" \
     "bold:⚓ Opus|dim:·|dim:│|green:🧠35%|alarm:👁 not watching|magenta:1 ready to merge" "each colour is a tone"
+  assert_equals "$(jq -r '.model.compact' <<<"$out")" "" "no auto-compact figure while Claude's footer shows none"
+  printf '4\n' > "$home/compact"
+  wait_compact "$home" 4 || fail "the figure Claude's footer shows until auto-compact should reach the page"
+  printf 'next\n' > "$home/compact"
+  wait_compact "$home" next || fail "auto-compact next should reach the page as Claude says it"
+  printf '4%% left\n' > "$home/compact"
+  wait_compact "$home" "" || fail "anything but a percent or next is no figure"
   rm -f "$home/status.row"
   sleep 2.2   # the server keeps one reading for two seconds
   assert_equals "$(mirror "$home" | jq -c '.model.status')" "[]" "no row leaves the status bar out"
-  pass "the mirror shows the terminal's status bar row word for word"
+  pass "the mirror shows the terminal's status bar row word for word, with Claude's auto-compact figure beside it"
+}
+
+# The auto-compact figure is read in the background, so it reaches the
+# mirror a reading or two later.
+wait_compact() {  # <home> <expected>
+  local i
+  for i in $(seq 1 40); do
+    [ "$(mirror "$1" | jq -r '.model.compact // "-"')" = "$2" ] && return 0
+    sleep 0.25
+  done
+  return 1
 }
 
 # Watch this worker opens a read-only live copy of that worker's screen. On

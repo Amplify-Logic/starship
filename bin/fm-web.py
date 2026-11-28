@@ -58,7 +58,11 @@ While the first mate is ready, the conversation reading also carries the
 suggested next prompt Claude shows in its empty chat box, read in the
 background by `bin/fm-desk-voice.sh suggestion` (suggestion_reader), which types
 nothing; the page shows it in its own empty message box and Tab fills it in.
-The status row under that box is `bin/fm-status-bar.sh --replay --own`.
+The status row under that box is `bin/fm-status-bar.sh --replay --own`, and
+the projects reading carries beside it the context Claude's footer says is left
+until auto-compact, read in the background by `bin/fm-desk-voice.sh compact`
+(compact_reader), which types nothing; the page shows it only while the
+terminal does.
 
 While the first mate runs, the reading also carries the prompt its screen is
 stopped on waiting for a person (a permission yes or no, a trust dialog, a
@@ -191,6 +195,8 @@ SUGGESTION_TIMEOUT_SECONDS = 20
 SUGGESTION_MAX = 2000
 PROMPT_TTL_SECONDS = 1.5
 PROMPT_TIMEOUT_SECONDS = 20
+COMPACT_TTL_SECONDS = 3.0
+COMPACT_TIMEOUT_SECONDS = 20
 # The server's own code: a change on disk restarts it in place (watch_code).
 CODE_PATH = Path(__file__).resolve()
 CODE_CHECK_SECONDS = float(os.environ.get("FM_WEB_CODE_CHECK_SECONDS") or 2.0)
@@ -1935,6 +1941,52 @@ def prompt_reader(home: Path, root: Path) -> Any:
     return get
 
 
+def read_compact(home: Path, root: Path) -> str:
+    """The context Claude's footer says is left until auto-compact, read by
+    bin/fm-desk-voice.sh compact: a whole percent, "next" when the next turn
+    compacts, or empty when the footer shows none or cannot be read."""
+    try:
+        proc = subprocess.run(
+            ["bash", str(root / "bin" / "fm-desk-voice.sh"), "compact"],
+            env=child_env(home, root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=COMPACT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = proc.stdout.split() if proc.returncode == 0 else []
+    value = lines[0] if lines else ""
+    return value if value == "next" or (value.isdigit() and int(value) <= 100) else ""
+
+
+def compact_reader(home: Path, root: Path) -> Any:
+    """The context left until auto-compact for every open page, as a
+    function. It is read in the background, at most every
+    COMPACT_TTL_SECONDS, so a projects reading never waits on the screen."""
+    lock = threading.Lock()
+    held: Dict[str, Any] = {"value": "", "at": float("-inf"), "reading": False}
+
+    def read() -> None:
+        value = ""
+        try:
+            value = read_compact(home, root)
+        finally:
+            with lock:
+                held.update(value=value, at=time.monotonic(), reading=False)
+
+    def get() -> str:
+        with lock:
+            if not held["reading"] and time.monotonic() - held["at"] >= COMPACT_TTL_SECONDS:
+                held["reading"] = True
+                threading.Thread(target=read, daemon=True).start()
+            return held["value"]
+
+    return get
+
+
 class FleetCache:
     """One reading of the projects for every open page, at most every
     MIRROR_TTL_SECONDS, and at once after an action."""
@@ -1948,6 +2000,7 @@ class FleetCache:
         self.fetched_at = 0.0
         # The jobs whose worker may be watched, by id: {"title", "project"}.
         self.live: Dict[str, Dict[str, str]] = {}
+        self.compact = compact_reader(home, root)
 
     def drop(self) -> None:
         with self.lock:
@@ -1961,6 +2014,7 @@ class FleetCache:
             screen = read_screen(self.home, self.root)
             model = mirror_model(screen, read_fields(self.home, self.root))
             model["status"] = read_status_row(self.home, self.root)
+            model["compact"] = self.compact()
             # The clock moves every minute; it is left out of the version so a
             # page redraws only when something it shows changed.
             digest = hashlib.sha256(
@@ -4772,7 +4826,10 @@ function drawBand(){
   box.replaceChildren.apply(box,parts);
 }
 function drawStatus(){
-  const row=$('statusrow'),segs=M.status||[];
+  const row=$('statusrow'),segs=(M.status||[]).slice(),left=M.compact||'';
+  /* What Claude's own footer says is left until auto-compact, only while it says so. */
+  if(left){if(segs.length)segs.push({text:' \u00b7 ',tone:'dim'});
+    segs.push({text:left==='next'?'auto-compact next':left+'% until auto-compact',tone:left==='next'||+left<=5?'red':'yellow'});}
   row.hidden=!segs.length;
   row.replaceChildren.apply(row,segs.map(s=>el('span',s.tone?'t-'+s.tone:'',s.text)));
   row.title=segs.map(s=>s.text).join('');
