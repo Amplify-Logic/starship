@@ -4,15 +4,16 @@
 #
 # Exercises live agy CLI invocation with .agents/hooks.json in an isolated
 # temporary Firstmate home so SessionStart, PreToolUse, and Stop hooks run
-# end-to-end against the installed agy binary, then pre-seeds workspace trust
-# for a --secondmate agy home and launches agy into it.
+# end-to-end against the installed agy binary, including a turn whose model
+# call ends on a transport error (forced through a local CONNECT proxy), then
+# pre-seeds workspace trust for a --secondmate agy home and launches agy into it.
 # FM_AGY_LIVE_MODEL selects a model; without it agy uses its own default.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-fm_live_gate opt-in FM_AGY_PRIMARY_LIVE,FM_AGY_PRIMARY_LIVE_E2E agy jq
+fm_live_gate opt-in FM_AGY_PRIMARY_LIVE,FM_AGY_PRIMARY_LIVE_E2E agy jq python3
 
 AGY_BIN=${FM_AGY_BIN:-$(command -v agy 2>/dev/null || true)}
 [ -n "$AGY_BIN" ] && [ -x "$AGY_BIN" ] \
@@ -37,8 +38,10 @@ stop_watchers() {
   done
 }
 
+PROXY_PID=
 cleanup_all() {
   stop_watchers
+  [ -z "$PROXY_PID" ] || kill "$PROXY_PID" 2>/dev/null || true
   [ -n "${LAB:-}" ] && rm -rf -- "$LAB"
 }
 trap cleanup_all EXIT
@@ -135,6 +138,116 @@ assert_contains "$OUT" "DONE" "Stop hook watcher wake did not reach a follow-up 
 rm -f "$HOME_DIR/state/live-task.meta" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/live-task.status"
 stop_watchers
 pass "agy primary live: Stop hook parks on a real watcher and delivers its wake to a follow-up turn"
+
+# --- Error-ended turn ----------------------------------------------------------
+# A local CONNECT proxy passes agy's traffic until state/live-error-flag exists,
+# then cuts and refuses the model endpoint, so the next model call fails the
+# way a provider error does and agy ends the turn with terminationReason ERROR.
+# With a task in flight the Stop hook must still park on a real watcher and
+# deliver the wake to a follow-up turn, as it does after a normal end.
+PROXY_PY="$LAB/connect-proxy.py"
+cat > "$PROXY_PY" <<'PY'
+import os, socket, sys, threading, time
+port, flag = int(sys.argv[1]), sys.argv[2]
+tunnels = []
+def cutter():
+    while True:
+        if os.path.exists(flag):
+            for pair in list(tunnels):
+                for s in pair:
+                    try: s.shutdown(socket.SHUT_RDWR); s.close()
+                    except OSError: pass
+            tunnels.clear()
+        time.sleep(0.2)
+def pipe(a, b):
+    try:
+        while True:
+            d = a.recv(65536)
+            if not d: break
+            b.sendall(d)
+    except OSError: pass
+    finally:
+        for s in (a, b):
+            try: s.close()
+            except OSError: pass
+def handle(c):
+    try:
+        req = b''
+        while b'\r\n\r\n' not in req:
+            d = c.recv(4096)
+            if not d: return
+            req += d
+        host = req.split(b'\r\n')[0].split()[1].decode()
+        model = 'cloudcode-pa' in host
+        if model and os.path.exists(flag):
+            c.sendall(b'HTTP/1.1 403 Forbidden\r\n\r\n'); c.close(); return
+        name, p = host.rsplit(':', 1)
+        u = socket.create_connection((name, int(p)))
+        if model: tunnels.append((c, u))
+        c.sendall(b'HTTP/1.1 200 OK\r\n\r\n')
+        threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+        pipe(u, c)
+    except OSError: pass
+threading.Thread(target=cutter, daemon=True).start()
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('127.0.0.1', port)); srv.listen(64)
+print('listening', flush=True)
+while True:
+    conn, _ = srv.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+PY
+ERROR_FLAG="$HOME_DIR/state/live-error-flag"
+PROXY_PORT=$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+python3 -I "$PROXY_PY" "$PROXY_PORT" "$ERROR_FLAG" > "$LAB/proxy.out" 2>&1 &
+PROXY_PID=$!
+i=0
+until grep -q listening "$LAB/proxy.out" 2>/dev/null; do
+  sleep 0.1
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || fail "the local CONNECT proxy never started: $(cat "$LAB/proxy.out" 2>/dev/null)"
+done
+rm -f "$HOME_DIR/state/.lock" "$HOME_DIR/state/.agy-park-owner" "$HOME_DIR/state/.agy-error-rewake" \
+  "$HOME_DIR/state/.last-watcher-beat" "$HOME_DIR/state/live-watcher-started" \
+  "$HOME_DIR/state/live-task.status" "$HOME_DIR/state/.wake-queue" "$ERROR_FLAG"
+: > "$HOME_DIR/state/live-task.meta"
+(
+  i=0
+  while [ "$i" -lt 480 ]; do
+    if [ -e "$ERROR_FLAG" ] && [ -s "$HOME_DIR/state/.agy-park-owner" ] && [ -e "$HOME_DIR/state/.last-watcher-beat" ]; then
+      : > "$HOME_DIR/state/live-watcher-started"
+      rm -f "$ERROR_FLAG"
+      sleep 1
+      printf 'done: live-error-park-wake\n' >> "$HOME_DIR/state/live-task.status"
+      j=0
+      while [ "$j" -lt 80 ] && [ -d "$HOME_DIR/state/.watch.lock" ]; do
+        sleep 0.25
+        j=$((j + 1))
+      done
+      sleep 2
+      rm -f "$HOME_DIR/state/live-task.meta" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/live-task.status"
+      exit 0
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+) &
+WAKE_PID=$!
+OUT=$(run_agy "$HOME_DIR" "If you have not yet seen a firstmate watcher wake message in this conversation, run exactly this one shell command with your command tool and nothing else: touch state/live-error-flag
+then reply with the single word READY. Once you receive a firstmate watcher wake message, reply with the single word DONE and end your turn without running any command." \
+  HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT" https_proxy="http://127.0.0.1:$PROXY_PORT" \
+  FM_POLL=1 FM_SIGNAL_GRACE=0 FM_AGY_PARK_TIMEOUT=60 FM_AGY_TURNEND_LOOP_CEILING=3)
+wait "$WAKE_PID" 2>/dev/null || true
+kill "$PROXY_PID" 2>/dev/null || true
+PROXY_PID=
+# Only a Stop payload whose terminationReason is ERROR writes this marker.
+[ -e "$HOME_DIR/state/.agy-error-rewake" ] \
+  || fail "the forced model-endpoint failure never reached the Stop hook as an error end: $OUT"
+[ -e "$HOME_DIR/state/live-watcher-started" ] \
+  || fail "the Stop hook never parked on a real watcher after a live agy error end: $OUT"
+assert_contains "$OUT" "DONE" "the watcher wake did not reach a follow-up turn after a live agy error end"
+rm -f "$HOME_DIR/state/live-task.meta" "$HOME_DIR/state/.wake-queue" "$HOME_DIR/state/live-task.status"
+stop_watchers
+pass "agy primary live: after an error-ended turn the Stop hook parks on a real watcher and delivers its wake"
 
 # --- --secondmate agy trust pre-seeding and launch -----------------------------
 git -C "$HOME_DIR" worktree add -q -b "fm/$SM_ID" "$SM_HOME" >/dev/null 2>&1 \
