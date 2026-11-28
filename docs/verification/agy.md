@@ -180,7 +180,7 @@ Each value below was observed live with a Stop hook that only recorded its stdin
 
 The unauthenticated failure mode was never observed; this host's agy runs signed in, so any auth prompt is a fail-loud credential blocker, not a handled dialog.
 No slash-skill invocation form was verified, so skill invocation stays natural language.
-`--continue` and `--conversation` resume were never exercised; recovery uses deterministic relaunch from the brief on disk.
+`--continue` was never exercised, and `--conversation` was used only to run `/compact` on an existing conversation for the termination-reason check above, never to resume work; recovery uses deterministic relaunch from the brief on disk.
 
 ## Refreshing this record
 
