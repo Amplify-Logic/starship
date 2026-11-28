@@ -8,8 +8,8 @@
 # block below for why that dialog is otherwise left for the worker to wedge
 # on rather than answered on the human's behalf.
 #
-# Usage: fm-claude-trust.sh <worktree> <project>
-#        fm-claude-trust.sh --secondmate-home <home> <id>
+# Usage: fm-claude-trust.sh <worktree> <project> [--add-dir <dir>]...
+#        fm-claude-trust.sh --secondmate-home <home> <id> [--add-dir <dir>]...
 #        fm-claude-trust.sh --lab-home <home>
 #   <worktree>  the isolated task worktree this spawn launches into
 #   <project>   the primary checkout that worktree belongs to
@@ -17,7 +17,8 @@
 #   <id>        the secondmate id that home must already be marked for
 #   --lab-home  the disposable lab home bin/fm-live-lab.sh launches a lab
 #               primary in
-# Prints one line naming what it registered; refuses loudly on anything else.
+#   <dir>       a directory the same launch passes as claude --add-dir
+# Prints one line per path naming what it registered; refuses loudly on anything else.
 #
 # WHY THIS EXISTS. Claude Code gates a folder it has never seen behind an
 # interactive workspace-trust dialog, and --dangerously-skip-permissions does
@@ -167,13 +168,28 @@
 # trust-only for the same reason as a secondmate home, and bin/fm-live-lab.sh
 # removes the entry again when it tears the lab down.
 #
+# ADD-DIRS. Claude Code 2.1.326 also gates every --add-dir directory, behind
+# "Adding a new directory: ... Yes, add it" with the cursor on "No, exit". Its
+# check, read from the binary and reproduced, accepts the entry for the
+# directory's canonical repository root or for the directory itself or any
+# parent up to that root, so each directory's own entry is enough. Only that
+# entry is written, trust-only: the root entry would trust the whole repository.
+# A worker launched from a worktree of the repository holding those directories
+# never met the dialog because its project entry is already that root.
+# "No, exit" holds for the session and records nothing, so there is no standing
+# decline to preserve here; hasTrustDialogAccepted false is the default entry.
+# Each must be an existing directory this user owns and must not be, or contain,
+# the home directory, the Claude config directory, the launch directory, or the
+# project, so this grant cannot widen past the task channels fm-spawn.sh names.
+#
 # Only the launching user's own store is written. In worktree mode: the
 # projects entries for the worktree path and the resolved canonical project
 # path in ${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json, which must be a regular
 # file this uid owns; every unrelated key and project entry is preserved, and
 # both entries land in one atomic replacement. In secondmate-home and lab-home
 # mode: the single projects entry for the registered home path, same store,
-# same atomic replacement. fm-spawn.sh forwards CLAUDE_CONFIG_DIR onto the
+# same atomic replacement. Each add-dir adds its own entry to that replacement.
+# fm-spawn.sh forwards CLAUDE_CONFIG_DIR onto the
 # claude launch verbatim rather than resolving it, and the pane starts in the
 # registered directory, so only an absolute value names the same store on both sides; a
 # relative one is refused below rather than guessed at.
@@ -195,8 +211,8 @@ unset CDPATH \
   GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
 
 usage() {
-  echo "usage: fm-claude-trust.sh <worktree> <project>" >&2
-  echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
+  echo "usage: fm-claude-trust.sh <worktree> <project> [--add-dir <dir>]..." >&2
+  echo "       fm-claude-trust.sh --secondmate-home <home> <id> [--add-dir <dir>]..." >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
   exit 2
 }
@@ -206,12 +222,13 @@ usage() {
 # correctly in both modes.
 case "${1:-}" in
   --secondmate-home)
-    [ "$#" -eq 3 ] || usage
+    [ "$#" -ge 3 ] || usage
     MODE=secondmate-home
     TARGET_ARG=$2
     SUB_ID=$3
     PROJ_ARG=
     SCOPE_NOUN="secondmate home"
+    shift 3
     ;;
   --lab-home)
     [ "$#" -eq 2 ] || usage
@@ -220,19 +237,27 @@ case "${1:-}" in
     SUB_ID=
     PROJ_ARG=
     SCOPE_NOUN="lab home"
+    shift 2
     ;;
   '' | -h | --help)
     usage
     ;;
   *)
-    [ "$#" -eq 2 ] || usage
+    [ "$#" -ge 2 ] || usage
     MODE=worktree
     TARGET_ARG=$1
     SUB_ID=
     PROJ_ARG=$2
     SCOPE_NOUN="task worktree"
+    shift 2
     ;;
 esac
+ADD_DIR_ARGS=()
+while [ "$#" -gt 0 ]; do
+  [ "$1" = --add-dir ] && [ "$#" -ge 2 ] || usage
+  ADD_DIR_ARGS+=("$2")
+  shift 2
+done
 
 refuse() { echo "error: refusing to pre-register Claude trust: $1" >&2; exit 1; }
 
@@ -388,6 +413,21 @@ else
   done
 fi
 
+ADD_DIRS=()
+for add_dir in ${ADD_DIR_ARGS[@]+"${ADD_DIR_ARGS[@]}"}; do
+  add_dir_real=$(real_dir "$add_dir") || true
+  [ -n "$add_dir_real" ] || refuse "add-dir '$add_dir' is not an accessible directory"
+  [ "$add_dir_real" != / ] || refuse "add-dir '$add_dir' is the filesystem root"
+  [ -O "$add_dir_real" ] || refuse "add-dir '$add_dir_real' is not owned by this user"
+  for protected in "${HOME_REAL:-}" "$CONFIG_DIR_REAL" "$TARGET_REAL" "${PROJ_REAL:-}" "${PROJ_CANON:-}"; do
+    [ -n "$protected" ] || continue
+    case "$protected/" in
+      "$add_dir_real"/*) refuse "add-dir '$add_dir_real' is or contains '$protected', so it is wider than a task channel" ;;
+    esac
+  done
+  ADD_DIRS+=("$add_dir_real")
+done
+
 # The store write needs node, and a missing interpreter refuses like every other
 # failure here. Degrading instead would launch a worker straight into the dialog
 # this registration exists to remove, which is the one outcome the whole control
@@ -469,11 +509,12 @@ if [ "$MODE" = worktree ]; then
 else
   WRITE_ARGS=("$STORE" "$MODE" "$TARGET_REAL" "" "$TRUST_FLAG" "$IMPORT_FLAGS")
 fi
+WRITE_ARGS+=(${ADD_DIRS[@]+"${ADD_DIRS[@]}"})
 if ! node - "${WRITE_ARGS[@]}" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const [store, mode, target, project, trustFlag, importFlagsJson] = process.argv.slice(2);
+const [store, mode, target, project, trustFlag, importFlagsJson, ...addDirs] = process.argv.slice(2);
 const importFlags = JSON.parse(importFlagsJson);
 const readStore = () => {
   try {
@@ -550,6 +591,10 @@ const attempt = () => {
     setFlags(projects, target, [trustFlag]);
     keys = [[target, [trustFlag]]];
   }
+  for (const dir of addDirs) {
+    setFlags(projects, dir, [trustFlag]);
+    keys.push([dir, [trustFlag]]);
+  }
   // Unpredictable name plus an exclusive create: the config directory may be
   // writable by another local account, and a predictable path could be
   // pre-created there as a symlink that a plain write would follow into some
@@ -594,7 +639,7 @@ try {
   console.error(`error: ${err.message}`);
   process.exit(1);
 }
-console.error(`error: ${store} did not retain trust for ${target}${project ? ` and ${project}` : ""} after 3 attempts`);
+console.error(`error: ${store} did not retain trust for ${[target, project, ...addDirs].filter(Boolean).join(", ")} after 3 attempts`);
 process.exit(1);
 NODE
 then
@@ -609,3 +654,6 @@ echo "trusted: $TARGET_REAL"
 if [ "$MODE" = worktree ]; then
   echo "trusted (project root): $PROJ_CANON"
 fi
+for add_dir in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do
+  echo "trusted (add-dir): $add_dir"
+done
