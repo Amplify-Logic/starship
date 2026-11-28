@@ -674,6 +674,54 @@ ROWS
   pass "every no-mistakes DoD names the handoff line, never the finish, and only that line reads as a handoff"
 }
 
+# A home that changes nothing gets pipeline PRs with no generated Intent section:
+# every no-mistakes DoD whose pipeline opens the PR tells the worker to pass
+# --no-publish-intent, while the full --intent still goes to the pipeline. The
+# gerrit and pr=manual variants skip the pr step, so they carry no such line.
+# config/publish-pr-intent keeps the section. Every PR text the worker writes
+# itself describes the change rather than quoting the request.
+test_pipeline_pr_text_publishes_no_intent_by_default() {
+  local label forge pr want out cfg
+  cfg="$TMP_ROOT/publish-intent-config"
+  mkdir -p "$cfg"
+  while IFS='|' read -r label forge pr want; do
+    [ -n "$label" ] || continue
+    out="$TMP_ROOT/dod-intent-$label.md"
+    CONFIG="$cfg" fm_dod_block no-mistakes dod-intent fm/dod-intent "$forge" '' '' "$pr" > "$out" \
+      || fail "$label: no-mistakes DoD did not render"
+    # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+    assert_grep 'When starting no-mistakes, pass `--intent`' "$out" \
+      "$label: the DoD stopped passing the request to the pipeline"
+    if [ "$want" = yes ]; then
+      # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+      assert_grep 'Pass `--no-publish-intent` on every `no-mistakes axi run` that starts a run' "$out" \
+        "$label: a home with no flag still publishes the Intent section"
+    else
+      assert_no_grep 'no-publish-intent' "$out" "$label: a variant with no pr step names --no-publish-intent"
+    fi
+  done <<'ROWS'
+github|none|auto|yes
+forgejo|forgejo|auto|yes
+pr-manual|none|manual|no
+gerrit|gerrit|auto|no
+ROWS
+  : > "$cfg/publish-pr-intent"
+  out="$TMP_ROOT/dod-intent-kept.md"
+  CONFIG="$cfg" fm_dod_block no-mistakes dod-intent > "$out" || fail "flagged no-mistakes DoD did not render"
+  assert_no_grep 'no-publish-intent' "$out" "config/publish-pr-intent did not keep the Intent section"
+  rm -f "$cfg/publish-pr-intent"
+  for label in direct-PR no-mistakes manual; do
+    out="$TMP_ROOT/dod-quote-$label.md"
+    case "$label" in
+      manual) CONFIG="$cfg" fm_dod_block no-mistakes dod-quote fm/dod-quote none '' '' manual > "$out" ;;
+      *) CONFIG="$cfg" fm_dod_block "$label" dod-quote > "$out" ;;
+    esac
+    assert_grep "never quote the captain's request or add a section holding it" "$out" \
+      "$label: worker-written PR text is not told to describe the change instead of quoting the request"
+  done
+  pass "pipeline PRs publish no Intent section unless config/publish-pr-intent is present, and PR text never quotes the request"
+}
+
 # A scout spawned on a named base keeps that base through promotion: the ship
 # instructions start from it and the PR targets it; local-only cannot carry it.
 test_promotion_keeps_the_recorded_base_branch() {
@@ -744,6 +792,7 @@ test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_no_mistakes_dod_names_the_handoff_never_the_finish
+test_pipeline_pr_text_publishes_no_intent_by_default
 test_promotion_keeps_the_recorded_base_branch
 
 # The launch role is the generated text a worker receives. It must keep the

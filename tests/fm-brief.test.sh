@@ -1362,6 +1362,28 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
   pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were"
 }
 
+# The generated ship brief carries the home's PR Intent default end to end:
+# absent config/publish-pr-intent, the worker passes --no-publish-intent; present,
+# the line is gone. bin/fm-dod-lib.sh owns the text; tests/fm-dod-lib.test.sh
+# covers every delivery variant.
+test_publish_pr_intent_flag_reaches_the_ship_brief() {
+  local home brief
+  home="$TMP_ROOT/publish-intent-home"
+  mkdir -p "$home/data" "$home/config"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-intent-off some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  brief="$home/data/brief-intent-off/brief.md"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Pass `--no-publish-intent` on every `no-mistakes axi run` that starts a run' "$brief" \
+    "a home with no flag does not keep the Intent section out of pipeline PRs"
+  : > "$home/config/publish-pr-intent"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-intent-on some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "fm-brief.sh flagged ship scaffold exited non-zero"
+  brief="$home/data/brief-intent-on/brief.md"
+  assert_no_grep 'no-publish-intent' "$brief" "config/publish-pr-intent did not keep the Intent section"
+  pass "fm-brief: pipeline PRs drop the Intent section unless config/publish-pr-intent is present"
+}
+
 test_inbox_guidance_explains_marked_body_terminator() {
   local home brief kind id
   home="$TMP_ROOT/inbox-guidance"
@@ -1978,6 +2000,7 @@ test_scout_lavish_line_follows_presentation_floor
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
+test_publish_pr_intent_flag_reaches_the_ship_brief
 test_inbox_guidance_explains_marked_body_terminator
 test_home_brief_include_is_appended_last
 test_factory_profile_is_opt_in_and_bounded

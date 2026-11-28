@@ -114,13 +114,13 @@ The test step instructions also keep raw logs, transcripts and command output ou
 
 Each pipeline PR opens with a short plain section a person can read in a minute, and the technical detail follows folded.
 The tracked `.no-mistakes.yaml` sets no-mistakes' `pr.template` to [`.github/pull_request_template.md`](../.github/pull_request_template.md), whose comments tell the PR step to fill four sections, In short, See it, You need to and Risk, then a folded What Changed for maintainers, with no tool credit line.
-It also sets `pr.appendix: collapsed`, so the recorded risk, test results and pipeline history sit in one closed Validation block at the end; outside that block, only the Intent section, when published, follows the template's text.
-No-mistakes reads both settings and the template only from the default branch, so a change to them takes effect on the first run after it lands, and a pushed branch cannot change them.
+It also sets `pr.appendix: collapsed`, so the recorded risk, test results and pipeline history sit in one closed Validation block at the end, and `pr.publish_intent: false`, so no generated Intent section quoting the request that started the work is published: the description explains the change instead, while the pipeline still reads the full request for review and testing.
+No-mistakes reads these settings and the template only from the default branch, so a change to them takes effect on the first run after it lands, and a pushed branch cannot change them.
 No-mistakes owns the Validation block's contents: the test results table appears once in its Testing part and again in its pipeline history, and only `pr.appendix: minimal` drops both, leaving one risk line.
 [fm-pr-merge.sh](../bin/fm-pr-merge.sh)'s opt-in squash summary still finds the folded What Changed section.
 
-Another project opts in the same way, through a change to that project landed on its default branch: copy the template to the project's `.github/pull_request_template.md`, adjusting the product name in its comments, and add the same two `pr:` settings to the project's `.no-mistakes.yaml`.
-Where the project should not carry that setting, the template file alone plus a `repository_overrides` entry for its remote in this machine's no-mistakes config, setting `pr.template` and `pr.appendix`, gives the same result on this machine only.
+Another project opts in the same way, through a change to that project landed on its default branch: copy the template to the project's `.github/pull_request_template.md`, adjusting the product name in its comments, and add the same `pr:` settings to the project's `.no-mistakes.yaml`.
+Where the project should not carry that setting, the template file alone plus a `repository_overrides` entry for its remote in this machine's no-mistakes config, setting `pr.template`, `pr.appendix` and `pr.publish_intent`, gives the same result on this machine only.
 A PR whose description no-mistakes wrote before the template applied cannot be updated in template mode: the PR step refuses until that description's generated evidence is separated from its narrative by hand once.
 
 ### Captain preferences

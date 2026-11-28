@@ -795,6 +795,15 @@ With it present, ship and scout briefs gain the `# Waiting` section and the fore
 With the file absent, generated briefs omit the waiting section and the no-poll inbox line, the drive text backgrounds the call, recovery sends during an open decision, and a fire-and-forget steer is not owed a retry ring.
 The flag is a home-local preference and is not inherited by secondmate homes.
 
+## Pipeline PR Intent section (config/publish-pr-intent)
+
+The optional local, gitignored `config/publish-pr-intent` presence flag opts this home back into the generated Intent section that no-mistakes adds to a pull request body, built from the owner's request.
+With the file absent, the no-mistakes Definition of done in ship briefs tells the worker to pass `--no-publish-intent` on every run it starts, so pull requests on every project explain the change without quoting the request; the pipeline still receives the full `--intent` for review and testing.
+With it present, the brief omits that line and the PR step follows the project's and this machine's no-mistakes settings.
+The flag cannot publish the section on a repository whose trusted `pr.publish_intent` turns it off, as this repository's own `.no-mistakes.yaml` does.
+Briefs for direct-PR and hand-written pull requests always tell the worker to describe the change rather than quote the request, with or without the flag.
+The flag is a home-local preference and is not inherited by secondmate homes.
+
 ## PR health monitor (config/pr-health-monitor)
 
 The optional local, gitignored `config/pr-health-monitor` presence flag opts this home into a mechanical monitor of the pull requests it owns.
