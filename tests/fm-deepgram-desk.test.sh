@@ -2314,6 +2314,47 @@ test_desk_voice_prompt_reads_the_question_the_screen_waits_on() {
   pass "fm-desk-voice prompt: names the yes or no, question or picker the primary's screen waits on, and nothing else"
 }
 
+# The web page shows the context Claude's footer says is left until
+# auto-compact. The rows are laid out as Claude Code 2.1.332 drew them on the
+# primary on 2026-11-28: the notice row sits right above the rule over the
+# chat box. The same words anywhere in the conversation never count.
+test_desk_voice_compact_reads_claudes_footer_only() {
+  local out rule box status quoted
+  rule=$'\342\224\200\342\224\200\342\224\200\342\224\200 FIRSTMATE \342\224\200'
+  box=$'\342\235\257 '
+  status=$'  \342\232\223 Opus 5.5\302\267medium \342\224\202 47%'
+  out=$(printf '%s\n' "Done." "" "  2% until auto-compact $(printf '\302\267') x Auto-update failed" \
+    "$rule" "$box" "$rule" "$status" | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "2" "the notice row above the chat box gives the figure"
+  out=$(printf '%s\n' "Done." "          auto-compact next $(printf '\302\267') x Auto-update failed" \
+    "$rule" "$box" "$rule" | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "next" "auto-compact next is said as Claude says it"
+  out=$(printf '%s\n' "$rule" "$box" "$rule" "  bypass permissions on $(printf '\302\267') 7% until auto-compact" \
+    | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "7" "a notice after another on a footer row below the box counts"
+  out=$(printf '%s\n' "$rule" "$box" "$rule" " $(printf '\342\217\265\342\217\265') bypass permissions on (shift+tab to cycle)        13% until auto-compact" \
+    | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "13" "a notice right-aligned on a footer row below the box counts"
+  out=$(printf '%s\n' "$rule" "$box" "$rule" " ? for shortcuts                    auto-compact next" \
+    | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  assert_equals "$out" "next" "auto-compact next right-aligned below the box counts"
+  out=$(printf '%s\n' "it said    5% until auto-compact" "$rule" "$box" "$rule" | "$DESK" compact --stdin) \
+    || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "words after a run of spaces above the box never count, got '$out'"
+  quoted=$(printf '%s\n' "12% until auto-compact" "" "one" "two" "three" "four" "$rule" "$box" "$rule")
+  out=$(printf '%s\n' "$quoted" | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "the words in the conversation above the box never count, got '$out'"
+  out=$(printf '%s\n' "it said 5% until auto-compact" "$rule" "$box" "$rule" | "$DESK" compact --stdin) \
+    || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "the words inside a sentence never count, got '$out'"
+  out=$(printf '%s\n' "3% until auto-compact" "no chat box" | "$DESK" compact --stdin) || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "with no chat box on the screen nothing counts, got '$out'"
+  out=$("$DESK" compact --stdin < "$ROOT/tests/fixtures/composer-claude-dialogs/claude-2.1.283-idle-composer.ansi") \
+    || fail "compact --stdin failed: $out"
+  [ -z "$out" ] || fail "Claude's idle chat box with no notice shows no figure, got '$out'"
+  pass "fm-desk-voice compact: reads the auto-compact figure from Claude's footer, never from the conversation"
+}
+
 test_desk_voice_send_goes_past_a_claude_draft() {
   local home out stash typed
   home=$(desk_send_fixture send-draft) || { desk_send_skip send-draft; return 0; }
@@ -3324,6 +3365,7 @@ test_desk_voice_send_falls_back_when_the_pane_shows_a_dialog
 test_desk_voice_send_ignores_a_suggested_prompt
 test_desk_voice_suggestion_reads_claudes_suggested_prompt
 test_desk_voice_prompt_reads_the_question_the_screen_waits_on
+test_desk_voice_compact_reads_claudes_footer_only
 test_desk_voice_send_goes_past_a_claude_draft
 test_desk_voice_send_reads_only_the_visible_screen
 test_desk_voice_send_goes_past_a_draft_in_a_narrow_pane

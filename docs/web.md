@@ -13,7 +13,7 @@ Apart from the weekly page below, it adds nothing the terminal does not show.
 | --- | --- |
 | The tabs across the top | One slim header: the Starship mark, the same tabs (Control Centre, then one per factory, called a project here), then the band |
 | The bridge strip ([bridge-strip.md](bridge-strip.md)) | The band in that header: three lamps, the alert, the night shift, the battery; the most urgent call is the first card in Needs you, marked First up, and a `stopped` in the alert opens the stopped job on its project's tab |
-| The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost; the header already shows the rest |
+| The status bar row ([status-bar.md](status-bar.md)) | Its first mate's own part, word for word and in its colours, in a slim line under the message box: model and effort, usage, cost, and Claude's own `N% until auto-compact` while the terminal shows it; the header already shows the rest |
 | The first mate's chat, left | Firstmate, left |
 | The Factory pane's overview, right ([factory-pane.md](factory-pane.md)) | Factories, right, "each project's work, start to finish": the three sentences, each a link to the part it speaks for, Needs you with its two shelves, Your factories |
 | A factory's own tab: its page, and its workers beside it | The project's tab: its page alone, with Needs you beside the rest on a wide screen and one column on a narrow one; a worker's screen opens from Watch this worker |
@@ -82,6 +82,8 @@ Enter sends and Shift+Enter starts a new line.
 When Claude Code offers a suggested next message, the grey text in the terminal's input, the empty message box shows the same words, and Tab fills them in, as in the terminal.
 The page reads the suggestion from the first mate's own chat box through `bin/fm-desk-voice.sh suggestion`, only while the first mate is ready and the box holds nothing typed; it types nothing there.
 Under the box, the first mate's own part of the status bar row shows its model and effort, how much of its context and quota it has used, and what the session has cost.
+When Claude's terminal shows how much context is left before it compacts the conversation, such as `2% until auto-compact` or `auto-compact next`, the same words follow that row, and they go away when the terminal stops showing them.
+The page reads them from the notice rows around the first mate's own chat box every few seconds through `bin/fm-desk-voice.sh compact`, which types nothing; the same words in the conversation never count.
 You can paste or drop images onto the page; they are attached to the next message.
 
 The page is another window onto the one primary session, not a second first mate.

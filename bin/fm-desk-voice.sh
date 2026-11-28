@@ -17,6 +17,7 @@
 #   fm-desk-voice.sh drain [--print]
 #   fm-desk-voice.sh suggestion
 #   fm-desk-voice.sh prompt [--stdin]
+#   fm-desk-voice.sh compact [--stdin]
 #   fm-desk-voice.sh stop
 #   fm-desk-voice.sh front --front-app <pid> --front-tty <tty>
 #   fm-desk-voice.sh --help
@@ -254,6 +255,17 @@
 # prompt or cannot be read. It reads the pane send would type into, proven the
 # same way, and types nothing; --stdin reads the screen from standard input
 # instead of the pane. The web page shows it in place of Thinking.
+#
+# compact prints the figure a Claude primary's footer shows as "N% until
+# auto-compact", the context left before Claude compacts the conversation, as
+# the bare number N, or "next" when it reads "auto-compact next" because the
+# next turn compacts; nothing when the footer shows none (Claude shows it only
+# once the conversation nears its auto-compact point), the primary is not
+# Claude, or the screen cannot be read. Only the rows around the chat box
+# count (claude_compact_left owns the reading), so the words quoted in the
+# conversation never do. It reads the pane send would type into, proven the
+# same way, and types nothing; --stdin reads the screen from standard input
+# instead of the pane. The web page shows it beside its status row.
 #
 # stop cancels the turn a Claude primary is running, as the owner's Esc in
 # the terminal does: it presses the interrupt key bin/fm-control-lib.sh names
@@ -1160,6 +1172,55 @@ prompt() (
   person_prompt "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" || true
 )
 
+# The N of Claude's "N% until auto-compact" on <plain-screen>, "next" when
+# it reads "auto-compact next" instead (the figure has run out), or nothing.
+# Two signals must agree: the chat box is found first (the last row that
+# starts with the ❯ prompt right under a rule of ─), and the figure counts
+# only on the three rows above that rule or any row below the box, where
+# Claude draws its footer notices, either opening the row or following a
+# " · " between notices; below the box it may also stand right-aligned after
+# a run of spaces. Conversation text above the box never counts.
+claude_compact_left() {  # <plain-screen>
+  printf '%s\n' "$1" | awk '
+    { row[NR] = $0 }
+    END {
+      box = 0
+      for (i = NR; i > 1; i--) {
+        if (row[i] ~ /^[[:space:]]*❯/ && row[i - 1] ~ /^[[:space:]]*─/) { box = i; break }
+      }
+      if (!box) exit
+      for (i = box - 4; i <= NR; i++) {
+        if (i < 1 || i == box) continue
+        line = row[i]
+        lead = (i > box) ? "(^|· |[^[:space:]][[:space:]][[:space:]]+)" : "(^|· )"
+        if (match(line, lead "[[:space:]]*[0-9]+% until auto-compact")) {
+          hit = substr(line, RSTART, RLENGTH)
+          match(hit, /[0-9]+% until auto-compact$/)
+          hit = substr(hit, RSTART)
+          sub(/%.*/, "", hit)
+          if (hit + 0 <= 100) { print hit + 0; exit }
+        }
+        if (line ~ (lead "[[:space:]]*auto-compact next")) { print "next"; exit }
+      }
+    }'
+}
+
+# The figure a Claude primary's footer shows until auto-compact, or nothing
+# (see the usage above).
+compact() (
+  local screen
+  if [ "${1-}" = --stdin ] && [ "$#" -eq 1 ]; then
+    screen=$(cat) || return 0
+    claude_compact_left "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" || true
+    return 0
+  fi
+  [ "$#" -eq 0 ] || refuse "compact takes no arguments but --stdin"
+  prove_primary_pane || return 0
+  [ "$PANE_CLAUDE" = 1 ] || return 0
+  screen=$(screen_rows "$PANE_BACKEND" "$PANE_TARGET" "${FM_COMPOSER_CAPTURE_LINES:-20}" 2>/dev/null) || return 0
+  claude_compact_left "$(printf '%s\n' "$screen" | fm_composer_strip_ansi)" || true
+)
+
 # Type <line> into the lock-holding primary's own pane and submit it. Prints
 # "<verdict><TAB><backend><TAB><target>" once the pane is proven to host the
 # primary and show its chat input. Returns 1 when the pane is not proven, or
@@ -1863,6 +1924,7 @@ main() {
     drain) shift; drain "$@" ;;
     suggestion) shift; suggestion "$@" ;;
     prompt) shift; prompt "$@" ;;
+    compact) shift; compact "$@" ;;
     stop) shift; stop "$@" ;;
     front) shift; front "$@" ;;
     *) refuse "unknown command: $1" ;;
