@@ -2306,6 +2306,154 @@ test_the_weekly_page_opens_from_the_mirror() {
   pass "the mirror links to and serves the newest weekly page behind the sign-in"
 }
 
+# An Antigravity (agy) first mate: bin/fm-agy-session-hook.sh records the
+# conversation and transcript its lock holder is on in state/.agy-session, and
+# the page reads that transcript, in agy's own step shape, as it reads Claude's.
+AGY_CONV=c0ffee00-1111-2222-3333-444444444444
+
+agy_transcript() {  # <home> [<conversation>]
+  printf '%s\n' "$1/gemini/brain/${2:-$AGY_CONV}/.system_generated/logs/transcript_full.jsonl"
+}
+
+agy_record() {  # <home> <pid> [<conversation>] [<transcript>]
+  local conv=${3:-$AGY_CONV}
+  jq -cn --argjson p "$2" --arg c "$conv" --arg t "${4:-$(agy_transcript "$1" "$conv")}" \
+    '{pid: $p, conversationId: $c, transcriptPath: $t}' > "$1/state/.agy-session"
+}
+
+agy_read() {  # <home>
+  FM_HOME="$1" HOME="$1" CLAUDE_CONFIG_DIR="$1/claude" "$LAUNCHER" conversation
+}
+
+test_an_agy_first_mates_conversation_is_read_from_its_transcript() {
+  local home file out
+  home=$(make_home agy)
+  file=$(agy_transcript "$home")
+  mkdir -p "$(dirname "$file")"
+  # The reproduction: before agy support, an agy holder's home read offline.
+  agy_record "$home" "$$"
+  : > "$file"
+  {
+    jq -cn '{step_index:0,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",created_at:"2026-11-28T10:00:00Z",
+      content:"<USER_REQUEST>\nhow is <b>the</b> fleet?\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: now.\n</ADDITIONAL_METADATA>"}'
+    jq -cn '{step_index:1,source:"SYSTEM_SDK",type:"SYSTEM_MESSAGE",status:"DONE",created_at:"2026-11-28T10:00:01Z",
+      content:"The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\n\ndigest\n</SYSTEM_MESSAGE>"}'
+    jq -cn '{step_index:2,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:00:02Z",
+      thinking:"secret thoughts",content:"Let me look.",
+      tool_calls:[{name:"run_command",args:{CommandLine:"bin/fm-crew-state.sh",toolSummary:"Check the fleet"}},
+                  {name:"read_file",args:{Path:"/tmp/notes.md"}}]}'
+  } > "$file"
+  out=$(agy_read "$home") || fail "agy conversation read failed: $out"
+  assert_equals "$AGY_CONV" "$(jq -r .session <<<"$out")" "the read names agy's conversation"
+  assert_equals "busy 2026-11-28T10:00:00Z" "$(jq -r '[.state, .since] | join(" ")' <<<"$out")" \
+    "a turn waiting on its tools reads busy since the owner's message"
+  assert_equals "user,event,assistant,tool,tool" "$(jq -r '[.items[].kind] | join(",")' <<<"$out")" "item kinds in order"
+  assert_equals "<p>how is &lt;b&gt;the&lt;/b&gt; fleet?</p>" "$(jq -r '.items[0].html' <<<"$out")" \
+    "the owner's words come from inside the request, escaped, without agy's metadata"
+  assert_equals "SessionStart hook note" "$(jq -r '.items[1].summary' <<<"$out")" "a hook's note is a quiet event"
+  assert_not_contains "$out" "secret thoughts"
+  assert_equals "Bash|bin/fm-crew-state.sh|Check the fleet|true" \
+    "$(jq -r '.items[3] | [.name, .summary, .about, .pending] | join("|")' <<<"$out")" \
+    "a command shows under the page's own tool name with agy's summary"
+  assert_equals "Read|/tmp/notes.md|true" "$(jq -r '.items[4] | [.name, .summary, .pending] | join("|")' <<<"$out")"
+  {
+    jq -cn '{step_index:3,source:"MODEL",type:"GENERIC",status:"DONE",created_at:"2026-11-28T10:00:03Z",content:"two workers live"}'
+    jq -cn '{step_index:4,source:"MODEL",type:"GENERIC",status:"ERROR",created_at:"2026-11-28T10:00:03Z",error:"file does not exist",content:""}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "false|false|two workers live" "$(jq -r '.items[3] | [.pending, .error, .result] | join("|")' <<<"$out")" \
+    "each output goes to its call, in call order"
+  assert_equals "false|true|file does not exist" "$(jq -r '.items[4] | [.pending, .error, .result] | join("|")' <<<"$out")"
+  assert_equals busy "$(jq -r .state <<<"$out")" "after the tools, the model is still at work"
+  jq -cn '{step_index:5,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:00:05Z",content:"Two workers are **live**."}' >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "idle null" "$(jq -r '[.state, (.since | tostring)] | join(" ")' <<<"$out")" "a reply without tool calls ends the turn"
+  assert_contains "$(jq -r '.items[-1].html' <<<"$out")" "<strong>live</strong>"
+  {
+    jq -cn '{step_index:6,source:"SYSTEM",type:"SYSTEM_MESSAGE",status:"DONE",created_at:"2026-11-28T10:05:00Z",
+      content:"The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\nStop hook blocked termination: a wake arrived\n</SYSTEM_MESSAGE>"}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "busy|Stop hook feedback" "$(jq -r '[.state, .items[-1].summary] | join("|")' <<<"$out")" \
+    "the park handing over a wake starts a turn"
+  {
+    jq -cn '{step_index:7,source:"SYSTEM",type:"ERROR_MESSAGE",status:"DONE",created_at:"2026-11-28T10:05:01Z",error:"API error (attempt 1): request failed"}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "idle|A model call failed|API error (attempt 1): request failed" \
+    "$(jq -r '[.state, .items[-1].summary, .items[-1].detail] | join("|")' <<<"$out")" "a failed model call ends the turn and says so"
+  {
+    jq -cn '{step_index:8,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",created_at:"2026-11-28T10:06:00Z",
+      content:"<USER_REQUEST>\nFIRSTMATE_OP: v1 launch-brief: read the record\n</USER_REQUEST>"}'
+    jq -cn '{step_index:9,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:06:01Z",
+      tool_calls:[{name:"run_command",args:{CommandLine:"sleep 25",toolSummary:"Wait"}}]}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "event|A notice for firstmate" "$(jq -r '.items[-2] | [.kind, .summary] | join("|")' <<<"$out")" \
+    "operational input, whose mark agy drops, is a quiet notice and not the owner's words"
+  # Esc mid-command: agy records nothing, and the next thing is the owner's /compact.
+  {
+    jq -cn '{step_index:11,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",created_at:"2026-11-28T10:07:00Z",content:"<USER_REQUEST>\n/compact\n</USER_REQUEST>"}'
+    jq -cn '{step_index:12,source:"SYSTEM",type:"CHECKPOINT",status:"DONE",created_at:"2026-11-28T10:07:01Z",content:"# Resuming from a compaction\n\nThe summary."}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "false" "$(jq -r '[.items[] | select(.kind == "tool")][-1].pending' <<<"$out")" \
+    "a call whose output never came stops showing as pending once the next turn starts"
+  assert_equals "idle|compact|Conversation compacted" "$(jq -r '[.state, .items[-1].kind, .items[-1].summary] | join("|")' <<<"$out")" \
+    "the owner's /compact ends on the compaction"
+  assert_contains "$(jq -r '.items[-1].detail' <<<"$out")" "The summary." "the compaction carries its summary"
+  # Esc mid-command again, and this time a Stop hook wake starts the next turn.
+  {
+    jq -cn '{step_index:13,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",created_at:"2026-11-28T10:08:00Z",content:"<USER_REQUEST>\nwait a bit\n</USER_REQUEST>"}'
+    jq -cn '{step_index:14,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:08:01Z",
+      tool_calls:[{name:"run_command",args:{CommandLine:"sleep 99",toolSummary:"Wait"}}]}'
+    jq -cn '{step_index:16,source:"SYSTEM",type:"SYSTEM_MESSAGE",status:"DONE",created_at:"2026-11-28T10:09:00Z",
+      content:"The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\nStop hook blocked termination: a wake arrived\n</SYSTEM_MESSAGE>"}'
+    jq -cn '{step_index:17,source:"MODEL",type:"PLANNER_RESPONSE",status:"DONE",created_at:"2026-11-28T10:09:01Z",
+      tool_calls:[{name:"run_command",args:{CommandLine:"bin/fm-crew-state.sh",toolSummary:"Check the fleet"}}]}'
+    jq -cn '{step_index:18,source:"MODEL",type:"GENERIC",status:"DONE",created_at:"2026-11-28T10:09:02Z",content:"one worker live"}'
+  } >> "$file"
+  out=$(agy_read "$home")
+  assert_equals "sleep 99|false|" \
+    "$(jq -r '[.items[] | select(.kind == "tool")][-2] | [.summary, .pending, .result] | join("|")' <<<"$out")" \
+    "a call Esc stopped takes no output from a later turn"
+  assert_equals "bin/fm-crew-state.sh|false|one worker live" \
+    "$(jq -r '[.items[] | select(.kind == "tool")][-1] | [.summary, .pending, .result] | join("|")' <<<"$out")" \
+    "after a Stop hook wake, the new call's output lands on the new call"
+  pass "an agy first mate's conversation is read from its own transcript"
+}
+
+test_an_agy_record_counts_only_for_its_live_lock_holder() {
+  local home file out dead
+  home=$(make_home agy-record)
+  write_basic_transcript "$(transcript "$home")"
+  file=$(agy_transcript "$home")
+  mkdir -p "$(dirname "$file")"
+  jq -cn '{step_index:0,source:"USER_EXPLICIT",type:"USER_INPUT",status:"DONE",content:"<USER_REQUEST>\nagy words\n</USER_REQUEST>"}' > "$file"
+  dead=$(python3 -c 'import subprocess; p=subprocess.Popen(["true"]); p.wait(); print(p.pid)')
+  agy_record "$home" "$dead"
+  out=$(agy_read "$home")
+  assert_equals "$SESSION" "$(jq -r .session <<<"$out")" "a record from another lock holder is ignored for the Claude conversation"
+  agy_record "$home" "$$" "$AGY_CONV" "$home/elsewhere/transcript_full.jsonl"
+  out=$(agy_read "$home")
+  assert_equals "$SESSION" "$(jq -r .session <<<"$out")" "a transcript outside its conversation's folder is ignored"
+  agy_record "$home" "$$" "../../etc" "$file"
+  out=$(agy_read "$home")
+  assert_equals "$SESSION" "$(jq -r .session <<<"$out")" "an unsafe conversation id is ignored"
+  agy_record "$home" "$$" "$AGY_CONV" "${file%.jsonl}.txt"
+  out=$(agy_read "$home")
+  assert_equals "$SESSION" "$(jq -r .session <<<"$out")" "a transcript that is not JSON lines is ignored"
+  agy_record "$home" "$$"
+  out=$(agy_read "$home")
+  assert_equals "$AGY_CONV|agy words" "$(jq -r '[.session, (.items[0].html | ltrimstr("<p>") | rtrimstr("</p>"))] | join("|")' <<<"$out")" \
+    "the live holder's record wins"
+  rm -f "$file"
+  out=$(agy_read "$home")
+  assert_equals "$AGY_CONV|starting" "$(jq -r '[.session, .state] | join("|")' <<<"$out")" \
+    "before agy writes the conversation, the live holder reads as starting"
+  pass "an agy record counts only for the live lock holder and a transcript in its own folder"
+}
+
 test_transcript_parsing_collapses_tools_and_marks_compaction
 test_numbered_lists_keep_their_numbers
 test_idle_offline_and_session_restart
@@ -2316,6 +2464,8 @@ test_emphasis_around_code_renders
 test_cleared_session_is_followed_through_the_live_registry
 test_tail_reads_only_the_end_of_a_large_transcript
 test_starting_up_before_the_conversation_is_written
+test_an_agy_first_mates_conversation_is_read_from_its_transcript
+test_an_agy_record_counts_only_for_its_live_lock_holder
 test_conversation_command_prints_versioned_json
 test_get_guards_token_cookie_and_host
 test_post_guards_never_reach_desk_voice

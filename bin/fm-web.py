@@ -24,12 +24,16 @@ which Claude Code rewrites when /clear starts a new session, else
 state/.lock-session (bin/fm-lock.sh is its only writer, and it is not re-keyed
 on /clear). The transcript is <claude-config>/projects/*/<id>.jsonl,
 re-resolved on every read so a restarted, cleared or compacted session is
-followed. Only the tail is parsed. Text the machinery types into the chat (a
-doorbell or operational input, NOTICE_RE) becomes a quiet notice, and the
-pictures in the owner's messages (pasted images, and image paths) are served by
-an opaque id at /api/picture/<id>, only while the shown conversation holds
-them. The desk voice's "Screenshots:" paths and paths under its shots folder
-are taken out of the words; any other image path stays as the owner wrote it.
+followed. An Antigravity (agy) lock holder is read instead from the
+conversation and JSON-lines transcript its model-call hook records in
+state/.agy-session (agy_session owns when that record counts, and the
+Antigravity class folds agy's steps into the same items). Only the tail is
+parsed. Text the machinery types into the chat (a doorbell or operational
+input, NOTICE_RE) becomes a quiet notice, and the pictures in the owner's
+messages (pasted images, and image paths) are served by an opaque id at
+/api/picture/<id>, only while the shown conversation holds them. The desk
+voice's "Screenshots:" paths and paths under its shots folder are taken out of
+the words; any other image path stays as the owner wrote it.
 A message the owner types while the first mate works waits in Claude Code's
 own queue, which the transcript records as queue-operation entries before the
 message is read in; the reading carries those still queued as `waiting`, shown
@@ -525,18 +529,55 @@ def find_transcript(home: Path, session: str) -> Optional[Path]:
     return best
 
 
-def resolve_transcript(home: Path) -> Tuple[Optional[str], Optional[Path]]:
-    """The live session first, then the lock sidecar's.
+def agy_session(home: Path) -> Optional[Tuple[str, Path]]:
+    """The conversation an Antigravity (agy) lock holder records, if it is live.
 
-    A just-cleared session has no transcript until its first message, so the
-    sidecar's conversation stays on the page until then.
+    bin/fm-agy-session-hook.sh, agy's model-call hook, keeps
+    state/.agy-session naming the lock holder's pid, its conversation id and
+    the JSON-lines transcript agy writes for it. The record counts only while
+    that pid still holds the lock and lives, and only for an absolute .jsonl
+    path that has the conversation id as one of its folders.
     """
+    path = home / "state" / ".agy-session"
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    pid, session, transcript = record.get("pid"), record.get("conversationId"), record.get("transcriptPath")
+    if not isinstance(pid, int) or pid != lock_pid(home) or not lock_pid_alive(home):
+        return None
+    if not isinstance(session, str) or not SESSION_ID_RE.match(session):
+        return None
+    if not isinstance(transcript, str) or not transcript.startswith("/") or not transcript.endswith(".jsonl"):
+        return None
+    candidate = Path(transcript)
+    if session not in candidate.parts[:-1]:
+        return None
+    return session, candidate
+
+
+def resolve_transcript(home: Path) -> Tuple[Optional[str], Optional[Path], str]:
+    """The session, its transcript and which harness wrote it ("claude" or "agy").
+
+    A live agy holder's own record first. Then, for Claude, the live session,
+    then the lock sidecar's. A just-cleared session has no transcript until
+    its first message, so the sidecar's conversation stays on the page until
+    then.
+    """
+    agy = agy_session(home)
+    if agy is not None:
+        session, path = agy
+        return session, (path if path.is_file() and not path.is_symlink() else None), "agy"
     sessions = [s for s in (live_session_id(home), lock_session_id(home)) if s]
     for session in sessions:
         path = find_transcript(home, session)
         if path is not None:
-            return session, path
-    return (sessions[0] if sessions else None), None
+            return session, path, "claude"
+    return (sessions[0] if sessions else None), None, "claude"
 
 
 # --- markdown ----------------------------------------------------------------
@@ -985,8 +1026,7 @@ class Conversation:
         if kind == "queue-operation":
             self._queue_operation(entry)
             return
-        uid = str(entry.get("uuid") or f"x{len(self.items)}")
-        ts = str(entry.get("timestamp") or "")
+        uid, ts = self._ids(entry)
         was_busy = self.busy
         self.opening = False
         self._entry(entry, kind, uid, ts)
@@ -997,6 +1037,9 @@ class Conversation:
             self.turn_opened = self.opening
         elif not self.turn_started:
             self.turn_started = ts or None
+
+    def _ids(self, entry: Dict[str, Any]) -> Tuple[str, str]:
+        return str(entry.get("uuid") or f"x{len(self.items)}"), str(entry.get("timestamp") or "")
 
     def _entry(self, entry: Dict[str, Any], kind: Any, uid: str, ts: str) -> None:
         if kind == "system":
@@ -1228,8 +1271,143 @@ class Conversation:
         return {pid: ref for pid, ref in self.pictures.items() if pid in wanted}
 
 
-def parse_lines(lines: Iterable[str], shots: Optional[str] = None, link: Any = None) -> Conversation:
-    conversation = Conversation(shots, link)
+# agy's tools under the names the page's plain words know (VIEW_JS stepWords),
+# and the argument that says what each one touched.
+AGY_TOOL_NAMES = {"run_command": "Bash", "read_file": "Read", "edit_file": "Edit", "write_file": "Write"}
+AGY_TOOL_SUBJECT = {"run_command": "CommandLine", "read_file": "Path", "edit_file": "Path", "write_file": "Path"}
+AGY_REQUEST_RE = re.compile(r"<USER_REQUEST>\n?(.*?)\n?</USER_REQUEST>", re.S)
+AGY_SYSTEM_RE = re.compile(r"^<SYSTEM_MESSAGE>\n?(.*?)(?:\n?</SYSTEM_MESSAGE>|\Z)", re.S | re.M)
+AGY_HOOK_RE = re.compile(r"^The following system message was injected by an? (\w+) hook")
+# agy keeps operational input's invisible mark out of its transcript, so the
+# words it starts with mark it there (bin/fm-operational-input.sh owns them).
+AGY_OPERATIONAL_RE = re.compile(r"^\s*FIRSTMATE_OP: ")
+
+
+class Antigravity(Conversation):
+    """Folds an Antigravity (agy) transcript into the same display items.
+
+    agy writes one JSON object per step, once the step is done (or, for a
+    command that goes on in the background, while it runs): USER_INPUT holds
+    the owner's words inside <USER_REQUEST>; PLANNER_RESPONSE a model reply,
+    with its tool calls; GENERIC each tool call's output, in call order, since
+    agy gives a call no id; SYSTEM_MESSAGE a note agy or a hook added;
+    CHECKPOINT a compaction's summary; ERROR_MESSAGE a failed model call. A
+    turn is under way from the owner's words, a note or a tool step until a
+    reply without tool calls, a failed model call, or the summary that a
+    /compact the owner asked for ends on. agy records nothing when Esc stops a
+    turn, so a turn stopped mid-step reads as under way until the next step.
+    """
+
+    def __init__(self, shots: Optional[str] = None, link: Any = None) -> None:
+        super().__init__(shots, link)
+        self.calls: List[Dict[str, Any]] = []
+        self.compact_asked = False
+
+    def _ids(self, entry: Dict[str, Any]) -> Tuple[str, str]:
+        index = entry.get("step_index")
+        uid = f"s{index}" if isinstance(index, int) else f"x{len(self.items)}"
+        return uid, str(entry.get("created_at") or "")
+
+    def _entry(self, entry: Dict[str, Any], kind: Any, uid: str, ts: str) -> None:
+        content = entry.get("content")
+        text = content if isinstance(content, str) else ""
+        if kind == "USER_INPUT":
+            request = AGY_REQUEST_RE.search(text)
+            words = (request.group(1) if request else text).strip()
+            if not words:
+                return
+            item = (_event_item(uid, ts, "A notice for firstmate", words) if AGY_OPERATIONAL_RE.match(words)
+                    else _owner_item(uid, ts, words))
+            self._drop_calls()
+            self._push(item)
+            self.compact_asked = words.split(None, 1)[0] == "/compact"
+            self.busy = self.opening = True
+        elif kind == "PLANNER_RESPONSE":
+            self._reply(entry, uid, ts, text)
+        elif kind == "GENERIC":
+            self._output(entry, uid, ts, text)
+            self.busy = True
+        elif kind == "SYSTEM_MESSAGE":
+            inner = AGY_SYSTEM_RE.search(text)
+            note = (inner.group(1) if inner else text).strip()
+            hook = AGY_HOOK_RE.match(note)
+            if hook:
+                label = f"{hook.group(1)} hook note"
+            elif note.startswith("Stop hook blocked termination"):
+                label = "Stop hook feedback"
+            else:
+                label = "A note from Antigravity"
+            self._push(_event_item(uid, ts, label, note))
+            self.busy = True
+        elif kind == "CHECKPOINT":
+            self._push({"id": uid, "kind": "compact", "ts": ts, "summary": "Conversation compacted",
+                        "detail": _clip(text, TOOL_DETAIL_MAX)})
+            if self.compact_asked:
+                self._drop_calls()
+                self.busy = False
+            self.compact_asked = False
+        elif kind == "ERROR_MESSAGE":
+            error = entry.get("error")
+            self._push(_event_item(uid, ts, "A model call failed", error if isinstance(error, str) else text))
+            self._drop_calls()
+            self.busy = False
+
+    def _drop_calls(self) -> None:
+        """Tool calls whose output never came, as when Esc stopped the turn."""
+        for tool in self.calls:
+            tool["pending"] = False
+        self.calls.clear()
+
+    def _reply(self, entry: Dict[str, Any], uid: str, ts: str, text: str) -> None:
+        self._drop_calls()
+        if text.strip():
+            self._push({"id": uid, "kind": "assistant", "ts": ts, "text": text,
+                        "html": render_markdown(text, self.link)})
+        calls = entry.get("tool_calls")
+        calls = [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
+        for index, call in enumerate(calls):
+            raw = str(call.get("name") or "tool")
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            subject = args.get(AGY_TOOL_SUBJECT.get(raw, ""))
+            about = args.get("toolSummary")
+            shown = {key: value for key, value in args.items() if key != "toolSummary"}
+            try:
+                shown_input = json.dumps(shown, indent=2, ensure_ascii=False)
+            except (TypeError, ValueError):
+                shown_input = str(shown)
+            item = {
+                "id": f"{uid}:{index}",
+                "kind": "tool",
+                "ts": ts,
+                "name": AGY_TOOL_NAMES.get(raw, raw),
+                "summary": _one_line(subject) if isinstance(subject, str) and subject.strip()
+                else (_one_line(about) if isinstance(about, str) and about.strip() else tool_summary(raw, shown)),
+                "about": _one_line(about) if isinstance(about, str) else "",
+                "input": _clip(shown_input, TOOL_DETAIL_MAX),
+                "result": "",
+                "pending": True,
+                "error": False,
+            }
+            self.calls.append(item)
+            self._push(item)
+        self.busy = bool(calls)
+
+    def _output(self, entry: Dict[str, Any], uid: str, ts: str, text: str) -> None:
+        error = entry.get("error")
+        failed = entry.get("status") == "ERROR" or bool(error)
+        result = "\n\n".join(part for part in (error if isinstance(error, str) else "", text) if part.strip())
+        if not self.calls:
+            self._push(_event_item(uid, ts, "A step failed" if failed else "A step's output", result))
+            return
+        tool = self.calls.pop(0)
+        tool["pending"] = False
+        tool["error"] = failed
+        tool["result"] = _clip(result, TOOL_DETAIL_MAX)
+
+
+def parse_lines(lines: Iterable[str], shots: Optional[str] = None, link: Any = None,
+                parser: type = Conversation) -> Conversation:
+    conversation = parser(shots, link)
     for line in lines:
         line = line.strip()
         if not line:
@@ -1243,7 +1421,7 @@ def parse_lines(lines: Iterable[str], shots: Optional[str] = None, link: Any = N
 
 
 def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_ITEMS,
-              link: Any = None) -> Tuple[Conversation, bool]:
+              link: Any = None, parser: type = Conversation) -> Tuple[Conversation, bool]:
     """Parse only the end of the transcript, widening until enough items show.
 
     Returns the conversation and whether older history exists before it.
@@ -1258,7 +1436,7 @@ def read_tail(path: Path, shots: Optional[str] = None, want_items: int = TAIL_IT
         lines = data.decode("utf-8", "replace").split("\n")
         if start > 0:
             lines = lines[1:]
-        conversation = parse_lines(lines, shots, link)
+        conversation = parse_lines(lines, shots, link, parser)
         if start == 0 or len(conversation.items) >= want_items or window >= TAIL_MAX_WINDOW:
             return conversation, start > 0
         window = min(window * 4, TAIL_MAX_WINDOW)
@@ -1305,7 +1483,7 @@ class TranscriptCache:
         return data, PICTURE_TYPES[ext]
 
     def get(self) -> Dict[str, Any]:
-        session, path = resolve_transcript(self.home)
+        session, path, harness = resolve_transcript(self.home)
         alive = lock_pid_alive(self.home)
         if path is None:
             title = f"{self.name[:1].upper()}{self.name[1:]}"
@@ -1324,7 +1502,8 @@ class TranscriptCache:
         with self.lock:
             if key != self.key or self.value is None:
                 conversation, older = read_tail(path, str(self.home / "state" / "desk-voice" / "shots"),
-                                                link=self.link)
+                                                link=self.link,
+                                                parser=Antigravity if harness == "agy" else Conversation)
                 items = conversation.public_items(TAIL_ITEMS)
                 waiting = conversation.waiting_items()
                 self.value = {

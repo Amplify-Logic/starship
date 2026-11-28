@@ -202,6 +202,28 @@ ok - agy plain-language live (1.5.18): the next model call receives the notice o
 
 `tests/fm-agy-plain-language.test.sh` pins the logic against agy-shaped fixtures through the tracked `.agents/hooks.json`.
 
+## Web page conversation reading
+
+Verified on 2026-11-28 with agy 1.5.19 on macOS, signed in, in throwaway workspaces only.
+Every `PreInvocation` payload carries `conversationId` and `transcriptPath`, the absolute path of `<conversationId>/.system_generated/logs/transcript_full.jsonl` under `~/.gemini/antigravity-cli/brain/`.
+Each line of that file is one step, written once it is done: `USER_INPUT` (the owner's words inside `<USER_REQUEST>`, then agy's own metadata), `PLANNER_RESPONSE` (reply `content` and any `tool_calls`, each a `name` and `args` with no id), `GENERIC` (one per tool call, in call order, `ERROR` status or an `error` field on failure), `SYSTEM_MESSAGE`, `CHECKPOINT` (a compaction's summary) and `ERROR_MESSAGE` (a failed model call, its text in `error`).
+A command that goes on in the background writes its `GENERIC` step with status `RUNNING`, and that line is never rewritten.
+agy drops operational input's U+2063 mark from the transcript, though `lastUserInput` keeps it.
+After Esc stops a turn mid-command, agy writes no step for that command.
+
+The live guard runs one command and reads the page's conversation while the agy process still holds the throwaway home's lock:
+
+```
+FM_AGY_WEB_TRANSCRIPT_LIVE=1 FM_AGY_LIVE_MODEL=gemini-3.8-flash-low bin/fm-test-run.sh tests/fm-agy-web-transcript-live-e2e.test.sh
+ok - agy web transcript live (1.5.19): a model call records the conversation and its transcript
+ok - agy web transcript live (1.5.19): the page shows the words, the command with its output, and the reply
+FM_AGY_WEB_TRANSCRIPT_LIVE=1 FM_AGY_LIVE_MODEL=gemini-4-neon-medium bin/fm-test-run.sh tests/fm-agy-web-transcript-live-e2e.test.sh
+ok - agy web transcript live (1.5.19): a model call records the conversation and its transcript
+ok - agy web transcript live (1.5.19): the page shows the words, the command with its output, and the reply
+```
+
+`tests/fm-agy-session-hook.test.sh` and `tests/fm-web.test.sh` pin the logic against agy-shaped fixtures.
+
 ## What is still unproven
 
 The unauthenticated failure mode was never observed; this host's agy runs signed in, so any auth prompt is a fail-loud credential blocker, not a handled dialog.
@@ -217,4 +239,5 @@ bin/fm-test-run.sh tests/fm-agy-harness.test.sh
 FM_AGY_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
 FM_AGY_PRIMARY_LIVE=1 bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
 FM_AGY_PLAIN_LANGUAGE_LIVE=1 bin/fm-test-run.sh tests/fm-agy-plain-language-live-e2e.test.sh
+FM_AGY_WEB_TRANSCRIPT_LIVE=1 bin/fm-test-run.sh tests/fm-agy-web-transcript-live-e2e.test.sh
 ```

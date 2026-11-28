@@ -274,9 +274,12 @@ Each home runs its own server against its own `FM_HOME`, on its own port.
 
 ## How it reads the conversation
 
-The page reads the Claude Code transcript of the session that holds this home's session lock.
-The session id is the one the live lock holder's Claude process records in `sessions/<pid>.json` under the Claude config directory, which follows `/clear`; without it, `state/.lock-session`.
+The page reads the transcript of the session that holds this home's session lock, from a Claude Code or an Antigravity (agy) first mate.
+For Claude, the session id is the one the live lock holder's Claude process records in `sessions/<pid>.json` under the Claude config directory, which follows `/clear`; without it, `state/.lock-session`.
 The transcript is found under the Claude config directory: `CLAUDE_CONFIG_DIR`, the home's pinned accounts under `data/accounts/claude/`, then `~/.claude`.
+For agy, `bin/fm-agy-session-hook.sh`, which agy runs before every model call, records the conversation id and transcript path agy hands its hooks in `state/.agy-session`, with the lock holder's pid; the page uses that record only while the same holder still has the lock.
+agy's transcript holds one entry per finished step, which the page folds into the same messages, steps, compaction summaries and notices; a failed model call shows as a quiet notice and ends the turn.
+agy writes nothing when Esc stops a turn, so a turn stopped in the middle of a step reads as working until the next message.
 The lock and transcript are re-read on every refresh, so a restarted, cleared or compacted session is followed without restarting the page.
 After `/clear` the page switches to the new conversation right away, starting with the `/clear` itself.
 Only the end of the transcript is parsed, so a very large transcript stays quick; older history stays in the terminal.
@@ -328,8 +331,9 @@ To revoke access, stop the server, delete `state/web/token`, and start it again;
 
 ## Limits
 
-- Claude Code primaries only.
+- Claude Code and Antigravity (agy) primaries only.
   Other primary harnesses keep their transcripts elsewhere; supporting them is a follow-up.
+  An agy first mate's conversation reads as Claude's does, but Esc, the suggested next message and the context left before compaction work for Claude only, and a message to agy is not typed into its chat ([desk-floater.md](desk-floater.md#how-transcripts-reach-firstmate)).
 - Local only.
   There is no remote access and no account system; the bridge view is the phone surface.
 - No voice inside the page; the desk floater floats over it and keeps that role, and the talk boxes take typed words.
