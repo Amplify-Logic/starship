@@ -191,7 +191,8 @@
 # steer to a stopped lane first and then calls idle-wake, which starts that
 # relaunch at once. idle-resume writes a note naming how long the worker
 # waited and why it was relaunched, quoting the previous agent's last report,
-# and telling the fresh agent to act on its steering inbox first, appends a
+# and telling the fresh agent to restart any preview or server it held for the
+# captain (the stop ended it) and then act on its steering inbox, appends a
 # working: line, and runs bin/fm-control.sh relaunch --note-file; success
 # removes the record, and failure keeps it with resume_error=, which crew state
 # reports as blocked, prints "idle-relaunch-failed <id>: ..." for the tick to
