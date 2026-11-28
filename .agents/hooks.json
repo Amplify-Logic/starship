@@ -20,6 +20,11 @@
             "type": "command",
             "command": "sh -c \"[ -x ./bin/fm-cd-pretool-check.sh ] && exec ./bin/fm-cd-pretool-check.sh --agy || exec ../bin/fm-cd-pretool-check.sh --agy\" || cd .",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "sh -c \"[ -x ./bin/fm-pr-text-pretool-check.sh ] && exec ./bin/fm-pr-text-pretool-check.sh --agy || exec ../bin/fm-pr-text-pretool-check.sh --agy\" || cd .",
+            "timeout": 45
           }
         ]
       },
