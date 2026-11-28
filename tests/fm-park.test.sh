@@ -1347,10 +1347,14 @@ test_idle_stop_clears_what_the_agent_left_running() {
   wt=$(fm_meta_get_test "$w" worktree)
   # A dev server the agent left behind is an orphan in the local copy; the
   # endpoint's shell, which stays, keeps a live parent outside it.
-  ( cd "$wt" && nohup sleep 60 >/dev/null 2>&1 & echo $! > "$w/orphan.pid" )
+  # Long sleeps so neither exits on its own under load before the checks; both
+  # are tracked so the suite's EXIT trap kills them on every path.
+  ( cd "$wt" && nohup sleep 600 >/dev/null 2>&1 & echo $! > "$w/orphan.pid" )
   orphan=$(cat "$w/orphan.pid")
-  ( cd "$wt" && exec sleep 61 ) &
+  fm_test_track_pid "$orphan"
+  ( cd "$wt" && exec sleep 601 ) &
   kept=$!
+  fm_test_track_pid "$kept"
   sleep 0.3
   ppid=$(ps -o ppid= -p "$orphan" | tr -d '[:space:]')
   mkdir -p "$w/state/browse/lane"; : > "$w/state/browse/lane/session.live"
@@ -1358,7 +1362,7 @@ test_idle_stop_clears_what_the_agent_left_running() {
   chmod +x "$w/fakebin/fm-browse-session.sh"
   FM_REAP_ORPHAN_PARENTS=$ppid FM_PARK_BROWSE_BIN="$w/fakebin/fm-browse-session.sh" run_idle "$w" tick >/dev/null 2>&1
   wait_idle_parked "$w" idle-leftovers
-  if kill -0 "$orphan" 2>/dev/null; then kill "$orphan" "$kept" 2>/dev/null; fail "idle-leftovers: the orphaned process in the local copy is still running"; fi
+  kill -0 "$orphan" 2>/dev/null && fail "idle-leftovers: the orphaned process in the local copy is still running"
   kill -0 "$kept" 2>/dev/null || fail "idle-leftovers: a process with a live parent outside the copy was stopped"
   kill "$kept" 2>/dev/null; wait "$kept" 2>/dev/null
   [ "$(cat "$w/browse.log" 2>/dev/null)" = "stop lane" ] || fail "idle-leftovers: the task's browser session was not stopped: $(cat "$w/browse.log" 2>/dev/null)"
