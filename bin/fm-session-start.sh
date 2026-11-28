@@ -26,6 +26,12 @@
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
 #
+#   -. worker guard  - before any step, a run from a task worker's shell that
+#                       would attach to the home supervising that worker exits 1
+#                       with nothing read, because that FM_HOME was inherited
+#                       from the worker environment (bin/fm-primary-scope-lib.sh
+#                       fm_primary_attaches_worker_home owns the test). Naming a
+#                       different home with FM_HOME passes.
 #   0. address and tone - read-only, not a stage: the recorded section from
 #                       data/captain.md (or the cue to ask for one) leads the
 #                       output so the first reply survives a spilled digest.
@@ -307,6 +313,16 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+# A first mate started from a task worker's shell inherits the worker's FM_HOME,
+# which is the live home supervising that worker. Refuse before anything here
+# reads or writes it (bin/fm-primary-scope-lib.sh owns the test).
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+if fm_primary_attaches_worker_home "$FM_HOME" "$STATE"; then
+  fm_primary_worker_home_refusal fm-session-start "$FM_HOME"
+  exit 1
+fi
 
 # --- 0. runtime bound ---------------------------------------------------------
 # The ordered stage list is the contract behind the truncation banner: the child

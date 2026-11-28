@@ -81,6 +81,42 @@ fm_is_task_worker() {
   [ -n "${FM_TASK_ID:-}" ]
 }
 
+# Return 0 when a first mate session that resolved home $1 with state dir $2
+# would attach to the home that supervises this task worker. A worker pane
+# carries that home's FM_HOME, so a first mate started from it (a trial, say)
+# silently inherits it unless the launch names another home. The supervising
+# home is read from the FM_TASK_INBOX path bin/fm-spawn.sh exports into every
+# worker launch (<state>/<task-id>.inbox), so the answer does not depend on
+# FM_HOME itself and an explicit FM_HOME naming a different home passes. A
+# worker marker without that path cannot prove the home is a different one, so
+# it counts as attaching. bin/fm-session-start.sh and bin/fm-primary.sh refuse
+# on this answer before reading or writing anything in the home.
+fm_primary_attaches_worker_home() {  # <home> <state>
+  local sup_state sup_home home state
+  fm_is_task_worker || return 1
+  [ -n "${FM_TASK_INBOX:-}" ] || return 0
+  sup_state=$(cd -P "${FM_TASK_INBOX%/*}" 2>/dev/null && pwd -P) || sup_state=${FM_TASK_INBOX%/*}
+  sup_home=$(cd -P "$sup_state/.." 2>/dev/null && pwd -P) || sup_home=${sup_state%/*}
+  home=$(cd -P "$1" 2>/dev/null && pwd -P) || home=$1
+  state=$(cd -P "$2" 2>/dev/null && pwd -P) || state=$2
+  [ "$state" = "$sup_state" ] || [ "$home" = "$sup_home" ]
+}
+
+# Print the refusal for fm_primary_attaches_worker_home on stderr, prefixed by
+# the calling script's name $1, for home $2.
+fm_primary_worker_home_refusal() {  # <script-name> <home>
+  printf '%s: refusing to start a first mate session on %s: it is the home supervising task worker %s, inherited through this shell'"'"'s worker environment.\n' \
+    "$1" "$2" "${FM_TASK_ID:-}" >&2
+  printf '%s: to try a first mate from a worker, give it its own home and a clean environment: env -u FM_TASK_ID -u FM_TASK_INBOX FM_HOME=<trial home> <command>\n' "$1" >&2
+}
+
+# Unset the worker-only variables a first mate launched from a worker shell must
+# not carry: with them the new session counts as a worker, so its own startup
+# and hooks stand down. bin/fm-primary.sh calls this before it starts the CLI.
+fm_clear_task_worker_env() {
+  unset FM_TASK_ID FM_TASK_INBOX
+}
+
 # Return 0 when $1 is a genuine primary root, regardless of whether its state
 # dir exists yet. A valid secondmate marker force-includes a linked secondmate
 # home. Otherwise only a plain checkout is primary, never a linked task

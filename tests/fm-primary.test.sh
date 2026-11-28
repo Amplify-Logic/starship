@@ -62,6 +62,8 @@ printf 'cli=%s\n' "$(basename "$0")" >> "$FM_PRIMARY_TEST_LOG"
 printf 'pwd=%s\n' "$PWD" >> "$FM_PRIMARY_TEST_LOG"
 printf 'harness=%s\n' "${FM_PRIMARY_HARNESS:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'role=%s\n' "${FM_PRIMARY_ROLE:-}" >> "$FM_PRIMARY_TEST_LOG"
+printf 'task_id=%s\n' "${FM_TASK_ID:-}" >> "$FM_PRIMARY_TEST_LOG"
+printf 'task_inbox=%s\n' "${FM_TASK_INBOX:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'opencode_permissions=%s\n' "${OPENCODE_CONFIG_CONTENT:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'claude_bg_shell_pressure_reap=%s\n' "${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP:-}" >> "$FM_PRIMARY_TEST_LOG"
 printf 'claude_auto_compact_window=%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" >> "$FM_PRIMARY_TEST_LOG"
@@ -195,6 +197,38 @@ test_active_lock_refusal() {
   [ "$status" -ne 0 ] || fail "launcher stole an active Firstmate lock"
   assert_contains "$out" 'another Firstmate session is active' "active-session refusal was unclear"
   pass "fm-primary: a live Firstmate lock is refused without killing or replacing it"
+}
+
+# A first mate launched from a task worker's shell inherits the worker's
+# FM_HOME, the live home supervising that worker. The launcher must refuse that
+# home with nothing touched, and a launch naming its own home must start a CLI
+# that no longer carries the worker marker.
+test_worker_inherited_home_is_refused() {
+  local status=0 out before after trial="$TMP_ROOT/worker-trial-home"
+  mkdir -p "$HOME_FIX/state/scout-k1.inbox"
+  : > "$LOG"
+  before=$(find "$HOME_FIX" | sort)
+  out=$( cd "$TMP_ROOT" && PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_FIX" FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_TASK_ID=scout-k1 FM_TASK_INBOX="$HOME_FIX/state/scout-k1.inbox" \
+    "$ROOT/bin/fm-primary.sh" pi 2>&1 ) || status=$?
+  after=$(find "$HOME_FIX" | sort)
+  [ "$status" -ne 0 ] || fail "launcher started a first mate on the home supervising its worker shell: $out"
+  assert_contains "$out" "refusing to start a first mate session on $HOME_FIX" "worker-inherited home refusal was unclear"
+  [ ! -s "$LOG" ] || fail "launcher ran the CLI for a worker-inherited home: $(cat "$LOG")"
+  [ "$before" = "$after" ] || fail "launcher changed the worker-inherited home: $after"
+
+  mkdir -p "$trial/state" "$trial/data"
+  status=0
+  out=$( cd "$TMP_ROOT" && PATH="$FAKEBIN:$PATH" FM_HOME="$trial" FM_PRIMARY_TEST_LOG="$LOG" \
+    FM_TASK_ID=scout-k1 FM_TASK_INBOX="$HOME_FIX/state/scout-k1.inbox" \
+    "$ROOT/bin/fm-primary.sh" pi 2>&1 ) || status=$?
+  [ "$status" -eq 0 ] || fail "launcher refused a worker launch naming its own home: $out"
+  assert_contains "$(cat "$LOG")" "cli=pi" "a worker launch naming its own home did not start the CLI"
+  assert_contains "$(cat "$LOG")" "task_id="$'\n' "the launched first mate inherited the worker's task id"
+  assert_contains "$(cat "$LOG")" "task_inbox="$'\n' "the launched first mate inherited the worker's inbox"
+  rm -rf "$HOME_FIX/state/scout-k1.inbox" "$trial"
+  : > "$LOG"
+  pass "fm-primary: a home inherited from a worker shell is refused, and a named home launches without the worker marker"
 }
 
 test_exec_environment_and_exit_status() {
@@ -1913,6 +1947,7 @@ test_account_credential_gates_never_hide_dry_run_argv
 test_account_invalid_registry_warns_without_crashing_a_launch
 test_unknown_dependency_and_integration_refusals
 test_active_lock_refusal
+test_worker_inherited_home_is_refused
 test_exec_environment_and_exit_status
 test_launch_links_switched_on_opt_in_skills_first
 test_visible_role_marks_only_current_surface
