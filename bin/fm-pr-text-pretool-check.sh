@@ -14,9 +14,9 @@
 #   <PreToolUse JSON on stdin> | bin/fm-pr-text-pretool-check.sh [--agy]
 #
 # --agy reads agy's PreToolUse payload (toolCall.name run_command, bash or
-# Bash; the command in toolCall.args.CommandLine or .command; the working
-# directory in toolCall.args.Cwd, else the payload's cwd) and answers a
-# refusal as agy's {"decision":"deny","reason":...} object on stdout. An allow
+# Bash; the command in toolCall.args.CommandLine; the working directory in
+# the payload's top-level cwd) and answers a refusal as agy's
+# {"decision":"deny","reason":...} object on stdout. An allow
 # prints nothing, which agy reads as allow. It needs jq to translate; without
 # jq it allows, as it does without python3.
 #
@@ -77,8 +77,8 @@ if [ "$AGY_MODE" -eq 1 ]; then
   CLAUDE_PAYLOAD=$(printf '%s' "$PAYLOAD" | jq -c '
     (.toolCall // {}) as $call | ($call.args // {}) as $args
     | {tool_name: (if ($call.name | IN("run_command", "bash", "Bash")) then "Bash" else ($call.name // "") end),
-       tool_input: {command: ($args.CommandLine // $args.command)},
-       cwd: ($args.Cwd // .cwd)}' 2>/dev/null) || exit 0
+       tool_input: {command: $args.CommandLine},
+       cwd: .cwd}' 2>/dev/null) || exit 0
   ANSWER=$(printf '%s' "$CLAUDE_PAYLOAD" | python3 "$SCRIPT_DIR/fm-pr-text-guard.py" hook --home "$home")
   [ -n "$ANSWER" ] || exit 0
   printf '%s' "$ANSWER" | jq -c '{decision: "deny", reason: .hookSpecificOutput.permissionDecisionReason}' 2>/dev/null \

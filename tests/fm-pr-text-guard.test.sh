@@ -884,7 +884,7 @@ test_agy_first_and_second_mate_sessions_get_the_hook() {
 
   # agy_session <home dir> <tool name> [env...]: the registered hook on the
   # publishing command, run from that home's .agents/ as agy runs it, with the
-  # payload shape agy 1.5.18 sends (it escapes & as &); output in OUT.
+  # payload shape agy 1.5.18 sends (it escapes & as \u0026); output in OUT.
   agy_session() {
     local dir=$1 tool=$2 payload
     shift 2
