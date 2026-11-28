@@ -110,14 +110,10 @@
 #
 # Plain-language check: in that same scope, and whether or not the home speaks,
 # the final reply is scanned for internal terms AGENTS.md section 9 tells the
-# first mate to translate before the captain reads them. Section 9 owns the
-# rule and its full vocabulary; PLAIN_TERMS below is only the distinctive part
-# of it, because ordinary words on that list such as "check", "done", "state",
-# or "blocked" would warn on plain English. Fenced code, inline code, and links
-# are skipped, since a command, path, or URL the captain needs is not a slip.
-# A hit prints one JSON line carrying a systemMessage, which Claude Code hands
-# to the first mate at its next turn without showing it to the captain. It is
-# a warning only: the reply is never blocked, held, or rewritten.
+# first mate to translate before the captain reads them; bin/fm-plain-language-lib.sh
+# owns the term list, the skip rules, and the notice. A hit prints one JSON line
+# carrying that notice as a systemMessage, which Claude Code hands to the first
+# mate at its next turn without showing it to the captain.
 #
 # Never blocks: every path exits 0, the plain-language warning line is the only
 # stdout, and bin/fm-speak.sh's diagnostics are read only for the refusal
@@ -146,10 +142,6 @@ MAX_SENTENCES=6
 # (docs/examples/desk-speak-register.toml).
 SPOKEN_WORDS=78
 
-# The distinctive part of AGENTS.md section 9's internal vocabulary, as
-# case-insensitive extended regular expressions matched as whole words.
-PLAIN_TERMS='worktrees?|primary checkout|local-main|teardown|crewmates?|watchers?|heartbeats?|wake queue|wake events?|harness(es)?|session lock|status files?|meta(data)? files?|task ids?|ask-user|needs-decision|fix-review|checks-passed|direct-PR|local-only|no-mistakes|yolo|captain hold|decision hold|fail(s|ed)?[- ]closed|fail(s|ed)?[- ]open|fail(s)? loudly|refuses loudly'
-
 SETTLE_MS=${FM_REPLY_SPEAK_SETTLE_MS:-2000}
 case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
 
@@ -159,6 +151,8 @@ case "$SETTLE_MS" in ''|*[!0-9]*) SETTLE_MS=2000 ;; esac
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-plain-language-lib.sh
+. "$SCRIPT_DIR/fm-plain-language-lib.sh"
 
 PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || exit 0
@@ -173,21 +167,10 @@ fm_session_lock_owned_by_self "$STATE" || exit 0
 MSG=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // empty | strings' 2>/dev/null || true)
 
 # --- plain-language check: warn the first mate, never the captain -----------
-# Code fences, inline code, and links are dropped before matching, so a command
-# or path the captain needs never counts as a slip.
-# shellcheck disable=SC2016 # the backticks are literal Markdown code spans
-plain_language_warning() {  # <reply>
-  local hits
-  hits=$(printf '%s\n' "$1" | awk '
-      /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
-      !fence' \
-    | sed -E 's/`[^`]*`//g; s/\]\([^)]*\)/]/g; s#https?://[^[:space:]]+##g' \
-    | grep -oiwE "$PLAIN_TERMS" \
-    | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g')
-  [ -n "$hits" ] || return 0
-  jq -cn --arg terms "$hits" '{systemMessage: ("Plain-language check: your last reply to the captain used internal terms AGENTS.md section 9 says to translate: " + $terms + ". Say the outcome in plain words next time. Nothing was blocked; no reply to this notice is needed.")}'
-}
-plain_language_warning "$MSG"
+PLAIN_HITS=$(fm_plain_language_hits "$MSG")
+if [ -n "$PLAIN_HITS" ]; then
+  jq -cn --arg m "$(fm_plain_language_notice "$PLAIN_HITS")" '{systemMessage: $m}'
+fi
 
 # --- opt-in: a home that does not speak runs nothing below -----------------
 # bin/fm-speak.sh owns the opt-in, so it is asked rather than re-read here.

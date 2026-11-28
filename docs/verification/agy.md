@@ -180,6 +180,28 @@ Each value below was observed live with a Stop hook that only recorded its stdin
 
 `tests/fm-agy-primary.test.sh` pins the hook's verdict for each reason, and the live guard below drives the error end through the real hook.
 
+## Plain-language reply check
+
+Verified on 2026-11-28 with agy 1.5.18 on macOS, signed in, in throwaway workspaces only.
+agy runs a workspace's `Stop` hooks one after another and waits for each, and a first `Stop` hook that prints `{}` does not cancel a later one's `{"decision":"continue",...}`: a scratch pair of hooks returned `FIRST_OK` and then, after the second hook's continue, `QUOKKA-77`.
+At `Stop`, the file named by the payload's `transcriptPath` already holds the turn's final reply as the content of its last `PLANNER_RESPONSE` step.
+A `PreInvocation` hook's `{"injectSteps":[{"systemMessage":{"systemMessage":"..."}}]}` reaches the model on the next call, including the call that follows a `Stop` continue, and the interactive chat showed only the model's reply, never the injected text.
+`PreInvocation`'s `invocationNum` restarts at 0 for each new user message in one process.
+A model name carrying its own level, such as `gemini-4-neon-medium`, refuses `--effort` (`--model gemini-4-neon-medium conflicts with --effort=low`).
+
+The live guard drives one agy process through two turns with `--input-format stream-json`, as an interactive first mate holds one process:
+
+```
+FM_AGY_PLAIN_LANGUAGE_LIVE=1 FM_AGY_LIVE_MODEL=gemini-3.8-flash-low bin/fm-test-run.sh tests/fm-agy-plain-language-live-e2e.test.sh
+ok - agy plain-language live (1.5.18): the Stop hook reads the final reply from agy's transcript
+ok - agy plain-language live (1.5.18): the next model call receives the notice once
+FM_AGY_PLAIN_LANGUAGE_LIVE=1 FM_AGY_LIVE_MODEL=gemini-4-neon-medium bin/fm-test-run.sh tests/fm-agy-plain-language-live-e2e.test.sh
+ok - agy plain-language live (1.5.18): the Stop hook reads the final reply from agy's transcript
+ok - agy plain-language live (1.5.18): the next model call receives the notice once
+```
+
+`tests/fm-agy-plain-language.test.sh` pins the logic against agy-shaped fixtures through the tracked `.agents/hooks.json`.
+
 ## What is still unproven
 
 The unauthenticated failure mode was never observed; this host's agy runs signed in, so any auth prompt is a fail-loud credential blocker, not a handled dialog.
@@ -194,4 +216,5 @@ Run the portable suite and the live guard after any agy upgrade, because the pro
 bin/fm-test-run.sh tests/fm-agy-harness.test.sh
 FM_AGY_SIGNALS_LIVE=1 bin/fm-test-run.sh tests/fm-agy-signals-live-e2e.test.sh
 FM_AGY_PRIMARY_LIVE=1 bin/fm-test-run.sh tests/fm-agy-primary-live-e2e.test.sh
+FM_AGY_PLAIN_LANGUAGE_LIVE=1 bin/fm-test-run.sh tests/fm-agy-plain-language-live-e2e.test.sh
 ```

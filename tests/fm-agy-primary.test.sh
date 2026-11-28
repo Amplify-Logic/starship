@@ -212,7 +212,7 @@ test_agents_hooks_json_registration_and_cwd_contract() {
     and ([.[] | .PreToolUse // empty | .[] | (.matcher | type) == "string" and ([.hooks[].command | type == "string"] | length > 0 and all)] | length > 0 and all)
   ' "$reg" >/dev/null 2>&1 \
     || fail ".agents/hooks.json must be agy named hook specs with flat SessionStart/Stop and grouped PreToolUse handlers"
-  jq -e '[.[] | .Stop // empty | .[].timeout] | length > 0 and all(. == 28800)' "$reg" >/dev/null 2>&1 \
+  jq -e '[.[] | .Stop // empty | .[] | select(.command | contains("fm-turnend-guard-agy.sh")) | .timeout] | length > 0 and all(. == 28800)' "$reg" >/dev/null 2>&1 \
     || fail ".agents/hooks.json Stop must allow the park the 28800s hook budget Cursor and Claude use"
 
   dir=$(make_primary_dir "$TMP_ROOT/hooks-cwd")
