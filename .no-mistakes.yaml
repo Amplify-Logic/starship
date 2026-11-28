@@ -24,13 +24,15 @@ document:
     Your summaries, findings and evidence become this repository's public PR title, description and comments: name people, companies and projects only by role, such as a colleague or a customer, and never quote a private name from a finding, evidence or the user intent.
 
 # PR text: the PR step fills .github/pull_request_template.md (a short plain
-# section first, technical detail folded) and folds the recorded risk, test
-# results and pipeline history into one closed Validation block. Both are
+# section first, technical detail folded), folds the recorded risk, test
+# results and pipeline history into one closed Validation block, and publishes
+# no generated Intent section quoting the request. All three are
 # trusted-only, read from the default-branch copy of this file and template.
 # docs/fork-configuration.md "Gate defaults" owns this and how other projects opt in.
 pr:
   template: .github/pull_request_template.md
   appendix: collapsed
+  publish_intent: false
 
 # The PR step has no free-form instructions setting, so the same public PR text
 # rule reaches the steps whose summaries and findings write the PR title,

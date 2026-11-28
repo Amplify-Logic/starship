@@ -479,6 +479,7 @@ fm_pr_text_block() {
 
 ## Public PR text
 $(fm_readable_rule "Whenever you write PR text yourself, write it")
+Describe the change itself; never quote the captain's request or add a section holding it.
 Personal and work details never go into a public repository's PR titles, descriptions or comments; this home keeps the words it means in a private list.
 Before you open or edit a PR, comment on one, or pass \`--intent\` or a gate answer to no-mistakes, write the draft text to a file and run \`$check --text <file>\` (or pipe the text to \`$check --text\`).
 It names the line and column of every listed word and key or token shape the text contains, never the word itself; on a public repository, rewrite each of those places and check it again, while a private repository's PR may keep listed words.
@@ -493,20 +494,27 @@ EOF
 
 # The forge-independent middle of the no-mistakes contract: how a worker drives
 # the pipeline, what `--intent` may carry, and the two firstmate-specific rules.
-# Written once; only the two sentences about a green PR depend on the forge,
-# because on gerrit, and under pr=manual (the `no-ci` argument), the ci step is
-# skipped and the drive call never reports a green PR.
+# Written once; only the two sentences about a green PR and the
+# --no-publish-intent line depend on the forge, because on gerrit, and under
+# pr=manual (the `no-ci` argument), the pr and ci steps are skipped, so the drive
+# call never reports a green PR and no pipeline PR text is published.
 fm_nm_driving_block() {  # <forge|no-ci>
-  local pr_return_line='' pr_reattach_clause=';' drive_block wait_cfg
+  local pr_return_line='' pr_reattach_clause=';' drive_block cfg intent_line=''
+  cfg=${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}
   if [ "$1" != gerrit ] && [ "$1" != no-ci ]; then
+    # Only the pipeline's pr step publishes an Intent section, so the line is
+    # rendered only where that step runs. config/publish-pr-intent keeps it.
+    if [ ! -e "$cfg/publish-pr-intent" ]; then
+      intent_line="Pass \`--no-publish-intent\` on every \`no-mistakes axi run\` that starts a run, so the PR body describes the change without a generated Intent section quoting the request; the pipeline still receives the full \`--intent\` for review and testing.
+"
+    fi
     pr_return_line="Only a drive call's return reports the green PR: \`no-mistakes axi status\` shows progress but never reports \`checks-passed\` while the ci step is still monitoring the PR for merge, so never wait on a status poll for the next gate or outcome.
 "
     pr_reattach_clause="; once checks are green it returns \`checks-passed\` immediately, and"
   fi
   # config/wait-no-turns selects the foreground drive. Absent, the text matches
   # the backgrounded drive a home had before that flag.
-  wait_cfg=${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}
-  if [ -e "$wait_cfg/wait-no-turns" ]; then
+  if [ -e "$cfg/wait-no-turns" ]; then
     drive_block="Drive the run with ONE foreground \`no-mistakes axi run\` and let it block.
 It bounds its own hold for you: \`--wait\` (default 8m) exists precisely so a harness with a ten-minute command cap gets a structured return instead of being killed mid-hold.
 Declare that wait using the brief's status-reporting rule before the foreground drive call.
@@ -531,7 +539,7 @@ Do not include \`## Firstmate spec\`, later Firstmate build constraints, or your
 The \`--intent\` string you pass must be self-sufficient: that string plus the codebase must let a reader reconstruct roughly the same specification, without depending on a separate report, a PR, or context that lives only in this conversation.
 When the captain's intent refers to a report, decision, or PR ("do items 1, 2, 3, and 7 of the report"), write the substance of the referenced items into \`--intent\` in the captain's terms, not only the pointer; that substance is the captain's ask by reference, while Firstmate's build instructions and your own decisions still stay out.
 This replaces the no-mistakes skill's advice to enrich \`--intent\` with decisions and tradeoffs; that advice does not apply to Firstmate-dispatched work.
-Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
+${intent_line}Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
 $drive_block
 A killed or timed-out call is never evidence the daemon died: the daemon accepts your response immediately and runs the round in the background, so the call was only ever waiting for a read while the run kept working.
@@ -593,7 +601,7 @@ EOF
   cat <<EOF
 
 When the run's outcome is passed, passed-with-skips, or passed-with-override, write the PR title and body yourself and publish them with \`$forge_cli\`:
-1. Write the PR body to a file of your own under the scratch location rule 2 names, and verify it with \`head\` before using it. Match the title and body style of the project's recent merged PRs and its contribution guide, in plain English for a reviewer who lacks your context, with no direct address, and keep any issue reference the captain's intent names.
+1. Write the PR body to a file of your own under the scratch location rule 2 names, and verify it with \`head\` before using it. Match the title and body style of the project's recent merged PRs and its contribution guide, in plain English for a reviewer who lacks your context, with no direct address, and keep any issue reference the captain's intent names. Describe the change itself; never quote the captain's request or add a section holding it.
 2. Find the PR for your branch first (\`$forge_cli pr list --head <branch>\`). If one exists, update its title and body with \`$forge_cli pr edit <number> --title '<title>' --body-file <path>\`. Otherwise open it with \`$forge_cli pr create\` from the branch the run pushed, ready for review, not a draft$pr_base.
 3. Never post a comment or review on the PR or on any other thread, and never rely on the pipeline for the PR text: it is yours on every push.
 4. Wait for the PR's checks with \`$forge_cli pr checks <number> --watch\`, under the ten-minute command limit as the driving block bounds its waits, and run the same command again whenever it returns with checks still pending. \`$forge_cli pr checks\` exits 1 when the project reports no checks at all: that is not a failed check and needs no fix. If a check fails, commit the fix, drive a new run with the same \`--skip pr,ci\`, and update the PR text if the change affects it.

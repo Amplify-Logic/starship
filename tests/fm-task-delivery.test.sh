@@ -1592,14 +1592,19 @@ test_forge_gerrit_changes_what_no_mistakes_means() {
        emit { print }
        emit && /hard rule violation\.$/ { exit }' "$plain" > "$TMP_ROOT/forge-dod/plain-middle"
   [ -s "$TMP_ROOT/forge-dod/gerrit-middle" ] || fail "the gerrit brief carries no pipeline-driving section to compare"
-  # Only the two statements about a green PR differ: the ci step is skipped on
-  # this forge, so there is no checks-passed return to wait for.
+  # Only the two statements about a green PR and the --no-publish-intent line
+  # differ: the pr and ci steps are skipped on this forge, so there is no
+  # checks-passed return to wait for and no pipeline PR body to keep it out of.
   grep -q "reports the green PR" "$TMP_ROOT/forge-dod/plain-middle" \
     || fail "the default contract lost the green-PR return statement the comparison removes"
+  grep -q -- "--no-publish-intent" "$TMP_ROOT/forge-dod/plain-middle" \
+    || fail "the default contract lost the --no-publish-intent line the comparison removes"
   assert_no_grep "checks-passed" "$TMP_ROOT/forge-dod/gerrit-middle" \
     "the gerrit worker was told to wait for a checks-passed return its skipped ci step never gives"
+  assert_no_grep "--no-publish-intent" "$TMP_ROOT/forge-dod/gerrit-middle" \
+    "the gerrit worker was told to pass a pr-step flag to a run whose pr step is skipped"
   # shellcheck disable=SC2016 # Backticks are literal generated Markdown.
-  grep -v "reports the green PR" "$TMP_ROOT/forge-dod/plain-middle" \
+  grep -v -e "reports the green PR" -e "--no-publish-intent" "$TMP_ROOT/forge-dod/plain-middle" \
     | sed 's/; once checks are green it returns `checks-passed` immediately, and if it refuses/; if it refuses/' \
     > "$TMP_ROOT/forge-dod/plain-middle-no-pr"
   cmp -s "$TMP_ROOT/forge-dod/gerrit-middle" "$TMP_ROOT/forge-dod/plain-middle-no-pr" \

@@ -66,9 +66,11 @@
 #          treehouse is OUTDATED when its installed version lacks
 #          "treehouse get --lease" support.
 #          no-mistakes is OUTDATED when its installed version is older than
-#          1.59.2, the release that scoped `axi status` to the current branch
-#          (`axi respond` was already branch-scoped), so one lane cannot read
-#          another lane's gate or outcome as its own; it also clears the 1.46.0
+#          1.80.0, the release that added `axi run --no-publish-intent`, which
+#          every default ship brief passes (an older daemon refuses the run).
+#          It also clears 1.59.2, which scoped `axi status` to the current
+#          branch (`axi respond` was already branch-scoped) so one lane cannot
+#          read another lane's gate or outcome as its own, and the 1.46.0
 #          structured attestation floor in CONTRIBUTING.md.
 #          The AXI-family floor policy is owned beside GH_AXI_MIN and
 #          LAVISH_AXI_MIN below; the per-tool owners point there.
@@ -1003,7 +1005,7 @@ if [ "${1:-}" = manifest ] && [ -x "$SCRIPT_DIR/fm-home-manifest.sh" ]; then
   [ "$#" -eq 1 ] || { echo "usage: fm-bootstrap.sh manifest" >&2; exit 1; }
   exec "$SCRIPT_DIR/fm-home-manifest.sh" "$BACKEND" $TOOLS
 fi
-NO_MISTAKES_MIN=1.59.2
+NO_MISTAKES_MIN=1.80.0
 # AXI-FAMILY FLOOR POLICY. Every axi-family floor is the CURRENT LATEST published
 # version of that tool, captain-bumped periodically to keep the whole fleet on the
 # newest axi tools. It is NOT the minimum feature-introduced version. These floors
