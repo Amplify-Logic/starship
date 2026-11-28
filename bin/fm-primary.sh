@@ -235,6 +235,13 @@
 # "Starter settings" owns what each file does. --preflight and FM_PRIMARY_DRY_RUN never
 # write them.
 #
+# Launch from a task worker's shell: a profile launch whose home is the one
+# supervising that worker refuses with nothing touched, because that FM_HOME was
+# inherited from the worker environment (bin/fm-primary-scope-lib.sh
+# fm_primary_attaches_worker_home owns the test). A launch that names another
+# home with FM_HOME proceeds, and the CLI it starts never inherits the worker
+# marker FM_TASK_ID or FM_TASK_INBOX, so the new first mate runs as a first mate.
+#
 # --install-shim creates ~/.local/bin/firstmate as a symlink to this command.
 # It is idempotent only for that exact symlink and refuses every other existing
 # file or symlink.
@@ -279,6 +286,8 @@ DATA=${FM_DATA_OVERRIDE:-$FM_HOME/data}
 CONFIG=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
 # shellcheck source=bin/fm-account-lib.sh
 . "$SCRIPT_DIR/fm-account-lib.sh"
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # Cursor's exact-match BLOCK existed only because its Stop turn-end hook was
 # unverified on 2026.07.20-8cc9c0b, which made drift there unsafe rather than
 # merely uncertified. Stop now fires (docs/cursor-harness.md, re-certified
@@ -967,6 +976,14 @@ case "$PROFILE" in
   pi|claude-fable|claude-fable52|claude-opus|codex|astra|opencode|grok|cursor-grok|cursor-grok45|neon) ;;
   *) die "unknown or unverified primary profile '$PROFILE' (verified: pi claude-fable claude-fable52 claude-opus codex astra opencode grok cursor-grok cursor-grok45 neon)" ;;
 esac
+
+# A launch from a task worker's shell must not attach to the home supervising
+# that worker, and the new session must not inherit the worker marker.
+if fm_primary_attaches_worker_home "$FM_HOME" "$STATE"; then
+  fm_primary_worker_home_refusal fm-primary "$FM_HOME"
+  exit 1
+fi
+fm_clear_task_worker_env
 
 validate_visible_prefix
 resolve_account

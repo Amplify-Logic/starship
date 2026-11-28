@@ -852,6 +852,52 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
+# --- worker-inherited home ----------------------------------------------------
+
+# A first mate started from a task worker's shell inherits the worker's FM_HOME,
+# the live home supervising that worker. Session start must refuse it before it
+# reads or writes anything there, while a launch that names its own home runs.
+test_worker_inherited_home_is_refused() {
+  local rec root home fakebin trial_rec trial_root trial_home out rc before after
+  rec=$(new_world worker-inherited-home)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  trial_rec=$(new_world worker-trial-home)
+  IFS='|' read -r trial_root trial_home _ <<EOF
+$trial_rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '# Captain\n\n## Address and tone\n\nSUPERVISING-HOME-PRIVATE-NOTE\n' > "$home/data/captain.md"
+  mkdir -p "$home/state/scout-k1.inbox"
+  before=$(find "$home" | sort)
+
+  out=$(FM_TASK_ID=scout-k1 FM_TASK_INBOX="$home/state/scout-k1.inbox" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>&1) && rc=0 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a worker-inherited home was not refused (rc=$rc): $out"
+  assert_contains "$out" "refusing to start a first mate session on $home" "the refusal did not name the inherited home"
+  assert_not_contains "$out" "SUPERVISING-HOME-PRIVATE-NOTE" "the refused run still printed the supervising home's private notes"
+  after=$(find "$home" | sort)
+  [ "$before" = "$after" ] || fail "the refused run changed the supervising home: $after"
+
+  out=$(unset FM_TASK_INBOX; FM_TASK_ID=scout-k1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>&1) && rc=0 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a worker marker without its inbox path was not refused (rc=$rc): $out"
+  assert_not_contains "$out" "SUPERVISING-HOME-PRIVATE-NOTE" "a worker marker without its inbox path still printed private notes"
+
+  out=$(FM_TASK_ID=scout-k1 FM_TASK_INBOX="$home/state/scout-k1.inbox" \
+    run_session_start "$trial_home" "$trial_root" "$fakebin:$BASE_PATH" 2>&1) && rc=0 || rc=$?
+  [ "$rc" -eq 0 ] || fail "a worker launch naming its own home was refused (rc=$rc): $out"
+  assert_contains "$out" "SESSION START - $trial_home" "a worker launch naming its own home did not start on that home"
+  assert_not_contains "$out" "SUPERVISING-HOME-PRIVATE-NOTE" "a trial home's digest printed the supervising home's notes"
+
+  out=$(unset FM_TASK_ID FM_TASK_INBOX; run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>&1) && rc=0 || rc=$?
+  [ "$rc" -eq 0 ] || fail "an ordinary first mate session start was refused (rc=$rc): $out"
+  assert_contains "$out" "SUPERVISING-HOME-PRIVATE-NOTE" "an ordinary first mate session start did not print its own notes"
+
+  pass "session start refuses a home inherited from a task worker's shell and runs on an explicitly named one"
+}
+
 # --- lock refusal: read-only path --------------------------------------------
 
 # Session start is a bounded recovery point for the captain-facing pane labels:
@@ -3670,6 +3716,7 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_worker_inherited_home_is_refused
 test_lock_refusal_read_only_path
 test_session_start_refreshes_presentation_only_for_the_session_owner
 test_lock_write_failure_read_only_path

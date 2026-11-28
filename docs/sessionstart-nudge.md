@@ -187,6 +187,7 @@ So a truncated digest does neither of these:
 - They source `bin/fm-gate-refuse-lib.sh` and stay silent for a no-mistakes gate agent identified by `NO_MISTAKES_GATE` or a `.no-mistakes/repos/*.git` git-common-dir.
 - They share `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so every hook uses one primary-detection owner.
 - They also stay silent for a ship or scout worker marked by `FM_TASK_ID`, even when its directory is not a linked task worktree.
+- `bin/fm-session-start.sh` itself, run by hand from such a worker's shell, refuses to attach to the home supervising that worker, whose `FM_HOME` the shell inherited; a run that names another home proceeds (`fm_primary_attaches_worker_home` in `bin/fm-primary-scope-lib.sh` owns the test).
 
 A fresh clone has no gitignored state directory yet.
 When the root otherwise qualifies as primary, the run wrapper creates the state directory before the unchanged scope check, so the first session takes the helm without a manual `mkdir state`.
