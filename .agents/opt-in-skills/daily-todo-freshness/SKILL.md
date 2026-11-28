@@ -103,6 +103,7 @@ An item closes on evidence that its ask was discharged, never on silence.
 1. A reply the captain posted in the parent channel after the mention, not inside the thread, counts as a reply; a thread read that finds no replies is not evidence that the captain did not answer.
 2. An internal hand-over - routing the ask to a colleague, another record or another team - never closes a partner- or customer-facing ask while the other party is still waiting on the team; it stays open or waiting until they have an answer.
 3. A read of what the captain sent closes each open item a sent message discharges, with that message as the evidence and the captain as the actor; an acknowledgement or a promise to act closes nothing.
+   Exception: for mail, bin/fm-mail-answered.sh closes an ask once the owner has replied in its thread; a promise in that reply becomes its own line.
 
 ## Stage 7 - the pre-publish re-read, non-negotiable
 

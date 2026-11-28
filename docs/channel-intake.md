@@ -36,12 +36,15 @@ A tick therefore looks like this.
    The gate deliberately does not enforce this: it opens an item for whatever class it is handed, because only the connector read can see the thread and the source-side state.
    Silence is not completion. A message nobody replied to and a source-side item nobody closed both stay owed, and an acknowledgement is not a reply that discharges anything.
    A promise to act closes nothing; it becomes its own to-do line, with its due day when one was stated.
+   Exception: for mail, bin/fm-mail-answered.sh closes an ask once the owner has replied in its thread; a promise in that reply becomes its own line.
+   That script reads the thread from the ask's ref, so a mail ask is observed with `--ref thread-<thread id>`, the id in its original case; `bin/fm-mail-answered.sh --help` owns its opt-in and rules.
    A partner- or customer-facing ask - a colleague relaying a partner question, a customer's own message - is observed with `--partner`, which ranks it ahead of other asks on the day page.
    A partner ask awaiting the captain is observed with `--partner-awaiting-since EPOCH`, the epoch second the partner started waiting, which ranks it in the day page's top partner tier, oldest first, like a morning action's `partner_awaiting` and `awaiting_since`.
    An ask is observed with `--about KEY` for what it is about, such as a device, a ticket or a person and subject, so the same ask arriving on another channel joins the line already open instead of becoming a second one; a home's `config/todo-about` patterns add keys from the title on their own.
    A home's add-on `todo-admit` rules refuse a new ask at this point, such as an announcement or a status report with no ask, so it never becomes a line; `bin/fm-channel-intake.sh --help` owns that contract.
 6. A source that reads what the captain sent - their sent mail and their chat replies - closes each open item that a sent message discharges, with `bin/fm-todo.sh close --actor` naming the captain and the sent message as evidence; an acknowledgement closes nothing.
    A promise to act closes nothing; it becomes its own to-do line, with its due day when one was stated.
+   Exception: for mail, bin/fm-mail-answered.sh closes an ask once the owner has replied in its thread; a promise in that reply becomes its own line.
 7. `complete --source ID --checkpoint VALUE` advances that source's checkpoint and says how many listed `recheck:` items are still not re-read, or `fail --source ID --reason TEXT` records the failure and backs off.
 
 Three kinds carry their own read, so asks that never carry an @mention or a fresh modification date still reach the page between morning sweeps.
@@ -216,6 +219,7 @@ The render is the deliverable and the open is a convenience, so a missing viewer
 
 An obligation is discharged by content, not by the fact that somebody replied.
 An acknowledgement or a promise to act is not a completion.
+Exception: for mail, bin/fm-mail-answered.sh closes an ask once the owner has replied in its thread; a promise in that reply becomes its own line.
 
 - `resolve --item KEY --reason TEXT` archives the item. The active list loses it; the archive keeps its source, ref, link, provenance, revision count and the reason it was closed.
 - `resolve --item KEY --waiting --reason TEXT` is the honest middle state for work handed to someone else. The item stays on the ledger under waiting-on-others.

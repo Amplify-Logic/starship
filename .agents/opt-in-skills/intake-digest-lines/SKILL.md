@@ -29,6 +29,7 @@ Each line prints the absolute command to run, which is the add-on's own copy whe
   Before classifying a message as `obligation`, `urgent` or `deadline`, read the rest of its thread for a reply the captain already sent and read the source-side item's own completion state; something already answered with content that discharges it, or already completed at the source, is reported as `routine` rather than opened as a new owed item.
   The gate cannot check either of those - only the connector read sees the thread and the source-side state - so this is the orchestrator's precondition, not a validation it will be stopped by.
   Silence is never completion: an unanswered message and an unclosed source-side item both stay owed, and an acknowledgement or a promise to act is not a reply that discharges anything.
+  Exception: for mail, bin/fm-mail-answered.sh closes an ask once the owner has replied in its thread; a promise in that reply becomes its own line.
   A read that could not be finished is recorded with `fail --source ID --reason TEXT`, never left unclaimed: the checkpoint advances only behind captured output, so a silent abandon re-reads the same window forever while reporting nothing.
   The gate itself reads no source and sends no message; it decides only when a read is worth doing.
 - `CHANNEL_INTAKE: <N> item(s) ready to send|blocked, ...|held, ... for <label>` - notifiable items are waiting on the private direct-message path.
