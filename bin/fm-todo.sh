@@ -62,7 +62,8 @@
 # its keys, so the same ask seen on another channel or by a re-scan joins the
 # line already there instead of adding a second. Only an ask attaches, never
 # to a held decision, and two candidate lines mean two asks, so it adds its
-# own. `find --about KEY` prints each open or waiting ask about every given
+# own. A promised follow-up, a line whose source ref starts `promise-`, is
+# owed work of its own: it never attaches and nothing attaches to it. `find --about KEY` prints each open or waiting ask about every given
 # key (id, revision, state, its keys, title, tab-separated; never routine
 # activity or a team update), so a tool that settled one can close it with
 # `close` and its own evidence.
@@ -229,6 +230,9 @@
 # removes it; a later --text under the same name replaces it. This is how an
 # add-on shows its own state on a row, such as a change it has queued or one
 # that failed. A mark never changes the item's state, revision or freshness.
+# A `due` mark whose text is a YYYY-MM-DD day shows as a label: before that
+# day the line waits with the parked lines, on it the row says due today,
+# after it overdue. The day passing never closes the line.
 #
 # Paths: data/todo (FM_TODO_STORE_OVERRIDE), data/channel-intake, and the
 # backlog path from .tasks.toml's markdown backend (FM_TODO_BACKLOG_OVERRIDE).

@@ -93,6 +93,10 @@
 #     names colleagues, unless the home sets colleague_headings, which brings
 #     back "Colleagues asking you" without changing the back room; a value
 #     other than true or false is refused by the renderer and the intake gate.
+#   - A promised follow-up stays its own line beside an open ask about the same
+#     thing, even by a title-pattern key, and the ask stays open; it never
+#     closes because its due day passed, and closes with evidence, as does a
+#     follow-up agreed in chat and put on the Today list.
 # shellcheck disable=SC2016
 set -u
 
@@ -1513,6 +1517,58 @@ test_a_new_ask_about_an_open_line_joins_it() {
   pass 'a new ask joins the one open line about the same thing, and find names the lines about a key'
 }
 
+test_a_promise_stays_its_own_line_and_closes_with_evidence() {
+  local h out ask promise mine
+  h="$TMP_ROOT/promise"
+  new_home "$h"
+  printf 'device \\b\\d{6}\\b\n' >"$h/config/todo-about"
+  intake_at "$h" "$T_0900" observe --source C_BRIEF --ref a-1 --digest a --class obligation \
+    --title 'Quinn asks whether unit 123456 is fixed' --about person:quinn >/dev/null
+  todo_at "$h" "$T_0900" sync >/dev/null
+  # The promise is about the same unit, so the home's title pattern gives it a
+  # shared key; it still never joins the ask it answers.
+  intake_at "$h" "$T_1000" observe --source C_BRIEF --ref promise-m-9 --class obligation \
+    --title 'Quinn: you promised the repair report on 123456' --digest 'report by Friday' \
+    --source-epoch "$T_0900" --about promise:m-9 >/dev/null
+  todo_at "$h" "$T_1000" sync >/dev/null
+  out=$(todo_at "$h" "$T_1000" list --state open)
+  assert_equals 2 "$(printf '%s\n' "$out" | grep -c .)" "a promise joined the ask it answers: $out"
+  promise=$(todo_at "$h" "$T_1000" find --about promise:m-9 | cut -f1)
+  ask=$(field_of "$h" 'Quinn asks whether' 1)
+  [ -n "$promise" ] && [ "$promise" != "$ask" ] || fail 'find did not name the promise as its own line'
+  # A later ask about the same unit joins the ask, never the promise: were the
+  # promise a candidate, two lines would match and the ask would be a third.
+  intake_at "$h" "$T_1030" observe --source C_BRIEF --ref a-2 --digest a2 --class obligation \
+    --title 'Quinn again on 123456' >/dev/null
+  todo_at "$h" "$T_1030" sync >/dev/null
+  assert_equals 2 "$(todo_at "$h" "$T_1030" list --state open | grep -c .)" 'a later ask joined the promise'
+  todo_at "$h" "$T_1030" mark --item "$promise" --name due --text 2026-09-11 >/dev/null || fail 'the due mark was refused'
+  # The day passing never closes it; the follow-up going out does.
+  render_at "$h" "$((T_1000 + 3 * 86400))"
+  [ "$(field_of "$h" 'you promised the repair report' 2)" = open ] || fail 'a promise closed because its day passed'
+  todo_at "$h" "$((T_1000 + 3 * 86400))" close --item "$promise" --reason fulfilled \
+    --evidence 'report sent in reply to Quinn on 13 Sep' >/dev/null || fail 'closing the promise failed'
+  render_at "$h" "$((T_1100 + 3 * 86400))"
+  out=$(page "$h" 2026-09-13)
+  assert_not_contains "$(needs_order "$out")" 'you promised the repair report' 'a closed promise is still in the main list'
+  assert_contains "$out" 'report sent in reply to Quinn on 13 Sep' 'the closing evidence is not shown'
+  out=$(printf '%s\n' "$out" | grep "id=\"item-$promise\"")
+  assert_contains "$out" 'class="closed"' 'the closed promise has no closed row'
+  assert_not_contains "$out" 'overdue' 'a closed promise is still labelled overdue'
+  assert_not_contains "$out" 'due Fri' 'a closed promise still shows its due day'
+  assert_not_contains "$out" '2026-09-11' 'a closed promise shows its raw due mark'
+  todo_at "$h" "$T_1500" list --state open | cut -f1 | grep -qx "$ask" || fail 'closing the promise closed the ask'
+  # A follow-up agreed in chat goes on the captain's own list, then closes with evidence.
+  todo_at "$h" "$T_1000" today add 'send Quinn the service manual' >/dev/null || fail 'today add failed'
+  mine=$(field_of "$h" 'send Quinn the service manual' 1)
+  [ -n "$mine" ] || fail 'the chat promise is not a line'
+  todo_at "$h" "$T_1000" mark --item "$mine" --name due --text 2026-09-14 >/dev/null || fail 'the chat promise took no due mark'
+  todo_at "$h" "$T_1100" close --item "$mine" --reason fulfilled --evidence 'manual mailed to Quinn' >/dev/null \
+    || fail 'closing the chat promise failed'
+  [ "$(field_of "$h" 'send Quinn the service manual' 2)" = closed ] || fail 'the chat promise did not close'
+  pass 'a promise stays its own line beside the ask, never closes on its day, and closes with evidence'
+}
+
 test_a_held_decision_never_joins_an_ask() {
   local h
   h="$TMP_ROOT/about-held"
@@ -1773,6 +1829,7 @@ test_done_on_a_held_decision_files_a_reconcile_request
 test_the_recheck_rolls_through_every_line_in_three_working_days
 test_lines_a_pass_could_not_read_do_not_hold_the_share
 test_a_new_ask_about_an_open_line_joins_it
+test_a_promise_stays_its_own_line_and_closes_with_evidence
 test_a_held_decision_never_joins_an_ask
 test_the_add_on_refuses_a_line_when_it_would_be_added
 test_every_line_has_an_ask_date

@@ -404,18 +404,26 @@ def held(aliases):
     return any(a.startswith('firstmate-backlog:') for a in aliases)
 
 
+def promised(aliases):
+    """A follow-up the captain promised: its source ref starts `promise-`."""
+    return any(a.split(':', 1)[-1].startswith('promise-') for a in aliases if not a.startswith('ledger:'))
+
+
 def same_ask(items, o):
     """The one open or waiting line a new observation is about, or None.
 
-    Only an ask that is not a held decision attaches, only to another such ask,
-    and only when exactly one line shares a key: two candidates are two asks."""
-    if o['state'] != 'open' or o.get('kind') not in ASK_KINDS or held(o['aliases']):
+    Only an ask that is not a held decision or a promise attaches, only to
+    another such ask, and only when exactly one line shares a key: two
+    candidates are two asks. A promise is owed work of its own, so it never
+    joins the ask it answers, even by a title-pattern key."""
+    if (o['state'] != 'open' or o.get('kind') not in ASK_KINDS or held(o['aliases'])
+            or promised(o['aliases'])):
         return None
     keys = about_keys(o)
     if not keys:
         return None
     hits = [r for r in items.values() if r['state'] in ('open', 'waiting') and r.get('kind') in ASK_KINDS
-            and not held(r['aliases']) and keys & set(r.get('about') or [])]
+            and not held(r['aliases']) and not promised(r['aliases']) and keys & set(r.get('about') or [])]
     return hits[0] if len(hits) == 1 else None
 
 

@@ -409,10 +409,39 @@ def age(rec):
     return f'<span class="prov inf">asked {esc(stamp(at, "%a %-d %b"))}, {days} day{"s" if days > 1 else ""} ago</span>'
 
 
+def due_day(rec):
+    """The day a promised follow-up is due: its `due` mark when that is a YYYY-MM-DD day."""
+    text = ((rec.get('marks') or {}).get('due') or {}).get('text') or ''
+    try:
+        return datetime.date.fromisoformat(text).isoformat() if re.match(r'^\d{4}-\d{2}-\d{2}$', text) else ''
+    except ValueError:
+        return ''
+
+
+def due_label(day):
+    """A due day as the row shows it: ahead, due today, or overdue."""
+    pretty = datetime.date.fromisoformat(day).strftime('%a %-d %b')
+    if day > DAY:
+        return '<span class="prov unv">due ' + esc(pretty) + '</span>'
+    if day == DAY:
+        return '<span class="prov unv">due today</span>'
+    return '<span class="prov unv">overdue since ' + esc(pretty) + '</span>'
+
+
 def marks(rec):
-    """The lines an add-on put on the row (fm-todo.sh mark), in name order."""
-    return ''.join(f'<span class="prov unv">{brief((m or {}).get("text") or "", 120)}</span>'
-                   for _, m in sorted((rec.get('marks') or {}).items()) if (m or {}).get('text'))
+    """The lines an add-on put on the row (fm-todo.sh mark), in name order; a
+    `due` day shows as a label, never as its raw text, and only while the line
+    is still owed."""
+    day = due_day(rec)
+    owed = rec.get('state') in ('open', 'waiting')
+    out = []
+    for name, m in sorted((rec.get('marks') or {}).items()):
+        text = (m or {}).get('text')
+        if not text or (name == 'due' and not owed):
+            continue
+        out.append(due_label(day) if name == 'due' and day
+                   else f'<span class="prov unv">{brief(text, 120)}</span>')
+    return ''.join(out)
 
 
 def row(rec, reply=True):
@@ -540,7 +569,8 @@ for rec in items:
     if rec.get('state') != 'open':
         continue
     until = max(rec.get('snoozed_until') or '', rec.get('source_snooze') or '')
-    if until > today:
+    # A promise due on a later day waits with the parked lines until that day.
+    if until > today or due_day(rec) > today:
         snoozed.append(rec)
     elif rec.get('pending'):
         handoffs.append(rec)
@@ -852,8 +882,11 @@ if closed:
         for r in closed])))
 
 if snoozed:
-    snoozed.sort(key=lambda r: (max(r.get('snoozed_until') or '', r.get('source_snooze') or ''), r['id']))
-    print(disclosure(f'Parked ({len(snoozed)})', listing(snoozed, lambda r: f'back on {max(r.get("snoozed_until") or "", r.get("source_snooze") or "")}')))
+    def back_on(r):
+        return max(r.get('snoozed_until') or '', r.get('source_snooze') or '')
+    snoozed.sort(key=lambda r: (max(back_on(r), due_day(r)), r['id']))
+    print(disclosure(f'Parked ({len(snoozed)})', listing(
+        snoozed, lambda r: f'back on {back_on(r)}' if back_on(r) > today else 'waiting for its due day')))
 if mine:
     print(disclosure(f'Yours, tracked but not surfaced ({len(mine)})', listing(sorted(mine, key=sortkey), lambda r: 'you said you are on it')))
 
